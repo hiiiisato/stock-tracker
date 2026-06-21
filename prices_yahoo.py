@@ -156,9 +156,11 @@ def fetch_and_store_yahoo(max_workers: int = 10) -> int:
     # 前日比を更新
     cur.execute("""
         UPDATE daily_prices dp
-        SET change_pct = ROUND(
-            (dp.close - prev.close) / prev.close * 100, 4
-        )
+        SET change_pct = CASE
+            -- 9999超は異常値（上場初日・データ誤り等）としてNULL
+            WHEN ABS((dp.close - prev.close) / prev.close * 100) > 9999 THEN NULL
+            ELSE ROUND((dp.close - prev.close) / prev.close * 100, 4)
+        END
         FROM (
             SELECT code, date,
                 LAG(close) OVER (PARTITION BY code ORDER BY date) AS close
