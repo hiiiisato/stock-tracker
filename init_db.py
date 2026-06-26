@@ -106,6 +106,36 @@ tables = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS dividends (
+        id         INT AUTO_INCREMENT PRIMARY KEY,
+        code       VARCHAR(10) NOT NULL,
+        ex_date    DATE NOT NULL,
+        amount     DECIMAL(18,4) NOT NULL,
+        created_at DATETIME DEFAULT NOW(),
+        updated_at DATETIME DEFAULT NOW() ON UPDATE NOW(),
+        UNIQUE KEY uq_code_exdate (code, ex_date)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS financials (
+        id               INT AUTO_INCREMENT PRIMARY KEY,
+        code             VARCHAR(10) NOT NULL,
+        period_end       DATE NOT NULL,
+        period_type      VARCHAR(5) NOT NULL,
+        revenue          BIGINT,
+        gross_profit     BIGINT,
+        operating_income BIGINT,
+        net_income       BIGINT,
+        total_assets     BIGINT,
+        total_equity     BIGINT,
+        total_debt       BIGINT,
+        cf_operating     BIGINT,
+        created_at       DATETIME DEFAULT NOW(),
+        updated_at       DATETIME DEFAULT NOW() ON UPDATE NOW(),
+        UNIQUE KEY uq_code_period (code, period_end, period_type)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS fetch_logs (
         id            INT AUTO_INCREMENT PRIMARY KEY,
         fetch_type    VARCHAR(50),

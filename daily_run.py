@@ -13,6 +13,8 @@ from datetime import datetime
 from config import get_conn
 from master import update_stock_master, update_trading_calendar
 from prices_yahoo import fetch_and_store_yahoo
+from dividends import fetch_all_dividends
+from financials import fetch_all_financials
 from rankings import compute_daily_rankings, compute_weekly_rankings, print_rankings
 
 
@@ -76,8 +78,27 @@ def run(init: bool = False, rankings_only: bool = False):
             traceback.print_exc()
             _log(conn, "prices", "failed", error=str(e))
 
-    # 4. ランキング計算
-    print("\n[4/4] ランキング計算...")
+    # 4. 配当・財務データ更新（毎週月曜のみ）
+    if datetime.now().weekday() == 0 and not rankings_only:
+        print("\n[4/5] 配当データ更新（週次）...")
+        try:
+            n = fetch_all_dividends()
+            _log(conn, "dividends", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log(conn, "dividends", "failed", error=str(e))
+
+        print("\n[5/5] 財務諸表更新（週次）...")
+        try:
+            n = fetch_all_financials()
+            _log(conn, "financials", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log(conn, "financials", "failed", error=str(e))
+
+    # 4/5. ランキング計算
+    step = "5/5" if datetime.now().weekday() == 0 else "4/4"
+    print(f"\n[{step}] ランキング計算...")
     try:
         n_daily  = compute_daily_rankings()
         n_weekly = compute_weekly_rankings()
