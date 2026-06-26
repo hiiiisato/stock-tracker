@@ -1,5 +1,5 @@
 """
-Yahoo Finance APIで日本株の当日〜直近価格を取得してSupabaseに保存。
+Yahoo Finance APIで日本株の当日〜直近価格を取得してTiDBに保存。
 J-Quantsフリープランの範囲外（2026-03-31以降）を補完する。
 
 取得タイミング: 東京市場終了後 (15:30 JST) 以降に実行すること
@@ -9,8 +9,7 @@ import requests
 from datetime import date, datetime, timedelta
 from typing import List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from psycopg2.extras import execute_values
-from config import get_conn
+from config import get_conn, bulk_upsert
 
 YAHOO_API = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; stock-tracker/1.0)"}
@@ -38,7 +37,6 @@ def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
     ticker = f"{code4}.T"
     url = YAHOO_API.format(ticker=ticker)
 
-    # Unix timestampに変換
     import_from = int(datetime.combine(date_from, datetime.min.time()).timestamp())
     import_to   = int(datetime.combine(date_to,   datetime.min.time()).timestamp()) + 86400
 
@@ -141,38 +139,29 @@ def fetch_and_store_yahoo(max_workers: int = 10) -> int:
 
     conn = get_conn()
     cur = conn.cursor()
-    execute_values(cur, """
-        INSERT INTO daily_prices (code, date, open, high, low, close, volume)
-        VALUES %s
-        ON CONFLICT (code, date) DO UPDATE SET
-            open   = EXCLUDED.open,
-            high   = EXCLUDED.high,
-            low    = EXCLUDED.low,
-            close  = EXCLUDED.close,
-            volume = EXCLUDED.volume
-    """, db_rows, page_size=1000)
+    bulk_upsert(cur, "daily_prices",
+        ["code", "date", "open", "high", "low", "close", "volume"],
+        db_rows,
+        update_cols=["open", "high", "low", "close", "volume"])
     conn.commit()
 
     # 前日比を更新
     cur.execute("""
         UPDATE daily_prices dp
-        SET change_pct = CASE
-            -- 9999超は異常値（上場初日・データ誤り等）としてNULL
-            WHEN ABS((dp.close - prev.close) / prev.close * 100) > 9999 THEN NULL
-            ELSE ROUND((dp.close - prev.close) / prev.close * 100, 4)
-        END
-        FROM (
+        JOIN (
             SELECT code, date,
-                LAG(close) OVER (PARTITION BY code ORDER BY date) AS close
+                   LAG(close) OVER (PARTITION BY code ORDER BY date) AS prev_close
             FROM daily_prices
-            WHERE date >= %s - INTERVAL '7 days'
+            WHERE date >= %s - INTERVAL 7 DAY
               AND date <= %s
-        ) prev
-        WHERE dp.code = prev.code
-          AND dp.date = prev.date
-          AND dp.date >= %s
-          AND prev.close IS NOT NULL
-          AND prev.close > 0
+        ) sub ON dp.code = sub.code AND dp.date = sub.date
+        SET dp.change_pct = CASE
+            WHEN ABS((dp.close - sub.prev_close) / sub.prev_close * 100) > 9999 THEN NULL
+            ELSE ROUND((dp.close - sub.prev_close) / sub.prev_close * 100, 4)
+        END
+        WHERE dp.date >= %s
+          AND sub.prev_close IS NOT NULL
+          AND sub.prev_close > 0
     """, (date_from, date_to, date_from))
     conn.commit()
 

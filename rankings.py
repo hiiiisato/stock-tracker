@@ -3,8 +3,7 @@
 """
 from datetime import date, timedelta
 from typing import Optional
-from psycopg2.extras import execute_values
-from config import get_conn
+from config import get_conn, bulk_upsert
 
 
 def _get_last_trading_day(conn, before: date = None) -> Optional[date]:
@@ -32,7 +31,6 @@ def compute_daily_rankings(target_date: date = None, top_n: int = 15) -> int:
 
     cur = conn.cursor()
 
-    # 対象日にデータが存在するか確認
     cur.execute("SELECT COUNT(*) FROM daily_prices WHERE date = %s", (target_date,))
     if cur.fetchone()[0] == 0:
         print(f"  {target_date} の価格データなし（休場日の可能性）")
@@ -45,12 +43,12 @@ def compute_daily_rankings(target_date: date = None, top_n: int = 15) -> int:
         cur.execute(f"""
             SELECT
                 dp.code,
-                dp.{order_col} AS value,
-                ROW_NUMBER() OVER (ORDER BY dp.{order_col} DESC NULLS LAST) AS rank
+                dp.`{order_col}` AS value,
+                ROW_NUMBER() OVER (ORDER BY dp.`{order_col}` DESC) AS `rank`
             FROM daily_prices dp
             JOIN stocks s ON dp.code = s.code
             WHERE dp.date = %s
-              AND dp.{order_col} IS NOT NULL
+              AND dp.`{order_col}` IS NOT NULL
               AND s.is_active = TRUE
               AND s.market_id IN (SELECT id FROM markets WHERE code IN ('0111','0112','0113'))
             LIMIT %s
@@ -60,12 +58,10 @@ def compute_daily_rankings(target_date: date = None, top_n: int = 15) -> int:
             rows.append(("daily", target_date, rank_type, int(rank), code, float(value)))
 
     if rows:
-        execute_values(cur, """
-            INSERT INTO rankings (period_type, period_end, rank_type, rank, code, value)
-            VALUES %s
-            ON CONFLICT (period_type, period_end, rank_type, rank)
-            DO UPDATE SET code=EXCLUDED.code, value=EXCLUDED.value
-        """, rows)
+        bulk_upsert(cur, "rankings",
+            ["period_type", "period_end", "rank_type", "rank", "code", "value"],
+            rows,
+            update_cols=["code", "value"])
         conn.commit()
 
     cur.close()
@@ -78,7 +74,6 @@ def compute_weekly_rankings(week_ending: date = None, top_n: int = 15) -> int:
     conn = get_conn()
 
     if week_ending is None:
-        # 直近の金曜日
         today = date.today()
         days_since_friday = (today.weekday() - 4) % 7
         week_ending = today - timedelta(days=days_since_friday)
@@ -90,7 +85,6 @@ def compute_weekly_rankings(week_ending: date = None, top_n: int = 15) -> int:
 
     cur = conn.cursor()
 
-    # 週内の最初と最後の取引日の終値で週間変化率を計算
     cur.execute("""
         WITH week_prices AS (
             SELECT
@@ -115,7 +109,7 @@ def compute_weekly_rankings(week_ending: date = None, top_n: int = 15) -> int:
         SELECT
             w.code,
             ROUND((w.last_close - w.first_close) / w.first_close * 100, 4) AS change_pct_1w,
-            ROW_NUMBER() OVER (ORDER BY (w.last_close - w.first_close) / w.first_close DESC) AS rank
+            ROW_NUMBER() OVER (ORDER BY (w.last_close - w.first_close) / w.first_close DESC) AS `rank`
         FROM weekly w
         JOIN stocks s ON w.code = s.code
         WHERE s.is_active = TRUE
@@ -128,12 +122,10 @@ def compute_weekly_rankings(week_ending: date = None, top_n: int = 15) -> int:
         rows.append(("weekly", week_ending, "change_pct", int(rank), code, float(value)))
 
     if rows:
-        execute_values(cur, """
-            INSERT INTO rankings (period_type, period_end, rank_type, rank, code, value)
-            VALUES %s
-            ON CONFLICT (period_type, period_end, rank_type, rank)
-            DO UPDATE SET code=EXCLUDED.code, value=EXCLUDED.value
-        """, rows)
+        bulk_upsert(cur, "rankings",
+            ["period_type", "period_end", "rank_type", "rank", "code", "value"],
+            rows,
+            update_cols=["code", "value"])
         conn.commit()
 
     cur.close()
@@ -155,14 +147,13 @@ def print_rankings(period_type: str = "daily", rank_type: str = "change_pct",
         period_end = cur.fetchone()[0]
 
     cur.execute("""
-        SELECT r.rank, r.code, s.name, r.value
+        SELECT r.`rank`, r.code, s.name, r.value
         FROM rankings r JOIN stocks s ON r.code = s.code
         WHERE r.period_type=%s AND r.period_end=%s AND r.rank_type=%s
-        ORDER BY r.rank
+        ORDER BY r.`rank`
     """, (period_type, period_end, rank_type))
 
-    label = {"change_pct": "前日比(%)", "volume": "出来高", "turnover": "売買代金(円)"}
-    unit  = {"change_pct": "%", "volume": "株", "turnover": "円"}
+    unit = {"change_pct": "%", "volume": "株", "turnover": "円"}
     print(f"\n【{period_type.upper()} {rank_type} ランキング】{period_end}")
     print("-" * 55)
     for rank, code, name, value in cur.fetchall():

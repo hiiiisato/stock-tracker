@@ -3,8 +3,7 @@
 """
 import requests
 from datetime import date, timedelta
-from psycopg2.extras import execute_values
-from config import get_conn, JQUANTS_BASE_URL, JQUANTS_HEADERS
+from config import get_conn, JQUANTS_BASE_URL, JQUANTS_HEADERS, bulk_upsert
 
 
 def update_stock_master() -> int:
@@ -14,19 +13,17 @@ def update_stock_master() -> int:
     data = r.json()["data"]
 
     conn = get_conn()
-    conn.autocommit = True
     cur = conn.cursor()
 
-    # 市場・業種マスタ更新
+    # 市場マスタ更新
     markets = list(set((d["Mkt"], d["MktNm"]) for d in data))
-    execute_values(cur,
-        "INSERT INTO markets (code, name) VALUES %s ON CONFLICT (code) DO UPDATE SET name=EXCLUDED.name",
-        markets)
+    bulk_upsert(cur, "markets", ["code", "name"], markets, update_cols=["name"])
 
+    # 業種マスタ更新
     sectors = list(set((d["S33"], d["S33Nm"]) for d in data))
-    execute_values(cur,
-        "INSERT INTO sectors (code, name) VALUES %s ON CONFLICT (code) DO UPDATE SET name=EXCLUDED.name",
-        sectors)
+    bulk_upsert(cur, "sectors", ["code", "name"], sectors, update_cols=["name"])
+
+    conn.commit()
 
     cur.execute("SELECT id, code FROM markets")
     market_map = {r[1]: r[0] for r in cur.fetchall()}
@@ -53,36 +50,31 @@ def update_stock_master() -> int:
         ))
 
     # アクティブ銘柄をUPSERT
-    execute_values(cur, """
-        INSERT INTO stocks (code, name, name_en, market_id, sector_id, is_active)
-        VALUES %s
-        ON CONFLICT (code) DO UPDATE SET
-            name      = EXCLUDED.name,
-            name_en   = EXCLUDED.name_en,
-            market_id = EXCLUDED.market_id,
-            sector_id = EXCLUDED.sector_id,
-            is_active = TRUE,
-            updated_at = NOW()
-    """, rows)
+    bulk_upsert(cur, "stocks",
+        ["code", "name", "name_en", "market_id", "sector_id", "is_active"],
+        rows,
+        update_cols=["name", "name_en", "market_id", "sector_id", "is_active"])
 
-    # APIに存在しない銘柄 → 上場廃止フラグを立てる
+    # APIに存在しない銘柄 → 上場廃止フラグ
     cur.execute("SELECT code FROM stocks WHERE is_active = TRUE")
     db_active = {r[0] for r in cur.fetchall()}
     delisted = db_active - active_codes
     if delisted:
-        cur.execute("""
-            UPDATE stocks SET is_active = FALSE, delisted_date = CURRENT_DATE
-            WHERE code = ANY(%s)
-        """, (list(delisted),))
+        placeholders = ",".join(["%s"] * len(delisted))
+        cur.execute(
+            f"UPDATE stocks SET is_active=FALSE, delisted_date=CURDATE() WHERE code IN ({placeholders})",
+            list(delisted),
+        )
         print(f"  上場廃止フラグ更新: {len(delisted)} 銘柄")
 
+    conn.commit()
     cur.close()
     conn.close()
     return len(rows)
 
 
 def update_trading_calendar(date_from: date = None, date_to: date = None) -> int:
-    """取引カレンダーを更新する。デフォルトは過去2年〜現在から1年後。"""
+    """取引カレンダーを更新する。デフォルトは2024-03-30〜1年後。"""
     if date_from is None:
         date_from = date(2024, 3, 30)
     if date_to is None:
@@ -100,13 +92,9 @@ def update_trading_calendar(date_from: date = None, date_to: date = None) -> int
     rows = [(d["Date"], d["HolDiv"] == "0") for d in data]
 
     conn = get_conn()
-    conn.autocommit = True
     cur = conn.cursor()
-    execute_values(cur, """
-        INSERT INTO trading_calendar (date, is_holiday)
-        VALUES %s
-        ON CONFLICT (date) DO UPDATE SET is_holiday = EXCLUDED.is_holiday
-    """, rows)
+    bulk_upsert(cur, "trading_calendar", ["date", "is_holiday"], rows, update_cols=["is_holiday"])
+    conn.commit()
     cur.close()
     conn.close()
     return len(rows)
