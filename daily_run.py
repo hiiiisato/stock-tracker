@@ -12,7 +12,6 @@ import traceback
 from datetime import datetime
 from config import get_conn
 from master import update_stock_master, update_trading_calendar
-from prices import fetch_and_store_prices
 from prices_yahoo import fetch_and_store_yahoo
 from rankings import compute_daily_rankings, compute_weekly_rankings, print_rankings
 
@@ -56,16 +55,22 @@ def run(init: bool = False, rankings_only: bool = False):
             print(f"  エラー: {e}")
             _log(conn, "calendar", "failed", error=str(e))
 
-        # 3. 価格データ取得（J-Quants → Yahoo Finance の順で差分補完）
-        print(f"\n[3/4] 価格データ取得 ({'初回一括' if init else '差分更新'})...")
+        # 3. 価格データ取得（Yahoo Finance のみ、差分更新）
+        print(f"\n[3/4] 価格データ取得...")
         try:
-            # J-Quants（フリープラン範囲内）
-            n1 = fetch_and_store_prices(max_workers=4 if init else 8)
-            print(f"  J-Quants: {n1} 件")
-            # Yahoo Finance（J-Quantsカバー外の直近データ）
+            # Yahoo Finance（当日分を取得）
             n2 = fetch_and_store_yahoo(max_workers=10)
             print(f"  Yahoo Finance: {n2} 件")
-            _log(conn, "prices", "done", n1 + n2)
+            # 価格データの日付を取引カレンダーに反映（J-Quantsカレンダーの範囲外をカバー）
+            cur2 = conn.cursor()
+            cur2.execute("""
+                INSERT INTO trading_calendar (date, is_holiday)
+                SELECT DISTINCT date, FALSE FROM daily_prices
+                ON DUPLICATE KEY UPDATE is_holiday=FALSE
+            """)
+            conn.commit()
+            cur2.close()
+            _log(conn, "prices", "done", n2)
         except Exception as e:
             print(f"  エラー: {e}")
             traceback.print_exc()
