@@ -1980,6 +1980,9 @@ def _build_screen_page() -> str:
     <button class="sc-preset" data-preset="high-roe">高ROE 15%+</button>
     <button class="sc-preset" data-preset="value">バリュー株</button>
     <button class="sc-preset" data-preset="growth">グロース株</button>
+    <button class="sc-preset" data-preset="momentum">急騰 25日+15%</button>
+    <button class="sc-preset" data-preset="oversold">急落 25日-15%</button>
+    <button class="sc-preset" data-preset="ma-cross-up">MA25上抜け</button>
     <button class="sc-preset" data-preset="reset" style="margin-left:auto">リセット</button>
   </div>
 
@@ -2025,6 +2028,38 @@ def _build_screen_page() -> str:
         <label class="sc-chk"><input type="checkbox" value="other" checked> その他</label>
       </div>
     </div>
+    <div>
+      <div class="sc-filter-label">25日間騰落率（%）</div>
+      <div class="sc-range">
+        <input type="number" id="chg25-min" placeholder="下限" min="-99" max="999" step="1">
+        <span class="sc-range-sep">〜</span>
+        <input type="number" id="chg25-max" placeholder="上限" min="-99" max="999" step="1">
+      </div>
+    </div>
+    <div>
+      <div class="sc-filter-label">75日間騰落率（%）</div>
+      <div class="sc-range">
+        <input type="number" id="chg75-min" placeholder="下限" min="-99" max="999" step="1">
+        <span class="sc-range-sep">〜</span>
+        <input type="number" id="chg75-max" placeholder="上限" min="-99" max="999" step="1">
+      </div>
+    </div>
+    <div>
+      <div class="sc-filter-label">25日線乖離率（%）</div>
+      <div class="sc-range">
+        <input type="number" id="devma25-min" placeholder="下限" min="-99" max="999" step="1">
+        <span class="sc-range-sep">〜</span>
+        <input type="number" id="devma25-max" placeholder="上限" min="-99" max="999" step="1">
+      </div>
+    </div>
+    <div>
+      <div class="sc-filter-label">52週高値からの乖離率（%）</div>
+      <div class="sc-range">
+        <input type="number" id="dev52h-min" placeholder="下限" min="-99" max="0" step="1">
+        <span class="sc-range-sep">〜</span>
+        <input type="number" id="dev52h-max" placeholder="上限" min="-99" max="0" step="1">
+      </div>
+    </div>
   </div>
 
   <div class="sc-result-header">
@@ -2032,6 +2067,12 @@ def _build_screen_page() -> str:
     <select class="sc-sort" id="sc-sort">
       <option value="market_cap-desc">時価総額 大きい順</option>
       <option value="market_cap-asc">時価総額 小さい順</option>
+      <option value="chg25d-desc">25日騰落率 高い順</option>
+      <option value="chg25d-asc">25日騰落率 低い順</option>
+      <option value="chg75d-desc">75日騰落率 高い順</option>
+      <option value="chg75d-asc">75日騰落率 低い順</option>
+      <option value="dev_ma25-desc">MA25乖離率 高い順</option>
+      <option value="dev_ma25-asc">MA25乖離率 低い順</option>
       <option value="per-asc">PER 小さい順</option>
       <option value="per-desc">PER 大きい順</option>
       <option value="pbr-asc">PBR 小さい順</option>
@@ -2039,8 +2080,8 @@ def _build_screen_page() -> str:
       <option value="roe-desc">ROE 高い順</option>
       <option value="roe-asc">ROE 低い順</option>
       <option value="div_yield-desc">配当利回り 高い順</option>
-      <option value="change_pct-desc">上昇率 高い順</option>
-      <option value="change_pct-asc">下落率 高い順</option>
+      <option value="change_pct-desc">前日上昇率 高い順</option>
+      <option value="change_pct-asc">前日下落率 高い順</option>
     </select>
   </div>
 
@@ -2052,13 +2093,16 @@ def _build_screen_page() -> str:
         <th>市場</th>
         <th class="num" data-col="close">株価</th>
         <th class="num" data-col="change_pct">前日比</th>
+        <th class="num" data-col="chg25d">25日騰落</th>
+        <th class="num" data-col="chg75d">75日騰落</th>
+        <th class="num" data-col="dev_ma25">MA25乖離</th>
         <th class="num" data-col="market_cap">時価総額</th>
         <th class="num" data-col="per">PER</th>
         <th class="num" data-col="pbr">PBR</th>
         <th class="num" data-col="roe">ROE</th>
         <th class="num" data-col="div_yield">配当利回り</th>
       </tr></thead>
-      <tbody id="sc-tbody"><tr><td colspan="10" class="sc-loading">データ読み込み中...</td></tr></tbody>
+      <tbody id="sc-tbody"><tr><td colspan="13" class="sc-loading">データ読み込み中...</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -2067,12 +2111,15 @@ def _build_screen_page() -> str:
 (function(){{
   var stocks=[], sortCol='market_cap', sortDir=-1;
   var PRESETS={{
-    'high-div': {{divMin:3}},
-    'low-pbr':  {{pbrMax:1, perMin:0}},
-    'high-roe': {{roeMin:15}},
-    'value':    {{pbrMax:1.5, perMin:0, perMax:20}},
-    'growth':   {{roeMin:20, perMin:0}},
-    'reset':    {{}},
+    'high-div':    {{divMin:3}},
+    'low-pbr':     {{pbrMax:1, perMin:0}},
+    'high-roe':    {{roeMin:15}},
+    'value':       {{pbrMax:1.5, perMin:0, perMax:20}},
+    'growth':      {{roeMin:20, perMin:0}},
+    'momentum':    {{chg25Min:15}},
+    'oversold':    {{chg25Max:-15}},
+    'ma-cross-up': {{devma25Min:3, devma25Max:15}},
+    'reset':       {{}},
   }};
 
   function fmt(v, dec, sfx) {{
@@ -2084,28 +2131,37 @@ def _build_screen_page() -> str:
     if(v>=1e12) return (v/1e12).toFixed(1)+'兆';
     return Math.round(v/1e8)+'億';
   }}
+  function _v(id) {{ return parseFloat(document.getElementById(id).value)||null; }}
   function getFilters() {{
     return {{
-      perMin:  parseFloat(document.getElementById('per-min').value)||null,
-      perMax:  parseFloat(document.getElementById('per-max').value)||null,
-      pbrMin:  parseFloat(document.getElementById('pbr-min').value)||null,
-      pbrMax:  parseFloat(document.getElementById('pbr-max').value)||null,
-      roeMin:  parseFloat(document.getElementById('roe-min').value)||null,
-      roeMax:  parseFloat(document.getElementById('roe-max').value)||null,
-      divMin:  parseFloat(document.getElementById('div-min').value)||null,
-      divMax:  parseFloat(document.getElementById('div-max').value)||null,
-      markets: Array.from(document.querySelectorAll('.sc-market-checks input:checked')).map(e=>e.value),
+      perMin:    _v('per-min'),   perMax:    _v('per-max'),
+      pbrMin:    _v('pbr-min'),   pbrMax:    _v('pbr-max'),
+      roeMin:    _v('roe-min'),   roeMax:    _v('roe-max'),
+      divMin:    _v('div-min'),   divMax:    _v('div-max'),
+      chg25Min:  _v('chg25-min'), chg25Max:  _v('chg25-max'),
+      chg75Min:  _v('chg75-min'), chg75Max:  _v('chg75-max'),
+      devma25Min:_v('devma25-min'),devma25Max:_v('devma25-max'),
+      dev52hMin: _v('dev52h-min'),dev52hMax: _v('dev52h-max'),
+      markets: Array.from(document.querySelectorAll('.sc-market-checks input:checked')).map(function(e){{return e.value;}}),
     }};
   }}
   function passFilter(s, f) {{
-    if(f.perMin!==null && (s.per===null||s.per<f.perMin)) return false;
-    if(f.perMax!==null && (s.per===null||s.per>f.perMax)) return false;
-    if(f.pbrMin!==null && (s.pbr===null||s.pbr<f.pbrMin)) return false;
-    if(f.pbrMax!==null && (s.pbr===null||s.pbr>f.pbrMax)) return false;
-    if(f.roeMin!==null && (s.roe===null||s.roe<f.roeMin)) return false;
-    if(f.roeMax!==null && (s.roe===null||s.roe>f.roeMax)) return false;
-    if(f.divMin!==null && (s.div_yield===null||s.div_yield<f.divMin)) return false;
-    if(f.divMax!==null && (s.div_yield===null||s.div_yield>f.divMax)) return false;
+    if(f.perMin!==null    && (s.per===null||s.per<f.perMin))       return false;
+    if(f.perMax!==null    && (s.per===null||s.per>f.perMax))       return false;
+    if(f.pbrMin!==null    && (s.pbr===null||s.pbr<f.pbrMin))       return false;
+    if(f.pbrMax!==null    && (s.pbr===null||s.pbr>f.pbrMax))       return false;
+    if(f.roeMin!==null    && (s.roe===null||s.roe<f.roeMin))       return false;
+    if(f.roeMax!==null    && (s.roe===null||s.roe>f.roeMax))       return false;
+    if(f.divMin!==null    && (s.div_yield===null||s.div_yield<f.divMin)) return false;
+    if(f.divMax!==null    && (s.div_yield===null||s.div_yield>f.divMax)) return false;
+    if(f.chg25Min!==null  && (s.chg25d===null||s.chg25d<f.chg25Min))   return false;
+    if(f.chg25Max!==null  && (s.chg25d===null||s.chg25d>f.chg25Max))   return false;
+    if(f.chg75Min!==null  && (s.chg75d===null||s.chg75d<f.chg75Min))   return false;
+    if(f.chg75Max!==null  && (s.chg75d===null||s.chg75d>f.chg75Max))   return false;
+    if(f.devma25Min!==null && (s.dev_ma25===null||s.dev_ma25<f.devma25Min)) return false;
+    if(f.devma25Max!==null && (s.dev_ma25===null||s.dev_ma25>f.devma25Max)) return false;
+    if(f.dev52hMin!==null  && (s.dev_high52w===null||s.dev_high52w<f.dev52hMin)) return false;
+    if(f.dev52hMax!==null  && (s.dev_high52w===null||s.dev_high52w>f.dev52hMax)) return false;
     var m=s.market||'';
     var matchMarket=false;
     f.markets.forEach(function(mk){{
@@ -2132,12 +2188,20 @@ def _build_screen_page() -> str:
       var chg=s.change_pct;
       var chgCls=chg>0?'up':(chg<0?'dn':'');
       var chgStr=chg!==null?(chg>0?'+':'')+chg.toFixed(2)+'%':'—';
+      function fmtChg(v) {{
+        if(v===null||v===undefined) return '<span style="color:#484f58">—</span>';
+        var cls=v>0?'up':(v<0?'dn':'');
+        return '<span class="'+cls+'">'+(v>0?'+':'')+v.toFixed(2)+'%</span>';
+      }}
       rows+='<tr>';
       rows+='<td class="sc-code">'+s.code+'</td>';
       rows+='<td class="sc-name"><a href="/stock/'+s.code+'">'+s.name+'</a></td>';
       rows+='<td style="font-size:11px;color:#8b949e">'+s.market+'</td>';
       rows+='<td class="num">'+(s.close?s.close.toLocaleString('ja-JP',{{maximumFractionDigits:0}}):'—')+'</td>';
       rows+='<td class="num '+chgCls+'">'+chgStr+'</td>';
+      rows+='<td class="num">'+fmtChg(s.chg25d)+'</td>';
+      rows+='<td class="num">'+fmtChg(s.chg75d)+'</td>';
+      rows+='<td class="num">'+fmtChg(s.dev_ma25)+'</td>';
       rows+='<td class="num">'+fmtCap(s.market_cap)+'</td>';
       rows+='<td class="num">'+fmt(s.per,1,'倍')+'</td>';
       rows+='<td class="num">'+fmt(s.pbr,2,'倍')+'</td>';
@@ -2145,8 +2209,8 @@ def _build_screen_page() -> str:
       rows+='<td class="num">'+(s.div_yield!==null?fmt(s.div_yield,2,'%'):'<span style="color:#484f58">—</span>')+'</td>';
       rows+='</tr>';
     }});
-    if(!filtered.length) rows='<tr><td colspan="10" class="sc-empty">条件に一致する銘柄がありません</td></tr>';
-    else if(filtered.length>MAX) rows+='<tr><td colspan="10" style="text-align:center;padding:10px;color:#484f58;font-size:12px">'+filtered.length+'件中 上位'+MAX+'件を表示</td></tr>';
+    if(!filtered.length) rows='<tr><td colspan="13" class="sc-empty">条件に一致する銘柄がありません</td></tr>';
+    else if(filtered.length>MAX) rows+='<tr><td colspan="13" style="text-align:center;padding:10px;color:#484f58;font-size:12px">'+filtered.length+'件中 上位'+MAX+'件を表示</td></tr>';
     document.getElementById('sc-tbody').innerHTML=rows;
   }}
 
@@ -2184,17 +2248,23 @@ def _build_screen_page() -> str:
     btn.addEventListener('click',function(){{
       var p=PRESETS[btn.dataset.preset]||{{}};
       // clear all
-      ['per-min','per-max','pbr-min','pbr-max','roe-min','roe-max','div-min','div-max'].forEach(function(id){{
+      ['per-min','per-max','pbr-min','pbr-max','roe-min','roe-max','div-min','div-max',
+       'chg25-min','chg25-max','chg75-min','chg75-max',
+       'devma25-min','devma25-max','dev52h-min','dev52h-max'].forEach(function(id){{
         document.getElementById(id).value='';
       }});
-      if(p.perMin!==undefined)  document.getElementById('per-min').value=p.perMin;
-      if(p.perMax!==undefined)  document.getElementById('per-max').value=p.perMax;
-      if(p.pbrMin!==undefined)  document.getElementById('pbr-min').value=p.pbrMin;
-      if(p.pbrMax!==undefined)  document.getElementById('pbr-max').value=p.pbrMax;
-      if(p.roeMin!==undefined)  document.getElementById('roe-min').value=p.roeMin;
-      if(p.roeMax!==undefined)  document.getElementById('roe-max').value=p.roeMax;
-      if(p.divMin!==undefined)  document.getElementById('div-min').value=p.divMin;
-      if(p.divMax!==undefined)  document.getElementById('div-max').value=p.divMax;
+      if(p.perMin!==undefined)    document.getElementById('per-min').value=p.perMin;
+      if(p.perMax!==undefined)    document.getElementById('per-max').value=p.perMax;
+      if(p.pbrMin!==undefined)    document.getElementById('pbr-min').value=p.pbrMin;
+      if(p.pbrMax!==undefined)    document.getElementById('pbr-max').value=p.pbrMax;
+      if(p.roeMin!==undefined)    document.getElementById('roe-min').value=p.roeMin;
+      if(p.roeMax!==undefined)    document.getElementById('roe-max').value=p.roeMax;
+      if(p.divMin!==undefined)    document.getElementById('div-min').value=p.divMin;
+      if(p.divMax!==undefined)    document.getElementById('div-max').value=p.divMax;
+      if(p.chg25Min!==undefined)  document.getElementById('chg25-min').value=p.chg25Min;
+      if(p.chg25Max!==undefined)  document.getElementById('chg25-max').value=p.chg25Max;
+      if(p.devma25Min!==undefined)document.getElementById('devma25-min').value=p.devma25Min;
+      if(p.devma25Max!==undefined)document.getElementById('devma25-max').value=p.devma25Max;
       document.querySelectorAll('.sc-preset').forEach(function(b){{b.classList.remove('active');}});
       if(btn.dataset.preset!=='reset') btn.classList.add('active');
       render();
@@ -2752,7 +2822,9 @@ def api_screen():
     cur.execute("""
         SELECT s.code, s.name, m.name AS market,
                f.per, f.pbr, f.roe, f.div_yield, f.market_cap,
-               lp.close, lp.change_pct
+               lp.close, lp.change_pct,
+               ps.chg5d, ps.chg25d, ps.chg75d,
+               ps.dev_ma25, ps.dev_ma75, ps.dev_high52w
         FROM stocks s
         LEFT JOIN markets m ON s.market_id = m.id
         LEFT JOIN stock_fundamentals f ON s.code = f.code
@@ -2762,10 +2834,12 @@ def api_screen():
             JOIN (SELECT code, MAX(date) AS max_date FROM daily_prices GROUP BY code) mx
               ON dp.code = mx.code AND dp.date = mx.max_date
         ) lp ON s.code = lp.code
+        LEFT JOIN price_stats ps ON s.code = ps.code
         WHERE s.is_active = TRUE
-          AND (f.per IS NOT NULL OR f.pbr IS NOT NULL OR f.roe IS NOT NULL OR f.div_yield IS NOT NULL)
+          AND (f.per IS NOT NULL OR f.pbr IS NOT NULL OR f.roe IS NOT NULL
+               OR f.div_yield IS NOT NULL OR ps.chg25d IS NOT NULL)
         ORDER BY COALESCE(f.market_cap, 0) DESC
-        LIMIT 3000
+        LIMIT 4000
     """)
     rows = cur.fetchall()
     cur.close(); conn.close()
@@ -2775,13 +2849,19 @@ def api_screen():
             "code":       r[0],
             "name":       r[1] or "",
             "market":     r[2] or "",
-            "per":        float(r[3]) if r[3] is not None else None,
-            "pbr":        float(r[4]) if r[4] is not None else None,
+            "per":        float(r[3])  if r[3]  is not None else None,
+            "pbr":        float(r[4])  if r[4]  is not None else None,
             "roe":        float(r[5]) * 100 if r[5] is not None else None,
-            "div_yield":  float(r[6]) if r[6] is not None else None,
-            "market_cap": int(r[7]) if r[7] else None,
-            "close":      float(r[8]) if r[8] else None,
-            "change_pct": float(r[9]) if r[9] is not None else None,
+            "div_yield":  float(r[6])  if r[6]  is not None else None,
+            "market_cap": int(r[7])    if r[7]  else None,
+            "close":      float(r[8])  if r[8]  else None,
+            "change_pct": float(r[9])  if r[9]  is not None else None,
+            "chg5d":      float(r[10]) if r[10] is not None else None,
+            "chg25d":     float(r[11]) if r[11] is not None else None,
+            "chg75d":     float(r[12]) if r[12] is not None else None,
+            "dev_ma25":   float(r[13]) if r[13] is not None else None,
+            "dev_ma75":   float(r[14]) if r[14] is not None else None,
+            "dev_high52w":float(r[15]) if r[15] is not None else None,
         })
     return jsonify(results)
 

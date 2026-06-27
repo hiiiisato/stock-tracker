@@ -18,6 +18,7 @@ from financials import fetch_all_financials
 from rankings import compute_daily_rankings, compute_weekly_rankings, print_rankings
 from theme_score import compute_day as compute_theme_day
 from fundamentals import fetch_all_known as update_fundamentals, recompute_price_metrics
+from compute_price_stats import run as compute_price_stats
 from event_researcher import research_top_movers
 from market_indices import fetch_and_store as update_market_indices, ensure_table as ensure_indices_table
 from research_strategy import RESEARCH_THRESHOLD_PCT
@@ -145,6 +146,16 @@ def run(init: bool = False, rankings_only: bool = False):
         except Exception as e:
             print(f"  エラー: {e}")
             _log("metrics_recompute", "failed", error=str(e))
+
+    # 株価テクニカル指標（MA・騰落率・乖離率）を毎日計算
+    if not rankings_only:
+        print("\n[テクニカル指標] MA・騰落率・乖離率を計算中...")
+        try:
+            n = compute_price_stats()
+            _log("price_stats", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("price_stats", "failed", error=str(e))
 
     # ランキング計算
     step = "5/5" if datetime.now().weekday() == 0 else "4/4"
