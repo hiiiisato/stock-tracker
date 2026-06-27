@@ -26,6 +26,24 @@ def _format_news_text(news_items: list) -> str:
     return "\n".join(lines)
 
 
+def _get_company_name(code: str) -> str:
+    """DBから銘柄名を取得する（Google News RSS の検索クエリ用）。"""
+    try:
+        conn = get_conn()
+        cur  = conn.cursor()
+        cur.execute("SELECT name FROM stocks WHERE code = %s", (code,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row and row[0]:
+            # 長い社名は短縮（例: "トヨタ自動車" → 最初の4文字）
+            name = row[0]
+            return name[:10]
+    except Exception:
+        pass
+    return ""
+
+
 def research_and_save(code: str, event_date: date, direction: str,
                       change_pct: float, ranking: int = None,
                       period: str = "daily") -> bool:
@@ -33,7 +51,8 @@ def research_and_save(code: str, event_date: date, direction: str,
     1銘柄のニュースを収集して price_events に保存する。
     既存レコードがある場合は上書き更新。
     """
-    news = fetch_news(code, target_date=event_date)
+    company_name = _get_company_name(code)
+    news = fetch_news(code, target_date=event_date, company_name=company_name)
     news_text = _format_news_text(news) if news else None
 
     try:

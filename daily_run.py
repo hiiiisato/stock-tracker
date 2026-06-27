@@ -20,6 +20,7 @@ from theme_score import compute_day as compute_theme_day
 from fundamentals import fetch_all_known as update_fundamentals, recompute_price_metrics
 from event_researcher import research_top_movers
 from market_indices import fetch_and_store as update_market_indices, ensure_table as ensure_indices_table
+from research_strategy import RESEARCH_THRESHOLD_PCT
 
 
 def _log(fetch_type: str, status: str, rows: int = 0, error: str = None):
@@ -160,10 +161,10 @@ def run(init: bool = False, rankings_only: bool = False):
 
     # ニュース収集（日次＋週次 TOP15）
     if not rankings_only:
-        print("\n[ニュース] 上昇/下落 TOP15 の材料を収集中...")
+        print(f"\n[ニュース] 上昇/下落 ±{RESEARCH_THRESHOLD_PCT}%超えの材料を収集中...")
         try:
-            n_d = research_top_movers(period="daily",  top_n=15)
-            n_w = research_top_movers(period="weekly", top_n=15)
+            n_d = research_top_movers(period="daily")
+            n_w = research_top_movers(period="weekly")
             _log("events", "done", n_d + n_w)
         except Exception as e:
             print(f"  エラー: {e}")

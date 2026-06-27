@@ -4,35 +4,37 @@
 銘柄価格変動の要因を調査する方法を一元管理するファイル。
 手法の追加・変更・切り替えはこのファイルだけを編集すればよい。
 
-◆ 戦略を切り替えるには
-  ACTIVE_STRATEGY の値を変更する。
-
 ◆ 調査対象フィルターを変えるには
   RESEARCH_THRESHOLD_PCT や RESEARCH_MAX_PER_DIRECTION を変更する。
 
-◆ 新しい調査手法を追加するには
-  1. STRATEGIES 辞書に設定を追加する
-  2. 同名の _fetch_<name> 関数を実装する
-  3. ACTIVE_STRATEGY をそのキーに変更する
+◆ ソース設定を変えるには
+  SOURCE_CONFIGS の各パラメーターを編集する。
 
-利用可能な戦略
+現在の仕組み
 --------------
-  kabutan  : kabutan.jp ニュースをスクレイピング（材料・開示を優先）← 現在
-  yfinance : Yahoo Finance ニュース（英語、将来用）
+  2ソースを並行して取得し、日付フィルタ後にマージする。
+
+  1. kabutan.jp  : 銘柄別ニュースページをスクレイピング（材料・開示を優先）
+  2. Google News RSS : 複数媒体（日経・株探・みんかぶ・Yahoo・四季報）を横断検索
+
+  将来追加候補:
+  3. TDnet（東証適時開示）: 公式IR情報
+  4. Claude AI 要約        : APIキー取得後に有効化
 """
 
 import time
+import warnings
 import requests
 from bs4 import BeautifulSoup
-from datetime import date
-from typing import Optional
+from datetime import date, datetime, timedelta
+from email.utils import parsedate_to_datetime
+from urllib.parse import quote
+
+warnings.filterwarnings("ignore")
 
 # ══════════════════════════════════════════════════════════════
 #  【メイン設定】ここを変更して調査方法・条件をカスタマイズする
 # ══════════════════════════════════════════════════════════════
-
-# 使用する調査戦略のキー
-ACTIVE_STRATEGY = "kabutan"
 
 # 調査対象とする最低変動率（絶対値）。これ未満は調査しない
 RESEARCH_THRESHOLD_PCT = 10.0
@@ -40,69 +42,82 @@ RESEARCH_THRESHOLD_PCT = 10.0
 # 上昇・下落それぞれの最大調査件数
 RESEARCH_MAX_PER_DIRECTION = 20
 
-# ══════════════════════════════════════════════════════════════
-#  戦略別パラメーター定義
-# ══════════════════════════════════════════════════════════════
-
-STRATEGIES = {
+# ──────────────────────────────────────────────────────────────
+#  ソース別設定
+# ──────────────────────────────────────────────────────────────
+SOURCE_CONFIGS = {
     "kabutan": {
-        "description": "kabutan.jp 銘柄別ニュースページをスクレイピング（材料・開示を優先）",
-        "delay_seconds": 0.8,          # リクエスト間隔（サーバー負荷対策）
-        "max_items": 8,                # 1銘柄あたりの最大ニュース取得件数
-        "date_window_days": 1,         # target_date ±N日以内のニュースを優先
+        "enabled":            True,
+        "description":        "kabutan.jp 銘柄別ニュース（材料・開示を優先）",
+        "delay_seconds":      0.5,
+        "max_items":          5,       # kabutan から最大5件
+        "date_window_days":   2,       # target_date ±2日以内を優先
         "priority_categories": {"材料", "開示", "業績", "決算", "注目"},
     },
-    "yfinance": {
-        "description": "Yahoo Finance ニュース API（英語ヘッドライン）",
-        "delay_seconds": 0.3,
-        "max_items": 5,
-        "date_window_days": 1,
-        "priority_categories": set(),
+    "google_news": {
+        "enabled":            True,
+        "description":        "Google News RSS（日経・株探・みんかぶ・Yahoo・四季報など横断）",
+        "delay_seconds":      0.5,
+        "max_items":          5,       # Google News から最大5件
+        "date_window_days":   2,       # target_date ±2日以内の記事のみ採用
+        "search_keywords":    ["急騰", "急落", "上昇", "下落", "材料", "理由"],
     },
 }
-
 
 # ══════════════════════════════════════════════════════════════
 #  公開インターフェース（event_researcher.py から呼ぶ）
 # ══════════════════════════════════════════════════════════════
 
-def fetch_news(code: str, target_date: date) -> list:
-    """
-    指定銘柄のニュースを調査して返す。
-    戻り値: [{"dt": datetime, "date": date, "category": str, "title": str}, ...]
-    """
-    cfg = STRATEGIES.get(ACTIVE_STRATEGY, STRATEGIES["kabutan"])
-    time.sleep(cfg["delay_seconds"])
-
-    if ACTIVE_STRATEGY == "kabutan":
-        return _fetch_kabutan(code, target_date, cfg)
-    elif ACTIVE_STRATEGY == "yfinance":
-        return _fetch_yfinance(code, target_date, cfg)
-    else:
-        return []
-
-
-def get_delay() -> float:
-    """現在の戦略のリクエスト間隔を返す（ループ制御用）。"""
-    return STRATEGIES.get(ACTIVE_STRATEGY, {}).get("delay_seconds", 1.0)
-
-
-def get_strategy_description() -> str:
-    """現在の戦略の説明文を返す（ログ・UIへの表示用）。"""
-    cfg = STRATEGIES.get(ACTIVE_STRATEGY, {})
-    return f"[{ACTIVE_STRATEGY}] {cfg.get('description', '')}"
-
-
-# ══════════════════════════════════════════════════════════════
-#  戦略実装
-# ══════════════════════════════════════════════════════════════
-
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
 
+def fetch_news(code: str, target_date: date, company_name: str = "") -> list:
+    """
+    指定銘柄のニュースを全有効ソースから取得してマージして返す。
+    戻り値: [{"dt": datetime, "date": date, "source": str, "category": str, "title": str}, ...]
+    """
+    all_items = []
+
+    if SOURCE_CONFIGS["kabutan"]["enabled"]:
+        cfg = SOURCE_CONFIGS["kabutan"]
+        time.sleep(cfg["delay_seconds"])
+        kabutan_items = _fetch_kabutan(code, target_date, cfg)
+        all_items.extend(kabutan_items)
+
+    if SOURCE_CONFIGS["google_news"]["enabled"]:
+        cfg = SOURCE_CONFIGS["google_news"]
+        time.sleep(cfg["delay_seconds"])
+        gnews_items = _fetch_google_news(code, company_name, target_date, cfg)
+        # kabutan と重複するタイトルを除去
+        existing_titles = {_normalize_title(it["title"]) for it in all_items}
+        for it in gnews_items:
+            if _normalize_title(it["title"]) not in existing_titles:
+                all_items.append(it)
+                existing_titles.add(_normalize_title(it["title"]))
+
+    # 日付の近い順にソート（target_date に近い→遠い）
+    all_items.sort(key=lambda x: (abs((x["date"] - target_date).days), x["dt"]), reverse=False)
+
+    return all_items
+
+
+def get_strategy_description() -> str:
+    """現在の有効ソース一覧を返す（ログ表示用）。"""
+    active = [cfg["description"] for cfg in SOURCE_CONFIGS.values() if cfg["enabled"]]
+    return " + ".join(active)
+
+
+def get_delay() -> float:
+    """全ソースの合計遅延時間を返す。"""
+    return sum(cfg["delay_seconds"] for cfg in SOURCE_CONFIGS.values() if cfg["enabled"])
+
+
+# ══════════════════════════════════════════════════════════════
+#  ソース実装 1: kabutan.jp
+# ══════════════════════════════════════════════════════════════
+
 def _fetch_kabutan(code: str, target_date: date, cfg: dict) -> list:
-    """kabutan.jp の銘柄別ニュースをスクレイピングして返す。"""
-    from datetime import datetime
+    """kabutan.jp の銘柄別ニュースページをスクレイピングして返す。"""
     url = f"https://kabutan.jp/stock/news?code={code}"
     try:
         r = requests.get(url, headers=_HEADERS, timeout=15)
@@ -119,8 +134,8 @@ def _fetch_kabutan(code: str, target_date: date, cfg: dict) -> list:
 
     items = []
     priority_cats = cfg.get("priority_categories", set())
-    window = cfg.get("date_window_days", 1)
-    max_items = cfg.get("max_items", 8)
+    window = cfg.get("date_window_days", 2)
+    max_items = cfg.get("max_items", 5)
 
     for row in tbl.find_all("tr"):
         tds = row.find_all("td")
@@ -145,6 +160,7 @@ def _fetch_kabutan(code: str, target_date: date, cfg: dict) -> list:
         items.append({
             "dt":       news_dt,
             "date":     news_dt.date(),
+            "source":   "kabutan",
             "category": category,
             "title":    title,
         })
@@ -159,17 +175,115 @@ def _fetch_kabutan(code: str, target_date: date, cfg: dict) -> list:
     near_other    = [it for it in items
                      if abs((it["date"] - target_date).days) <= window
                      and it not in near_priority]
-    rest          = [it for it in items if it not in near_priority and it not in near_other]
+    rest          = [it for it in items
+                     if it not in near_priority and it not in near_other]
 
     return (near_priority + near_other + rest)[:max_items]
 
 
-def _fetch_yfinance(code: str, target_date: date, cfg: dict) -> list:
+# ══════════════════════════════════════════════════════════════
+#  ソース実装 2: Google News RSS
+# ══════════════════════════════════════════════════════════════
+
+# 除外する媒体（ノイズになりやすいもの）
+_EXCLUDE_SOURCES = {"掲示板", "Yahoo!ファイナンス 掲示板"}
+
+# 優先する媒体（金融専門メディア）
+_PRIORITY_SOURCES = {
+    "株探", "日本経済新聞", "会社四季報オンライン", "みんかぶ",
+    "ダイヤモンド・オンライン", "東洋経済オンライン", "Bloomberg",
+    "Reuters", "トウシル", "マネックス証券", "SBI証券",
+}
+
+
+def _fetch_google_news(code: str, company_name: str,
+                       target_date: date, cfg: dict) -> list:
     """
-    Yahoo Finance ニュースを取得する（英語）。
-    将来: APIキー不要で使えるが英語のみ。
+    Google News RSS から銘柄関連ニュースを取得する。
+    company_name が空の場合は証券コードのみで検索する。
     """
-    # yfinance の news プロパティは現時点で不安定なため未実装
-    # 利用可能になり次第ここに実装する
-    print(f"    [yfinance] 未実装: {code}")
-    return []
+    window    = cfg.get("date_window_days", 2)
+    max_items = cfg.get("max_items", 5)
+    from_date = target_date - timedelta(days=window)
+    to_date   = target_date + timedelta(days=window)
+
+    # 検索クエリ: "証券コード 社名 (急騰 OR 上昇 OR 材料 OR 急落)"
+    name_part = company_name if company_name else ""
+    query = f"{code} {name_part} (急騰 OR 上昇 OR 材料 OR 急落 OR 下落 OR 理由)"
+    url = (f"https://news.google.com/rss/search"
+           f"?q={quote(query)}&hl=ja&gl=JP&ceid=JP:ja")
+
+    try:
+        r = requests.get(url, headers=_HEADERS, timeout=15)
+        if r.status_code != 200:
+            return []
+    except Exception as e:
+        print(f"    [google_news] {code}: {e}")
+        return []
+
+    soup = BeautifulSoup(r.content, "xml")
+    raw_items = soup.find_all("item")
+    items = []
+
+    for it in raw_items:
+        title_el = it.find("title")
+        pub_el   = it.find("pubDate")
+        src_el   = it.find("source")
+
+        if not title_el or not pub_el:
+            continue
+
+        title  = title_el.text.strip()
+        source = src_el.text.strip() if src_el else "不明"
+
+        # 掲示板など除外
+        if source in _EXCLUDE_SOURCES:
+            continue
+        # タイトルが掲示板っぽいものを除外
+        if "掲示板" in title or "BBS" in title.upper():
+            continue
+
+        # 公開日をパース
+        try:
+            pub_dt = parsedate_to_datetime(pub_el.text).replace(tzinfo=None)
+        except Exception:
+            continue
+
+        pub_date = pub_dt.date()
+
+        # 日付フィルタ
+        if not (from_date <= pub_date <= to_date):
+            continue
+
+        items.append({
+            "dt":       pub_dt,
+            "date":     pub_date,
+            "source":   "google_news",
+            "category": source,   # 媒体名をカテゴリとして使用
+            "title":    title,
+            "_priority": source in _PRIORITY_SOURCES,
+        })
+
+    # 優先媒体を前に
+    priority = [it for it in items if it.get("_priority")]
+    others   = [it for it in items if not it.get("_priority")]
+    merged   = priority + others
+
+    # _priority フラグを削除して返す
+    for it in merged:
+        it.pop("_priority", None)
+
+    return merged[:max_items]
+
+
+# ══════════════════════════════════════════════════════════════
+#  ユーティリティ
+# ══════════════════════════════════════════════════════════════
+
+def _normalize_title(title: str) -> str:
+    """タイトルの正規化（重複除去用）。"""
+    import re
+    t = re.sub(r"\s+", " ", title).strip()
+    # 媒体名サフィックス "- 株探" 等を除去
+    t = re.sub(r"\s+-\s+\S+$", "", t)
+    return t[:50]
