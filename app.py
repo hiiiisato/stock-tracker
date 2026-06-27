@@ -16,9 +16,12 @@ Routes:
 
 import time
 import threading
+import json as _json
 from datetime import date, timedelta, datetime
 
-from flask import Flask, abort, redirect, request
+import requests as _requests
+from bs4 import BeautifulSoup as _BS
+from flask import Flask, abort, redirect, request, jsonify
 import plotly.graph_objects as go
 
 from config import get_conn
@@ -102,6 +105,44 @@ a:hover { text-decoration: underline; }
 }
 .nav-link:hover { color: #e6edf3; text-decoration: none; }
 .nav-link.active { color: #e6edf3; border-bottom-color: #1f6feb; }
+
+/* ─ Nav Search ─ */
+.nav-search { position: relative; margin-left: auto; }
+.nav-search-input {
+  background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+  color: #c9d1d9; font-size: 13px; padding: 5px 10px 5px 30px;
+  width: 200px; outline: none; transition: width 0.2s, border-color 0.2s;
+}
+.nav-search-input:focus { border-color: #388bfd; width: 280px; }
+.nav-search-icon {
+  position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
+  color: #8b949e; font-size: 13px; pointer-events: none;
+}
+.nav-search-dropdown {
+  position: absolute; top: calc(100% + 6px); right: 0;
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  min-width: 320px; max-height: 400px; overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 999; display: none;
+}
+.nav-search-dropdown.show { display: block; }
+.nav-search-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; cursor: pointer; text-decoration: none;
+  border-bottom: 1px solid #21262d;
+}
+.nav-search-item:last-child { border-bottom: none; }
+.nav-search-item:hover { background: #21262d; }
+.nav-search-code {
+  font-size: 12px; font-weight: 700; color: #58a6ff;
+  min-width: 40px;
+}
+.nav-search-name { font-size: 13px; color: #e6edf3; flex: 1; }
+.nav-search-market { font-size: 11px; color: #484f58; }
+.nav-search-price { font-size: 12px; color: #e6edf3; text-align: right; }
+.nav-search-chg { font-size: 11px; min-width: 52px; text-align: right; }
+.nav-search-chg.up { color: #E84040; }
+.nav-search-chg.dn { color: #3A9FE0; }
+.nav-search-empty { padding: 20px; text-align: center; color: #484f58; font-size: 13px; }
 
 /* ─ Page layout ─ */
 .page { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
@@ -299,7 +340,7 @@ tr:hover { background: #1c2128; }
 def _nav(active: str = "") -> str:
     links = [
         ("home",      "/",           "ホーム"),
-        ("themes",    "#",           "テーマ分析"),
+        ("screen",    "/screen",     "スクリーニング"),
         ("rankings",  "/rankings",   "ランキング"),
         ("events",    "/events",     "イベント"),
         ("watchlist", "/watchlist",  "ウォッチリスト"),
@@ -312,7 +353,58 @@ def _nav(active: str = "") -> str:
     return f"""<nav class="nav">
   <a class="nav-logo" href="/">📈 株式テーマ分析</a>
   <div class="nav-links">{"".join(items)}</div>
-</nav>"""
+  <div class="nav-search" id="navSearch">
+    <span class="nav-search-icon">🔍</span>
+    <input class="nav-search-input" id="navSearchInput"
+           type="text" placeholder="銘柄コード・銘柄名で検索"
+           autocomplete="off" spellcheck="false">
+    <div class="nav-search-dropdown" id="navSearchDropdown"></div>
+  </div>
+</nav>
+<script>
+(function(){{
+  var inp = document.getElementById('navSearchInput');
+  var dd  = document.getElementById('navSearchDropdown');
+  var timer;
+  inp.addEventListener('input', function(){{
+    clearTimeout(timer);
+    var q = this.value.trim();
+    if(q.length < 1){{ dd.innerHTML=''; dd.classList.remove('show'); return; }}
+    timer = setTimeout(function(){{
+      fetch('/api/search?q='+encodeURIComponent(q))
+        .then(function(r){{return r.json();}})
+        .then(function(data){{
+          if(!data.length){{
+            dd.innerHTML='<div class="nav-search-empty">該当なし</div>';
+          }} else {{
+            dd.innerHTML = data.map(function(s){{
+              var chg = s.change_pct;
+              var chgCls = chg>0?'up':(chg<0?'dn':'');
+              var chgStr = chg!=null?(chg>0?'+':'')+chg.toFixed(2)+'%':'—';
+              var price  = s.close!=null?s.close.toLocaleString('ja-JP',{{maximumFractionDigits:0}})+'円':'—';
+              return '<a class="nav-search-item" href="/stock/'+s.code+'">'
+                +'<span class="nav-search-code">'+s.code+'</span>'
+                +'<span class="nav-search-name">'+s.name+'</span>'
+                +'<span class="nav-search-market">'+s.market+'</span>'
+                +'<span class="nav-search-price">'+price+'</span>'
+                +'<span class="nav-search-chg '+chgCls+'">'+chgStr+'</span>'
+                +'</a>';
+            }}).join('');
+          }}
+          dd.classList.add('show');
+        }});
+    }}, 200);
+  }});
+  document.addEventListener('click', function(e){{
+    if(!document.getElementById('navSearch').contains(e.target)){{
+      dd.classList.remove('show');
+    }}
+  }});
+  inp.addEventListener('keydown', function(e){{
+    if(e.key==='Escape'){{ dd.classList.remove('show'); inp.blur(); }}
+  }});
+}})();
+</script>"""
 
 
 def _page_html(title: str, body: str, active: str = "", extra_head: str = "") -> str:
@@ -1446,6 +1538,36 @@ _STOCK_CSS = """
 }
 .memo-form textarea:focus { outline: none; border-color: #58a6ff; }
 
+/* 会社概要 */
+.co-box {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 14px 18px; margin-bottom: 20px; font-size: 13px;
+}
+.co-title {
+  font-size: 11px; font-weight: 600; color: #8b949e; text-transform: uppercase;
+  letter-spacing: 0.5px; margin-bottom: 10px;
+}
+.co-desc { color: #c9d1d9; line-height: 1.7; margin-bottom: 10px; }
+.co-meta { display: flex; flex-wrap: wrap; gap: 6px 20px; }
+.co-kv { font-size: 12px; color: #8b949e; }
+.co-kv span { color: #c9d1d9; }
+
+/* チャートコントロール */
+.chart-controls {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 8px; padding: 8px 8px 4px;
+}
+.period-btns, .ma-btns { display: flex; align-items: center; gap: 4px; }
+.ma-label { font-size: 11px; color: #8b949e; margin-right: 2px; }
+.period-btn, .ma-btn {
+  background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+  color: #8b949e; font-size: 12px; padding: 3px 10px;
+  cursor: pointer; transition: all 0.15s;
+}
+.period-btn:hover, .ma-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+.period-btn.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.ma-btn.active { background: #21262d; border-color: var(--ma-color,#58a6ff); color: var(--ma-color,#58a6ff); }
+
 @media (max-width: 768px) {
   .s-price { font-size: 28px; }
   .s-chg   { font-size: 15px; }
@@ -1454,6 +1576,359 @@ _STOCK_CSS = """
   .chart-metrics-row { grid-template-columns: 1fr; }
 }
 """
+
+
+_SCREEN_CSS = """
+.sc-wrap { max-width: 1100px; margin: 0 auto; }
+.sc-page-title {
+  font-size: 20px; font-weight: 700; color: #e6edf3; margin-bottom: 16px;
+}
+/* プリセット */
+.sc-presets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.sc-preset {
+  background: #21262d; border: 1px solid #30363d; border-radius: 20px;
+  color: #8b949e; font-size: 13px; padding: 5px 14px; cursor: pointer;
+  transition: all 0.15s;
+}
+.sc-preset:hover  { border-color: #58a6ff; color: #58a6ff; }
+.sc-preset.active { background: #1f3451; border-color: #58a6ff; color: #58a6ff; }
+/* フィルターパネル */
+.sc-filters {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 16px 20px; margin-bottom: 16px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px 24px;
+}
+.sc-filter-label { font-size: 11px; color: #8b949e; margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.sc-range { display: flex; align-items: center; gap: 6px; }
+.sc-range input[type="number"] {
+  width: 80px; background: #0d1117; border: 1px solid #30363d; border-radius: 5px;
+  color: #e6edf3; font-size: 13px; padding: 5px 8px; text-align: right;
+}
+.sc-range input[type="number"]:focus { outline: none; border-color: #58a6ff; }
+.sc-range-sep { color: #484f58; font-size: 12px; }
+.sc-market-checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.sc-chk { display: flex; align-items: center; gap: 5px; font-size: 13px; color: #c9d1d9; cursor: pointer; }
+.sc-chk input { accent-color: #58a6ff; width: 14px; height: 14px; }
+/* 結果ヘッダー */
+.sc-result-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 10px;
+}
+.sc-count { font-size: 13px; color: #8b949e; }
+.sc-sort {
+  background: #21262d; border: 1px solid #30363d; border-radius: 5px;
+  color: #c9d1d9; font-size: 13px; padding: 4px 8px; cursor: pointer;
+}
+/* 結果テーブル */
+.sc-table-wrap { overflow-x: auto; }
+.sc-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+.sc-table th {
+  background: #161b22; color: #8b949e; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.4px;
+  padding: 8px 10px; border-bottom: 1px solid #30363d; white-space: nowrap;
+  cursor: pointer; user-select: none;
+}
+.sc-table th:hover { color: #c9d1d9; }
+.sc-table th.sort-asc::after  { content: ' ↑'; color: #58a6ff; }
+.sc-table th.sort-desc::after { content: ' ↓'; color: #58a6ff; }
+.sc-table td { padding: 8px 10px; border-bottom: 1px solid #1c2128; white-space: nowrap; }
+.sc-table tr:hover td { background: #1c2128; }
+.sc-table .sc-code { font-family: monospace; font-size: 12px; color: #8b949e; }
+.sc-table .sc-name a { color: #79c0ff; }
+.sc-table .sc-name a:hover { text-decoration: underline; }
+.sc-table .num { text-align: right; }
+.sc-table .up  { color: #E84040; }
+.sc-table .dn  { color: #3A9FE0; }
+.sc-empty { text-align: center; padding: 48px; color: #484f58; }
+.sc-loading { text-align: center; padding: 48px; color: #8b949e; }
+@media (max-width: 640px) {
+  .sc-filters { grid-template-columns: 1fr; }
+}
+"""
+
+# 会社概要キャッシュ（24h）
+_co_cache: dict = {}
+_CO_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+
+def _fetch_company_info(code: str) -> dict:
+    """kabutan から会社概要を取得して24時間キャッシュする。失敗時は {}。"""
+    entry = _co_cache.get(code)
+    if entry and time.time() - entry["ts"] < 86400:
+        return entry["data"]
+
+    data: dict = {}
+    url = f"https://kabutan.jp/stock/info?code={code}"
+    try:
+        r = _requests.get(url, headers=_CO_HEADERS, timeout=8)
+        if r.status_code != 200:
+            return {}
+        soup = _BS(r.text, "html.parser")
+
+        # 事業内容
+        for sel in [".company_body p", ".company_body", "#company_info_main p"]:
+            el = soup.select_one(sel)
+            if el and el.text.strip():
+                data["business"] = el.text.strip()[:600]
+                break
+
+        # 会社プロフィールテーブル
+        tbl = soup.find("table", id="company_profile") or soup.find("table", class_="company_profile")
+        if tbl:
+            for tr in tbl.find_all("tr"):
+                th = tr.find("th"); td = tr.find("td")
+                if th and td:
+                    data[th.text.strip()] = td.text.strip()
+    except Exception:
+        pass
+
+    _co_cache[code] = {"ts": time.time(), "data": data}
+    return data
+
+
+def _build_screen_page() -> str:
+    return _page_html("スクリーニング", f"""<style>{_SCREEN_CSS}</style>
+<div class="sc-wrap">
+  <div class="sc-page-title">スクリーニング</div>
+
+  <div class="sc-presets" id="presets">
+    <button class="sc-preset" data-preset="high-div">高配当 3%+</button>
+    <button class="sc-preset" data-preset="low-pbr">低PBR &lt;1倍</button>
+    <button class="sc-preset" data-preset="high-roe">高ROE 15%+</button>
+    <button class="sc-preset" data-preset="value">バリュー株</button>
+    <button class="sc-preset" data-preset="growth">グロース株</button>
+    <button class="sc-preset" data-preset="reset" style="margin-left:auto">リセット</button>
+  </div>
+
+  <div class="sc-filters">
+    <div>
+      <div class="sc-filter-label">PER（倍）</div>
+      <div class="sc-range">
+        <input type="number" id="per-min" placeholder="下限" min="0" max="9999" step="0.1">
+        <span class="sc-range-sep">〜</span>
+        <input type="number" id="per-max" placeholder="上限" min="0" max="9999" step="0.1">
+      </div>
+    </div>
+    <div>
+      <div class="sc-filter-label">PBR（倍）</div>
+      <div class="sc-range">
+        <input type="number" id="pbr-min" placeholder="下限" min="0" max="999" step="0.1">
+        <span class="sc-range-sep">〜</span>
+        <input type="number" id="pbr-max" placeholder="上限" min="0" max="999" step="0.1">
+      </div>
+    </div>
+    <div>
+      <div class="sc-filter-label">ROE（%）</div>
+      <div class="sc-range">
+        <input type="number" id="roe-min" placeholder="下限" min="-9999" max="9999" step="0.1">
+        <span class="sc-range-sep">〜</span>
+        <input type="number" id="roe-max" placeholder="上限" min="-9999" max="9999" step="0.1">
+      </div>
+    </div>
+    <div>
+      <div class="sc-filter-label">配当利回り（%）</div>
+      <div class="sc-range">
+        <input type="number" id="div-min" placeholder="下限" min="0" max="99" step="0.1">
+        <span class="sc-range-sep">〜</span>
+        <input type="number" id="div-max" placeholder="上限" min="0" max="99" step="0.1">
+      </div>
+    </div>
+    <div>
+      <div class="sc-filter-label">市場</div>
+      <div class="sc-market-checks">
+        <label class="sc-chk"><input type="checkbox" value="プライム" checked> プライム</label>
+        <label class="sc-chk"><input type="checkbox" value="スタンダード" checked> スタンダード</label>
+        <label class="sc-chk"><input type="checkbox" value="グロース" checked> グロース</label>
+        <label class="sc-chk"><input type="checkbox" value="other" checked> その他</label>
+      </div>
+    </div>
+  </div>
+
+  <div class="sc-result-header">
+    <span class="sc-count" id="sc-count">読み込み中...</span>
+    <select class="sc-sort" id="sc-sort">
+      <option value="market_cap-desc">時価総額 大きい順</option>
+      <option value="market_cap-asc">時価総額 小さい順</option>
+      <option value="per-asc">PER 小さい順</option>
+      <option value="per-desc">PER 大きい順</option>
+      <option value="pbr-asc">PBR 小さい順</option>
+      <option value="pbr-desc">PBR 大きい順</option>
+      <option value="roe-desc">ROE 高い順</option>
+      <option value="roe-asc">ROE 低い順</option>
+      <option value="div_yield-desc">配当利回り 高い順</option>
+      <option value="change_pct-desc">上昇率 高い順</option>
+      <option value="change_pct-asc">下落率 高い順</option>
+    </select>
+  </div>
+
+  <div class="sc-table-wrap">
+    <table class="sc-table" id="sc-table">
+      <thead><tr>
+        <th>コード</th>
+        <th>銘柄名</th>
+        <th>市場</th>
+        <th class="num" data-col="close">株価</th>
+        <th class="num" data-col="change_pct">前日比</th>
+        <th class="num" data-col="market_cap">時価総額</th>
+        <th class="num" data-col="per">PER</th>
+        <th class="num" data-col="pbr">PBR</th>
+        <th class="num" data-col="roe">ROE</th>
+        <th class="num" data-col="div_yield">配当利回り</th>
+      </tr></thead>
+      <tbody id="sc-tbody"><tr><td colspan="10" class="sc-loading">データ読み込み中...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+(function(){{
+  var stocks=[], sortCol='market_cap', sortDir=-1;
+  var PRESETS={{
+    'high-div': {{divMin:3}},
+    'low-pbr':  {{pbrMax:1, perMin:0}},
+    'high-roe': {{roeMin:15}},
+    'value':    {{pbrMax:1.5, perMin:0, perMax:20}},
+    'growth':   {{roeMin:20, perMin:0}},
+    'reset':    {{}},
+  }};
+
+  function fmt(v, dec, sfx) {{
+    if(v===null||v===undefined) return '<span style="color:#484f58">—</span>';
+    return v.toFixed(dec)+sfx;
+  }}
+  function fmtCap(v) {{
+    if(!v) return '<span style="color:#484f58">—</span>';
+    if(v>=1e12) return (v/1e12).toFixed(1)+'兆';
+    return Math.round(v/1e8)+'億';
+  }}
+  function getFilters() {{
+    return {{
+      perMin:  parseFloat(document.getElementById('per-min').value)||null,
+      perMax:  parseFloat(document.getElementById('per-max').value)||null,
+      pbrMin:  parseFloat(document.getElementById('pbr-min').value)||null,
+      pbrMax:  parseFloat(document.getElementById('pbr-max').value)||null,
+      roeMin:  parseFloat(document.getElementById('roe-min').value)||null,
+      roeMax:  parseFloat(document.getElementById('roe-max').value)||null,
+      divMin:  parseFloat(document.getElementById('div-min').value)||null,
+      divMax:  parseFloat(document.getElementById('div-max').value)||null,
+      markets: Array.from(document.querySelectorAll('.sc-market-checks input:checked')).map(e=>e.value),
+    }};
+  }}
+  function passFilter(s, f) {{
+    if(f.perMin!==null && (s.per===null||s.per<f.perMin)) return false;
+    if(f.perMax!==null && (s.per===null||s.per>f.perMax)) return false;
+    if(f.pbrMin!==null && (s.pbr===null||s.pbr<f.pbrMin)) return false;
+    if(f.pbrMax!==null && (s.pbr===null||s.pbr>f.pbrMax)) return false;
+    if(f.roeMin!==null && (s.roe===null||s.roe<f.roeMin)) return false;
+    if(f.roeMax!==null && (s.roe===null||s.roe>f.roeMax)) return false;
+    if(f.divMin!==null && (s.div_yield===null||s.div_yield<f.divMin)) return false;
+    if(f.divMax!==null && (s.div_yield===null||s.div_yield>f.divMax)) return false;
+    var m=s.market||'';
+    var matchMarket=false;
+    f.markets.forEach(function(mk){{
+      if(mk==='other'){{ if(!['プライム','スタンダード','グロース'].some(function(x){{return m.includes(x);}})) matchMarket=true; }}
+      else if(m.includes(mk)) matchMarket=true;
+    }});
+    if(!matchMarket) return false;
+    return true;
+  }}
+  function render() {{
+    var f=getFilters();
+    var filtered=stocks.filter(function(s){{return passFilter(s,f);}});
+    filtered.sort(function(a,b){{
+      var av=a[sortCol], bv=b[sortCol];
+      if(av===null&&bv===null) return 0;
+      if(av===null) return 1;
+      if(bv===null) return -1;
+      return (av-bv)*sortDir;
+    }});
+    document.getElementById('sc-count').textContent=filtered.length+'銘柄ヒット';
+    var rows='';
+    var MAX=500;
+    filtered.slice(0,MAX).forEach(function(s){{
+      var chg=s.change_pct;
+      var chgCls=chg>0?'up':(chg<0?'dn':'');
+      var chgStr=chg!==null?(chg>0?'+':'')+chg.toFixed(2)+'%':'—';
+      rows+='<tr>';
+      rows+='<td class="sc-code">'+s.code+'</td>';
+      rows+='<td class="sc-name"><a href="/stock/'+s.code+'">'+s.name+'</a></td>';
+      rows+='<td style="font-size:11px;color:#8b949e">'+s.market+'</td>';
+      rows+='<td class="num">'+(s.close?s.close.toLocaleString('ja-JP',{{maximumFractionDigits:0}}):'—')+'</td>';
+      rows+='<td class="num '+chgCls+'">'+chgStr+'</td>';
+      rows+='<td class="num">'+fmtCap(s.market_cap)+'</td>';
+      rows+='<td class="num">'+fmt(s.per,1,'倍')+'</td>';
+      rows+='<td class="num">'+fmt(s.pbr,2,'倍')+'</td>';
+      rows+='<td class="num">'+(s.roe!==null?fmt(s.roe,1,'%'):'<span style="color:#484f58">—</span>')+'</td>';
+      rows+='<td class="num">'+(s.div_yield!==null?fmt(s.div_yield,2,'%'):'<span style="color:#484f58">—</span>')+'</td>';
+      rows+='</tr>';
+    }});
+    if(!filtered.length) rows='<tr><td colspan="10" class="sc-empty">条件に一致する銘柄がありません</td></tr>';
+    else if(filtered.length>MAX) rows+='<tr><td colspan="10" style="text-align:center;padding:10px;color:#484f58;font-size:12px">'+filtered.length+'件中 上位'+MAX+'件を表示</td></tr>';
+    document.getElementById('sc-tbody').innerHTML=rows;
+  }}
+
+  // Sort by column header click
+  document.querySelectorAll('.sc-table th[data-col]').forEach(function(th){{
+    th.addEventListener('click',function(){{
+      var col=th.dataset.col;
+      if(sortCol===col){{ sortDir*=-1; }}
+      else {{ sortCol=col; sortDir=-1; }}
+      document.querySelectorAll('.sc-table th').forEach(function(t){{t.className=t.className.replace(/\\bsort-(asc|desc)\\b/g,'').trim();}});
+      th.classList.add(sortDir===-1?'sort-desc':'sort-asc');
+      var sel=document.getElementById('sc-sort');
+      sel.value=sortCol+(sortDir===-1?'-desc':'-asc');
+      render();
+    }});
+  }});
+
+  // Sort select change
+  document.getElementById('sc-sort').addEventListener('change',function(){{
+    var v=this.value.split('-');
+    sortCol=v[0]; sortDir=v[1]==='desc'?-1:1;
+    render();
+  }});
+
+  // Filter inputs
+  document.querySelectorAll('.sc-filters input').forEach(function(el){{
+    el.addEventListener('input', render);
+  }});
+  document.querySelectorAll('.sc-market-checks input').forEach(function(el){{
+    el.addEventListener('change', render);
+  }});
+
+  // Preset buttons
+  document.querySelectorAll('.sc-preset').forEach(function(btn){{
+    btn.addEventListener('click',function(){{
+      var p=PRESETS[btn.dataset.preset]||{{}};
+      // clear all
+      ['per-min','per-max','pbr-min','pbr-max','roe-min','roe-max','div-min','div-max'].forEach(function(id){{
+        document.getElementById(id).value='';
+      }});
+      if(p.perMin!==undefined)  document.getElementById('per-min').value=p.perMin;
+      if(p.perMax!==undefined)  document.getElementById('per-max').value=p.perMax;
+      if(p.pbrMin!==undefined)  document.getElementById('pbr-min').value=p.pbrMin;
+      if(p.pbrMax!==undefined)  document.getElementById('pbr-max').value=p.pbrMax;
+      if(p.roeMin!==undefined)  document.getElementById('roe-min').value=p.roeMin;
+      if(p.roeMax!==undefined)  document.getElementById('roe-max').value=p.roeMax;
+      if(p.divMin!==undefined)  document.getElementById('div-min').value=p.divMin;
+      if(p.divMax!==undefined)  document.getElementById('div-max').value=p.divMax;
+      document.querySelectorAll('.sc-preset').forEach(function(b){{b.classList.remove('active');}});
+      if(btn.dataset.preset!=='reset') btn.classList.add('active');
+      render();
+    }});
+  }});
+
+  // Load data
+  fetch('/api/screen').then(function(r){{return r.json();}}).then(function(data){{
+    stocks=data;
+    render();
+  }}).catch(function(){{
+    document.getElementById('sc-count').textContent='読み込み失敗';
+  }});
+}})();
+</script>
+""", active="screen")
 
 
 def _build_stock_page(code: str) -> str:
@@ -1474,8 +1949,8 @@ def _build_stock_page(code: str) -> str:
         abort(404)
     s_code, s_name, market, sector = row
 
-    # 価格データ（直近3ヶ月）
-    from_dt = date.today() - timedelta(days=92)
+    # 価格データ（直近3年）
+    from_dt = date.today() - timedelta(days=365 * 3)
     cur.execute("""
         SELECT date, open, high, low, close, volume, change_pct
         FROM daily_prices
@@ -1660,30 +2135,107 @@ def _build_stock_page(code: str) -> str:
     else:
         key_metrics_html = '<div class="alert" style="margin-bottom:16px">指標データを取得中です。しばらくお待ちください。</div>'
 
-    # ─ ローソク足チャート ─
-    if prices:
-        dates  = [p[0] for p in prices]
-        opens  = [float(p[1] or 0) for p in prices]
-        highs  = [float(p[2] or 0) for p in prices]
-        lows   = [float(p[3] or 0) for p in prices]
-        closes = [float(p[4] or 0) for p in prices]
-        fig = go.Figure(go.Candlestick(
-            x=dates, open=opens, high=highs, low=lows, close=closes,
-            increasing_line_color="#E84040", decreasing_line_color="#3A9FE0",
-            name="株価",
-        ))
-        fig.update_layout(
-            template="plotly_dark", height=320,
-            margin=dict(l=50, r=10, t=10, b=30),
-            xaxis_rangeslider_visible=False,
-            font=dict(size=11),
-            paper_bgcolor="#161b22",
-            plot_bgcolor="#161b22",
-        )
-        chart_div = fig.to_html(full_html=False, include_plotlyjs="cdn",
-                                config={"responsive": True})
-    else:
-        chart_div = '<p class="muted" style="padding:40px;text-align:center">価格データなし</p>'
+    # ─ ローソク足チャート (Plotly.js 直接利用・期間切替・MA対応) ─
+    prices_json = _json.dumps([{
+        "date":   str(p[0]),
+        "open":   float(p[1] or 0),
+        "high":   float(p[2] or 0),
+        "low":    float(p[3] or 0),
+        "close":  float(p[4] or 0),
+        "volume": int(p[5] or 0),
+    } for p in prices]) if prices else "[]"
+
+    chart_div = f"""
+<div class="chart-controls">
+  <div class="period-btns">
+    <button class="period-btn" data-period="1M">1M</button>
+    <button class="period-btn active" data-period="3M">3M</button>
+    <button class="period-btn" data-period="6M">6M</button>
+    <button class="period-btn" data-period="1Y">1Y</button>
+    <button class="period-btn" data-period="3Y">3Y</button>
+  </div>
+  <div class="ma-btns">
+    <span class="ma-label">MA</span>
+    <button class="ma-btn" data-ma="5" style="--ma-color:#ffa657">5</button>
+    <button class="ma-btn" data-ma="25" style="--ma-color:#58a6ff">25</button>
+    <button class="ma-btn" data-ma="75" style="--ma-color:#a371f7">75</button>
+  </div>
+</div>
+<div id="stock-chart" style="width:100%;height:340px"></div>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script>
+(function(){{
+  var allPrices={prices_json};
+  var activePeriod='3M';
+  var activeMAs=new Set();
+  var MA_COLORS={{5:'#ffa657',25:'#58a6ff',75:'#a371f7'}};
+  function filterPrices(period){{
+    if(!allPrices.length) return allPrices;
+    var last=new Date(allPrices[allPrices.length-1].date);
+    var from=new Date(last);
+    var M={{'1M':1,'3M':3,'6M':6,'1Y':12,'3Y':36}};
+    from.setMonth(from.getMonth()-(M[period]||3));
+    var fs=from.toISOString().slice(0,10);
+    return allPrices.filter(function(p){{return p.date>=fs;}});
+  }}
+  function renderChart(){{
+    var prices=filterPrices(activePeriod);
+    if(!prices.length){{ Plotly.purge('stock-chart'); return; }}
+    var dates=prices.map(function(p){{return p.date;}});
+    var traces=[{{
+      type:'candlestick',x:dates,
+      open:prices.map(function(p){{return p.open;}}),
+      high:prices.map(function(p){{return p.high;}}),
+      low:prices.map(function(p){{return p.low;}}),
+      close:prices.map(function(p){{return p.close;}}),
+      name:'株価',
+      increasing:{{line:{{color:'#E84040'}},fillcolor:'rgba(232,64,64,0.3)'}},
+      decreasing:{{line:{{color:'#3A9FE0'}},fillcolor:'rgba(58,159,224,0.3)'}},
+    }}];
+    var fromDate=prices[0].date;
+    [5,25,75].forEach(function(n){{
+      if(!activeMAs.has(n)) return;
+      var allC=allPrices.map(function(p){{return p.close;}});
+      var allD=allPrices.map(function(p){{return p.date;}});
+      var xArr=[],yArr=[];
+      allD.forEach(function(d,i){{
+        if(i<n-1||d<fromDate) return;
+        var sum=0; for(var j=i-n+1;j<=i;j++) sum+=allC[j];
+        xArr.push(d); yArr.push(sum/n);
+      }});
+      traces.push({{type:'scatter',mode:'lines',x:xArr,y:yArr,
+        name:'MA'+n,line:{{color:MA_COLORS[n],width:1.5}}}});
+    }});
+    var layout={{
+      paper_bgcolor:'#161b22',plot_bgcolor:'#161b22',
+      font:{{color:'#c9d1d9',size:11}},
+      height:340,margin:{{l:55,r:10,t:10,b:30}},
+      xaxis:{{rangeslider:{{visible:false}},gridcolor:'#21262d',color:'#8b949e'}},
+      yaxis:{{gridcolor:'#21262d',color:'#8b949e',side:'right'}},
+      showlegend:activeMAs.size>0,
+      legend:{{x:0.01,y:0.99,bgcolor:'rgba(22,27,34,0.8)',font:{{size:10}},orientation:'h'}},
+    }};
+    Plotly.react('stock-chart',traces,layout,{{responsive:true}});
+  }}
+  document.querySelectorAll('.period-btn').forEach(function(btn){{
+    btn.addEventListener('click',function(){{
+      document.querySelectorAll('.period-btn').forEach(function(b){{b.classList.remove('active');}});
+      btn.classList.add('active');
+      activePeriod=btn.dataset.period;
+      renderChart();
+    }});
+  }});
+  document.querySelectorAll('.ma-btn').forEach(function(btn){{
+    btn.addEventListener('click',function(){{
+      var n=parseInt(btn.dataset.ma);
+      if(activeMAs.has(n)){{activeMAs.delete(n);btn.classList.remove('active');}}
+      else{{activeMAs.add(n);btn.classList.add('active');}}
+      renderChart();
+    }});
+  }});
+  renderChart();
+}})();
+</script>""" if prices else '<p class="muted" style="padding:40px;text-align:center">価格データなし</p>'
 
     # ─ 詳細指標パネル ─
     def _mp_row(key, val, color=""):
@@ -1744,6 +2296,24 @@ def _build_stock_page(code: str) -> str:
             f'<td class="muted" style="font-size:12px">{tv_str}</td>'
             f'</tr>'
         )
+
+    # ─ 会社概要 ─
+    co_info = _fetch_company_info(s_code)
+    co_items = []
+    if market:  co_items.append(f'<div class="co-kv">上場市場 <span>{market}</span></div>')
+    if sector:  co_items.append(f'<div class="co-kv">セクター <span>{sector}</span></div>')
+    if shares:  co_items.append(f'<div class="co-kv">発行済株式数 <span>{int(shares/1e4):,}万株</span></div>')
+    if mktcap:  co_items.append(f'<div class="co-kv">時価総額 <span>{_mktcap(mktcap)}</span></div>')
+    for kab_key, label in [("設立","設立"), ("上場","上場"), ("資本金","資本金"), ("従業員","従業員"), ("決算","決算")]:
+        v = co_info.get(kab_key, "")
+        if v:
+            co_items.append(f'<div class="co-kv">{label} <span>{v}</span></div>')
+    biz = co_info.get("business", "")
+    co_html = f"""<div class="co-box">
+  <div class="co-title">会社概要</div>
+  {f'<div class="co-desc">{biz}</div>' if biz else ""}
+  <div class="co-meta">{"".join(co_items)}</div>
+</div>"""
 
     # チャート＋指標の配置（指標なしなら1列）
     if metrics_panel:
@@ -1840,6 +2410,8 @@ def _build_stock_page(code: str) -> str:
 
 {key_metrics_html}
 
+{co_html}
+
 {chart_section}
 
 <p class="price-section-header">所属テーマ</p>
@@ -1868,6 +2440,97 @@ def _build_stock_page(code: str) -> str:
 # ════════════════════════════════════════════════════════════════════════
 #  Routes
 # ════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/screen")
+def api_screen():
+    conn = get_conn()
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT s.code, s.name, m.name AS market,
+               f.per, f.pbr, f.roe, f.div_yield, f.market_cap,
+               lp.close, lp.change_pct
+        FROM stocks s
+        LEFT JOIN markets m ON s.market_id = m.id
+        LEFT JOIN stock_fundamentals f ON s.code = f.code
+        LEFT JOIN (
+            SELECT dp.code, dp.close, dp.change_pct
+            FROM daily_prices dp
+            JOIN (SELECT code, MAX(date) AS max_date FROM daily_prices GROUP BY code) mx
+              ON dp.code = mx.code AND dp.date = mx.max_date
+        ) lp ON s.code = lp.code
+        WHERE s.is_active = TRUE
+          AND (f.per IS NOT NULL OR f.pbr IS NOT NULL OR f.roe IS NOT NULL OR f.div_yield IS NOT NULL)
+        ORDER BY COALESCE(f.market_cap, 0) DESC
+        LIMIT 3000
+    """)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    results = []
+    for r in rows:
+        results.append({
+            "code":       r[0],
+            "name":       r[1] or "",
+            "market":     r[2] or "",
+            "per":        float(r[3]) if r[3] is not None else None,
+            "pbr":        float(r[4]) if r[4] is not None else None,
+            "roe":        float(r[5]) * 100 if r[5] is not None else None,
+            "div_yield":  float(r[6]) * 100 if r[6] is not None else None,
+            "market_cap": int(r[7]) if r[7] else None,
+            "close":      float(r[8]) if r[8] else None,
+            "change_pct": float(r[9]) if r[9] is not None else None,
+        })
+    return jsonify(results)
+
+
+@app.route("/screen")
+def screen():
+    key  = "screen_page"
+    html = _get(key)
+    if not html:
+        html = _build_screen_page()
+        _set(key, html)
+    return html
+
+
+@app.route("/api/search")
+def api_search():
+    q = request.args.get("q", "").strip()
+    if not q:
+        return jsonify([])
+    conn = get_conn()
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT s.code, s.name, m.name AS market,
+               lp.close, lp.change_pct
+        FROM stocks s
+        LEFT JOIN markets m ON s.market_id = m.id
+        LEFT JOIN (
+            SELECT dp.code, dp.close, dp.change_pct
+            FROM daily_prices dp
+            JOIN (SELECT code, MAX(date) AS max_date FROM daily_prices GROUP BY code) mx
+              ON dp.code = mx.code AND dp.date = mx.max_date
+        ) lp ON s.code = lp.code
+        WHERE s.is_active = TRUE
+          AND (s.code LIKE %s OR s.name LIKE %s)
+        ORDER BY
+          CASE WHEN s.code = %s THEN 0
+               WHEN s.code LIKE %s THEN 1
+               ELSE 2 END, s.code
+        LIMIT 12
+    """, (f"{q}%", f"%{q}%", q, f"{q}%"))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    results = []
+    for r in rows:
+        results.append({
+            "code":       r[0],
+            "name":       r[1] or "",
+            "market":     r[2] or "",
+            "close":      float(r[3]) if r[3] else None,
+            "change_pct": float(r[4]) if r[4] else None,
+        })
+    return jsonify(results)
+
 
 @app.route("/health")
 def health():
