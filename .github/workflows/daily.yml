@@ -1,0 +1,40 @@
+name: 日次市場データ更新
+
+on:
+  schedule:
+    # 16:30 JST = 07:30 UTC（月〜金）
+    - cron: '30 7 * * 1-5'
+  workflow_dispatch:  # GitHub UI から手動実行も可能
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: 日次データ更新（価格・スコア・ランキング）
+        env:
+          TIDB_HOST:      ${{ secrets.TIDB_HOST }}
+          TIDB_PORT:      ${{ secrets.TIDB_PORT }}
+          TIDB_USER:      ${{ secrets.TIDB_USER }}
+          TIDB_PASSWORD:  ${{ secrets.TIDB_PASSWORD }}
+          TIDB_DATABASE:  ${{ secrets.TIDB_DATABASE }}
+          JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
+          # TIDB_SSL_CA は未設定 → certifi を自動使用
+        run: python daily_run.py
+
+      - name: 結果サマリー
+        if: always()
+        run: echo "daily_run.py 完了（exit code $?）"

@@ -47,10 +47,11 @@ def compute_daily_rankings(target_date: date = None, top_n: int = 15) -> int:
                 ROW_NUMBER() OVER (ORDER BY dp.`{order_col}` DESC) AS `rank`
             FROM daily_prices dp
             JOIN stocks s ON dp.code = s.code
+            LEFT JOIN markets m ON s.market_id = m.id
             WHERE dp.date = %s
               AND dp.`{order_col}` IS NOT NULL
               AND s.is_active = TRUE
-              AND s.market_id IN (SELECT id FROM markets WHERE code IN ('0111','0112','0113'))
+              AND (s.market_id IS NULL OR m.code IN ('0111','0112','0113'))
             LIMIT %s
         """, (target_date, top_n))
 
@@ -112,8 +113,9 @@ def compute_weekly_rankings(week_ending: date = None, top_n: int = 15) -> int:
             ROW_NUMBER() OVER (ORDER BY (w.last_close - w.first_close) / w.first_close DESC) AS `rank`
         FROM weekly w
         JOIN stocks s ON w.code = s.code
+        LEFT JOIN markets m ON s.market_id = m.id
         WHERE s.is_active = TRUE
-          AND s.market_id IN (SELECT id FROM markets WHERE code IN ('0111','0112','0113'))
+          AND (s.market_id IS NULL OR m.code IN ('0111','0112','0113'))
         LIMIT %s
     """, (week_start, week_ending, top_n))
 

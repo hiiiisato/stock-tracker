@@ -1,6 +1,6 @@
 """
 日次実行スクリプト — 毎営業日の市場終了後（16:00以降）に実行する
-実行順: 銘柄マスタ → カレンダー → 価格データ → ランキング
+実行順: 銘柄マスタ → カレンダー → 価格データ → テーマスコア → ランキング
 
 使い方:
   python daily_run.py              # 通常の日次更新
@@ -16,6 +16,7 @@ from prices_yahoo import fetch_and_store_yahoo
 from dividends import fetch_all_dividends
 from financials import fetch_all_financials
 from rankings import compute_daily_rankings, compute_weekly_rankings, print_rankings
+from theme_score import compute_day as compute_theme_day
 
 
 def _log(conn, fetch_type: str, status: str, rows: int = 0, error: str = None):
@@ -96,7 +97,17 @@ def run(init: bool = False, rankings_only: bool = False):
             print(f"  エラー: {e}")
             _log(conn, "financials", "failed", error=str(e))
 
-    # 4/5. ランキング計算
+    # テーマスコア計算（価格更新後）
+    if not rankings_only:
+        print("\n[テーマスコア] テーマ別過熱スコアを計算中...")
+        try:
+            compute_theme_day()
+            _log(conn, "theme_score", "done")
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log(conn, "theme_score", "failed", error=str(e))
+
+    # ランキング計算
     step = "5/5" if datetime.now().weekday() == 0 else "4/4"
     print(f"\n[{step}] ランキング計算...")
     try:

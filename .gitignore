@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 *.log
 .DS_Store
+# ローカル生成HTMLは除外（大きいファイル、サーバーでは動的生成）
+*.html

@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: kabushiki-tracker
+    env: python
+    plan: free            # 無料プラン（15分非アクセスでスリープ）
+    # plan: starter       # 有料プラン $7/月（常時起動）に変更する場合はコメントアウト切替
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 2 --bind 0.0.0.0:$PORT --timeout 120
+    healthCheckPath: /health
+    envVars:
+      - key: TIDB_HOST
+        sync: false        # Render ダッシュボードで手動設定
+      - key: TIDB_PORT
+        value: "4000"
+      - key: TIDB_DATABASE
+        value: stock_tracker
+      - key: TIDB_USER
+        sync: false
+      - key: TIDB_PASSWORD
+        sync: false
+      - key: JQUANTS_API_KEY
+        sync: false
+      # TIDB_SSL_CA は未設定のまま → certifi を自動使用（Linux 対応済み）

@@ -8,7 +8,24 @@ JQUANTS_API_KEY = os.environ["JQUANTS_API_KEY"]
 JQUANTS_BASE_URL = "https://api.jquants.com/v2"
 JQUANTS_HEADERS = {"x-api-key": JQUANTS_API_KEY}
 
-_ssl_ca = os.environ.get("TIDB_SSL_CA", "")
+
+def _resolve_ssl_ca() -> str:
+    """SSL証明書パスをクロスプラットフォームで解決する。
+    優先順位: 環境変数 TIDB_SSL_CA → certifi → システム既定
+    """
+    env_val = os.environ.get("TIDB_SSL_CA", "")
+    if env_val:
+        return env_val
+    try:
+        import certifi
+        return certifi.where()
+    except ImportError:
+        pass
+    import ssl
+    return ssl.get_default_verify_paths().cafile or ""
+
+
+_ssl_ca = _resolve_ssl_ca()
 
 DB_CONFIG = dict(
     host=os.environ["TIDB_HOST"],
