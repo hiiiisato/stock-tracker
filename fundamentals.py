@@ -162,8 +162,36 @@ def fetch_fundamentals(codes: list, max_workers: int = 4) -> int:
     return len(results)
 
 
+def fetch_one_on_demand(code: str) -> bool:
+    """1銘柄をその場で取得して保存。銘柄ページ表示時の即時取得用。"""
+    try:
+        session, crumb = _get_session_and_crumb()
+        row = _fetch_one(code, session, crumb)
+        if row:
+            _upsert([row])
+            return True
+    except Exception as e:
+        print(f"  [fundamentals on-demand] {code}: {e}")
+    return False
+
+
+def fetch_all_known(max_workers: int = 4) -> int:
+    """過去に取得済みの全銘柄を更新。週次バッチ用。"""
+    conn = get_conn()
+    cur  = conn.cursor()
+    cur.execute("SELECT code FROM stock_fundamentals ORDER BY code")
+    codes = [r[0] for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    if not codes:
+        print("  取得済み銘柄なし")
+        return 0
+    print(f"  既取得銘柄（全体）: {len(codes)} 件")
+    return fetch_fundamentals(codes, max_workers=max_workers)
+
+
 def fetch_theme_stocks(max_workers: int = 4) -> int:
-    """テーマ登録銘柄のファンダメンタルズを更新。daily_run.py から週次で呼ぶ。"""
+    """テーマ登録銘柄のファンダメンタルズを更新（後方互換用）。"""
     conn = get_conn()
     cur  = conn.cursor()
     cur.execute("""
@@ -185,6 +213,9 @@ if __name__ == "__main__":
         codes = sys.argv[1:]
         print(f"=== 個別銘柄ファンダメンタルズ取得: {codes} ===")
         n = fetch_fundamentals(codes)
+    elif "--all" in sys.argv:
+        print("=== 取得済み全銘柄を更新 ===")
+        n = fetch_all_known()
     else:
         print("=== テーマ登録銘柄ファンダメンタルズ取得 ===")
         n = fetch_theme_stocks()

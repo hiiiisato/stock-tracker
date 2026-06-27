@@ -16,7 +16,7 @@ Routes:
 
 import time
 import threading
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 
 from flask import Flask, abort, redirect, request
 import plotly.graph_objects as go
@@ -911,7 +911,7 @@ def _build_stock_page(code: str) -> str:
     """, (code,))
     themes = cur.fetchall()
 
-    # ファンダメンタルズ
+    # ファンダメンタルズ（なければ後でオンデマンド取得）
     cur.execute("SELECT * FROM stock_fundamentals WHERE code = %s", (code,))
     fund_row = cur.fetchone()
 
@@ -926,6 +926,27 @@ def _build_stock_page(code: str) -> str:
 
     cur.close()
     conn.close()
+
+    # ─ ファンダメンタルズ オンデマンド取得 ─
+    # DB になし、または 7 日以上古い場合は即時取得（1〜2秒程度）
+    _FUND_TTL_DAYS = 7
+    need_fetch = fund_row is None
+    if not need_fetch and fund_row[15]:
+        updated = fund_row[15] if isinstance(fund_row[15], datetime) else datetime.combine(fund_row[15], datetime.min.time())
+        need_fetch = (datetime.now() - updated).days >= _FUND_TTL_DAYS
+    if need_fetch:
+        try:
+            from fundamentals import fetch_one_on_demand
+            print(f"[app] ファンダメンタルズ取得: {code}")
+            if fetch_one_on_demand(code):
+                # 取得成功 → 再クエリ
+                conn2 = get_conn()
+                cur2  = conn2.cursor()
+                cur2.execute("SELECT * FROM stock_fundamentals WHERE code = %s", (code,))
+                fund_row = cur2.fetchone()
+                cur2.close(); conn2.close()
+        except Exception as e:
+            print(f"[app] ファンダメンタルズ取得失敗: {code} / {e}")
 
     # ─ 最新価格 ─
     if prices:

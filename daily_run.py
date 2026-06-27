@@ -17,7 +17,7 @@ from dividends import fetch_all_dividends
 from financials import fetch_all_financials
 from rankings import compute_daily_rankings, compute_weekly_rankings, print_rankings
 from theme_score import compute_day as compute_theme_day
-from fundamentals import fetch_theme_stocks as update_fundamentals
+from fundamentals import fetch_all_known as update_fundamentals
 
 
 def _log(fetch_type: str, status: str, rows: int = 0, error: str = None):
