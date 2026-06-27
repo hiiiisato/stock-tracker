@@ -238,8 +238,9 @@ def get_latest_values() -> list:
 
 def get_history_for_chart(days: int = 90) -> dict:
     """
-    チャート表示用に各指数の直近 N 日間の日付・終値を返す。
-    戻り値: {symbol: {"name": str, "dates": [date,...], "closes": [float,...]}, ...}
+    ローソク足チャート用に各指数の直近 N 日間の OHLC データを返す。
+    戻り値: {symbol: {"name": str, "dates": [...], "opens": [...],
+                      "highs": [...], "lows": [...], "closes": [...]}, ...}
     """
     from_date = date.today() - timedelta(days=days)
     conn = get_conn()
@@ -247,7 +248,7 @@ def get_history_for_chart(days: int = 90) -> dict:
     result = {}
     for sym, cfg in INDEX_CONFIGS.items():
         cur.execute("""
-            SELECT date, close
+            SELECT date, open, high, low, close
             FROM market_index_prices
             WHERE symbol = %s AND date >= %s AND close IS NOT NULL
             ORDER BY date
@@ -256,8 +257,11 @@ def get_history_for_chart(days: int = 90) -> dict:
         if rows:
             result[sym] = {
                 "name":   cfg["name"],
-                "dates":  [r[0] for r in rows],
-                "closes": [float(r[1]) for r in rows],
+                "dates":  [str(r[0]) for r in rows],
+                "opens":  [float(r[1]) if r[1] is not None else float(r[4]) for r in rows],
+                "highs":  [float(r[2]) if r[2] is not None else float(r[4]) for r in rows],
+                "lows":   [float(r[3]) if r[3] is not None else float(r[4]) for r in rows],
+                "closes": [float(r[4]) for r in rows],
             }
     cur.close()
     conn.close()

@@ -428,54 +428,69 @@ def _build_index_section() -> str:
         for i, s in enumerate(syms)
     )
 
-    # Plotly trace ごとの JS データ
+    # Plotly ローソク足データを JS 埋め込み用に変換
+    import json
     traces_js = []
-    for i, s in enumerate(syms):
+    for s in syms:
         h = history[s]
-        dates_js  = str([str(d) for d in h["dates"]])
-        closes_js = str(h["closes"])
-        name_js   = h["name"]
-        traces_js.append(
-            f'{{sym:"{s}",name:"{name_js}",dates:{dates_js},closes:{closes_js}}}'
-        )
-    traces_data = "[" + ",".join(traces_js) + "]"
+        traces_js.append({
+            "sym":    s,
+            "name":   h["name"],
+            "dates":  h["dates"],
+            "opens":  h["opens"],
+            "highs":  h["highs"],
+            "lows":   h["lows"],
+            "closes": h["closes"],
+        })
+    traces_data = json.dumps(traces_js, ensure_ascii=False)
 
     chart_html = f"""<div class="idx-chart-wrap">
   <div class="idx-chart-tabs">{tabs_html}</div>
-  <div class="idx-chart-body" id="idx-chart-div" style="height:260px"></div>
+  <div class="idx-chart-body" id="idx-chart-div" style="height:320px"></div>
 </div>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
 <script>
 (function() {{
   var TRACES = {traces_data};
-  var currentIdx = 0;
   var layout = {{
     template: "plotly_dark",
     paper_bgcolor: "#161b22",
     plot_bgcolor: "#161b22",
-    margin: {{l:50,r:10,t:10,b:30}},
-    xaxis: {{showgrid:false, tickfont:{{size:10}}}},
-    yaxis: {{showgrid:true, gridcolor:"#21262d", tickfont:{{size:10}}}},
+    margin: {{l:55,r:10,t:10,b:30}},
+    xaxis: {{
+      showgrid: false,
+      tickfont: {{size:10}},
+      rangeslider: {{visible:false}},
+      type: "category",
+      nticks: 8,
+    }},
+    yaxis: {{
+      showgrid: true,
+      gridcolor: "#21262d",
+      tickfont: {{size:10}},
+    }},
     showlegend: false,
-    height: 260,
+    height: 320,
   }};
   var config = {{responsive:true, displayModeBar:false}};
 
   function draw(idx) {{
     var t = TRACES[idx];
-    var color = "#58a6ff";
     var data = [{{
-      type: "scatter", mode: "lines",
-      x: t.dates, y: t.closes,
-      line: {{color: color, width: 2}},
-      fill: "tozeroy",
-      fillcolor: "rgba(88,166,255,0.06)",
+      type: "candlestick",
+      x: t.dates,
+      open:  t.opens,
+      high:  t.highs,
+      low:   t.lows,
+      close: t.closes,
+      increasing: {{line: {{color:"#E84040"}}, fillcolor:"#E84040"}},
+      decreasing: {{line: {{color:"#3A9FE0"}}, fillcolor:"#3A9FE0"}},
+      name: t.name,
     }}];
     Plotly.newPlot("idx-chart-div", data, layout, config);
     document.querySelectorAll(".idx-tab").forEach(function(b,i) {{
       b.classList.toggle("active", i === idx);
     }});
-    currentIdx = idx;
   }}
 
   window.switchIdx = function(idx) {{ draw(idx); }};
