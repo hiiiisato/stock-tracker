@@ -2059,7 +2059,7 @@ def _build_stock_page(code: str) -> str:
         cur_price, price_str, chg, vol, price_date = 0.0, "—", 0.0, 0, "—"
 
     chg_cls   = "up" if chg > 0 else ("dn" if chg < 0 else "muted")
-    chg_arrow = "▲" if chg > 0 else ("▼" if chg < 0 else "")
+    chg_sign  = "+" if chg > 0 else ""
 
     # ─ ファンダメンタルズ値を取り出す ─
     def _fv(key):
@@ -2391,7 +2391,7 @@ def _build_stock_page(code: str) -> str:
   <div>
     <span class="s-price">¥{price_str}</span>
     <span class="s-chg {chg_cls}" style="margin-left:10px">
-      {chg_arrow} {abs(chg):.2f}%
+      {chg_sign}{chg:.2f}%
     </span>
     <span class="s-sub" style="margin-left:8px">前日比</span>
   </div>
@@ -2474,7 +2474,7 @@ def api_screen():
             "per":        float(r[3]) if r[3] is not None else None,
             "pbr":        float(r[4]) if r[4] is not None else None,
             "roe":        float(r[5]) * 100 if r[5] is not None else None,
-            "div_yield":  float(r[6]) * 100 if r[6] is not None else None,
+            "div_yield":  float(r[6]) if r[6] is not None else None,
             "market_cap": int(r[7]) if r[7] else None,
             "close":      float(r[8]) if r[8] else None,
             "change_pct": float(r[9]) if r[9] is not None else None,
