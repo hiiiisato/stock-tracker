@@ -322,7 +322,46 @@ tr:hover { background: #1c2128; }
 .idx-tab.active { color: #58a6ff; border-bottom-color: #388bfd; }
 .idx-chart-body { padding: 4px; }
 
+/* ── チャートグリッドビュー ── */
+.cg-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;
+}
+.cg-view-btn {
+  background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+  color: #8b949e; font-size: 12px; padding: 4px 14px; cursor: pointer; transition: all 0.15s;
+}
+.cg-view-btn.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.cg-period-btn {
+  background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+  color: #8b949e; font-size: 12px; padding: 3px 10px; cursor: pointer; transition: all 0.15s;
+}
+.cg-period-btn.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.cg-sort-select {
+  background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+  color: #c9d1d9; font-size: 12px; padding: 3px 8px; cursor: pointer;
+}
+.cg-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+}
+.cg-card {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden;
+  transition: border-color 0.15s;
+}
+.cg-card:hover { border-color: #58a6ff; }
+.cg-card-hd {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 10px 12px 4px; cursor: pointer;
+}
+.cg-name { font-size: 13px; font-weight: 600; color: #e6edf3; }
+.cg-code-label { font-size: 11px; color: #8b949e; }
+.cg-price { font-size: 14px; font-weight: 600; color: #e6edf3; text-align: right; }
+.cg-chg  { font-size: 12px; font-weight: 600; text-align: right; }
+.cg-plot { height: 150px; }
+.cg-loading { text-align: center; color: #8b949e; font-size: 12px; padding: 40px; }
+
 /* ─ Responsive ─ */
+@media (max-width: 900px) { .cg-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .cg-grid { grid-template-columns: 1fr; } }
 @media (max-width: 768px) {
   .page { padding: 12px 10px; }
   .grid-3 { grid-template-columns: 1fr; gap: 12px; }
@@ -1335,7 +1374,7 @@ def _chart_grid_toolbar(codes_js: str, show_added_sort: bool = False) -> str:
     <button class="cg-view-btn active" id="btn-list" onclick="cgSetView('list')">☰ リスト</button>
     <button class="cg-view-btn" id="btn-chart" onclick="cgSetView('chart')">⊞ チャート</button>
   </div>
-  <div id="cg-chart-opts" style="display:none;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+  <div id="cg-chart-opts" style="display:none;gap:6px;align-items:center;flex-wrap:wrap">
     <div style="display:flex;gap:3px">
       <button class="cg-period-btn active" data-period="1M">1M</button>
       <button class="cg-period-btn" data-period="3M">3M</button>
@@ -1369,7 +1408,7 @@ def _chart_grid_script() -> str:
     document.getElementById('btn-list').classList.toggle('active',isList);
     document.getElementById('btn-chart').classList.toggle('active',!isList);
     var opts=document.getElementById('cg-chart-opts');
-    opts.style.display=isList?'none':'flex';
+    if(opts) opts.style.display=isList?'none':'flex';
     localStorage.setItem('cgView',v);
     if(!isList && !loaded){ loadData(); }
   }
@@ -1726,45 +1765,6 @@ _STOCK_CSS = """
   .km-value { font-size: 18px; }
   .chart-metrics-row { grid-template-columns: 1fr; }
 }
-
-/* ── チャートグリッドビュー ── */
-.cg-toolbar {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;
-}
-.cg-view-btn {
-  background: #21262d; border: 1px solid #30363d; border-radius: 4px;
-  color: #8b949e; font-size: 12px; padding: 4px 14px; cursor: pointer; transition: all 0.15s;
-}
-.cg-view-btn.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
-.cg-period-btn {
-  background: #21262d; border: 1px solid #30363d; border-radius: 4px;
-  color: #8b949e; font-size: 12px; padding: 3px 10px; cursor: pointer; transition: all 0.15s;
-}
-.cg-period-btn.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
-.cg-sort-select {
-  background: #21262d; border: 1px solid #30363d; border-radius: 4px;
-  color: #c9d1d9; font-size: 12px; padding: 3px 8px; cursor: pointer;
-}
-.cg-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
-}
-.cg-card {
-  background: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden;
-  transition: border-color 0.15s;
-}
-.cg-card:hover { border-color: #58a6ff; }
-.cg-card-hd {
-  display: flex; justify-content: space-between; align-items: flex-start;
-  padding: 10px 12px 4px; cursor: pointer;
-}
-.cg-name { font-size: 13px; font-weight: 600; color: #e6edf3; }
-.cg-code-label { font-size: 11px; color: #8b949e; }
-.cg-price { font-size: 14px; font-weight: 600; color: #e6edf3; text-align: right; }
-.cg-chg  { font-size: 12px; font-weight: 600; text-align: right; }
-.cg-plot { height: 150px; }
-.cg-loading { text-align: center; color: #8b949e; font-size: 12px; padding: 40px; }
-@media (max-width: 900px) { .cg-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 560px) { .cg-grid { grid-template-columns: 1fr; } }
 """
 
 
@@ -2601,7 +2601,7 @@ def _build_stock_page(code: str) -> str:
 
 <div class="s-price-row">
   <div>
-    <span class="s-price">¥{price_str}</span>
+    <span class="s-price">{price_str}</span>
     <span class="s-chg {chg_cls}" style="margin-left:10px">
       {chg_sign}{chg:.2f}%
     </span>
