@@ -162,6 +162,57 @@ def fetch_fundamentals(codes: list, max_workers: int = 4) -> int:
     return len(results)
 
 
+def recompute_price_metrics(latest_date=None) -> int:
+    """
+    最新株価から PER・PBR・時価総額・配当利回りを再計算して stock_fundamentals に保存。
+    EPS/BPS は週次更新、PER/PBR は日次更新（株価が変わるから）。
+    daily_run.py の価格更新後に毎日呼ぶ。
+    """
+    conn = get_conn()
+    cur  = conn.cursor()
+
+    if not latest_date:
+        cur.execute("SELECT MAX(date) FROM daily_prices WHERE close IS NOT NULL")
+        latest_date = cur.fetchone()[0]
+
+    if not latest_date:
+        cur.close(); conn.close()
+        return 0
+
+    cur.execute("""
+        UPDATE stock_fundamentals sf
+        JOIN daily_prices dp ON dp.code = sf.code AND dp.date = %s
+        SET
+          sf.market_cap = CASE
+            WHEN sf.shares_outstanding IS NOT NULL AND sf.shares_outstanding > 0
+            THEN ROUND(dp.close * sf.shares_outstanding)
+            ELSE NULL
+          END,
+          sf.per = CASE
+            WHEN sf.eps_ttm IS NOT NULL AND sf.eps_ttm > 0
+            THEN ROUND(dp.close / sf.eps_ttm, 2)
+            ELSE NULL
+          END,
+          sf.pbr = CASE
+            WHEN sf.bps IS NOT NULL AND sf.bps > 0
+            THEN ROUND(dp.close / sf.bps, 2)
+            ELSE NULL
+          END,
+          sf.div_yield = CASE
+            WHEN sf.annual_dps IS NOT NULL AND sf.annual_dps > 0 AND dp.close > 0
+            THEN ROUND(sf.annual_dps / dp.close * 100, 4)
+            ELSE NULL
+          END
+        WHERE dp.close IS NOT NULL AND dp.close > 0
+    """, (latest_date,))
+    updated = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+    print(f"  PER/PBR/時価総額/配当利回り 再計算: {updated:,} 件（{latest_date}）")
+    return updated
+
+
 def fetch_one_on_demand(code: str) -> bool:
     """1銘柄をその場で取得して保存。銘柄ページ表示時の即時取得用。"""
     try:

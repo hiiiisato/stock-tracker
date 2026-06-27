@@ -17,7 +17,7 @@ from dividends import fetch_all_dividends
 from financials import fetch_all_financials
 from rankings import compute_daily_rankings, compute_weekly_rankings, print_rankings
 from theme_score import compute_day as compute_theme_day
-from fundamentals import fetch_all_known as update_fundamentals
+from fundamentals import fetch_all_known as update_fundamentals, recompute_price_metrics
 
 
 def _log(fetch_type: str, status: str, rows: int = 0, error: str = None):
@@ -120,6 +120,16 @@ def run(init: bool = False, rankings_only: bool = False):
         except Exception as e:
             print(f"  エラー: {e}")
             _log("theme_score", "failed", error=str(e))
+
+    # PER/PBR/時価総額/配当利回りを最新株価で再計算（毎日）
+    if not rankings_only:
+        print("\n[指標再計算] PER/PBR/時価総額/配当利回りを更新中...")
+        try:
+            n = recompute_price_metrics()
+            _log("metrics_recompute", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("metrics_recompute", "failed", error=str(e))
 
     # ランキング計算
     step = "5/5" if datetime.now().weekday() == 0 else "4/4"
