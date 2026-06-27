@@ -853,31 +853,90 @@ _REL = {
     1: ("周辺", "#6e7681", "#1c2128"),
 }
 
+_FUND_TTL_DAYS = 7  # 7日以上古ければ再取得
 
-def _fmt_mktcap(v) -> str:
-    """時価総額を兆円/億円で表示"""
-    if v is None:
-        return "—"
-    v = float(v)
-    if v >= 1e12:
-        return f"{v/1e12:.2f}兆円"
-    return f"{v/1e8:.0f}億円"
+_STOCK_CSS = """
+.s-header { margin-bottom: 20px; }
+.s-name { font-size: 22px; font-weight: 700; color: #e6edf3; line-height: 1.3; }
+.s-meta { font-size: 12px; color: #8b949e; margin-top: 4px; }
+.s-price-row {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 16px 20px; margin-bottom: 20px;
+}
+.s-price { font-size: 38px; font-weight: 700; color: #e6edf3; letter-spacing: -1px; }
+.s-chg { font-size: 18px; font-weight: 600; }
+.s-sub { font-size: 12px; color: #8b949e; }
+.s-wl-btn { margin-left: auto; }
 
+/* 4列キーメトリクス */
+.key-metrics {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px;
+}
+.km-card {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 14px 12px; text-align: center;
+}
+.km-label { font-size: 11px; color: #8b949e; margin-bottom: 6px; }
+.km-value { font-size: 22px; font-weight: 700; color: #e6edf3; line-height: 1.1; }
+.km-sub   { font-size: 11px; color: #8b949e; margin-top: 5px; }
 
-def _metric_box(label: str, value: str, note: str = "", color: str = "") -> str:
-    col = f"color:{color}" if color else "color:#e6edf3"
-    return f"""<div style="background:#161b22;border:1px solid #30363d;border-radius:8px;
-                         padding:14px 16px;text-align:center;min-width:0">
-  <div style="font-size:11px;color:#8b949e;margin-bottom:6px">{label}</div>
-  <div style="font-size:20px;font-weight:700;{col};line-height:1.2">{value}</div>
-  {f'<div style="font-size:11px;color:#8b949e;margin-top:4px">{note}</div>' if note else ""}
-</div>"""
+/* チャート＋指標の2列レイアウト */
+.chart-metrics-row {
+  display: grid; grid-template-columns: 1fr 280px; gap: 16px; margin-bottom: 20px; align-items: start;
+}
+.chart-box {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 8px; overflow: hidden; min-width: 0;
+}
+.metrics-panel {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden;
+}
+.mp-title {
+  background: #21262d; padding: 8px 14px; font-size: 11px;
+  font-weight: 600; color: #8b949e; border-bottom: 1px solid #30363d;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.mp-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 14px; border-bottom: 1px solid #1c2128; font-size: 13px;
+}
+.mp-row:last-child { border-bottom: none; }
+.mp-key { color: #8b949e; font-size: 12px; }
+.mp-val { font-weight: 600; color: #e6edf3; }
+
+/* テーマバッジ */
+.theme-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
+.theme-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  border-radius: 6px; padding: 4px 10px; text-decoration: none;
+}
+.theme-badge:hover { opacity: 0.85; }
+
+/* 価格テーブル */
+.price-section-header {
+  font-size: 13px; font-weight: 600; color: #e6edf3;
+  border-bottom: 1px solid #30363d; padding-bottom: 8px; margin: 20px 0 12px;
+}
+
+/* 指標更新日 */
+.fund-note { font-size: 11px; color: #484f58; text-align: right; margin-bottom: 10px; }
+
+@media (max-width: 768px) {
+  .s-price { font-size: 28px; }
+  .s-chg   { font-size: 15px; }
+  .key-metrics { grid-template-columns: repeat(2, 1fr); }
+  .km-value { font-size: 18px; }
+  .chart-metrics-row { grid-template-columns: 1fr; }
+}
+"""
 
 
 def _build_stock_page(code: str) -> str:
     conn = get_conn()
     cur  = conn.cursor()
 
+    # 銘柄基本情報
     cur.execute("""
         SELECT s.code, s.name, m.name AS market, sec.name AS sector
         FROM stocks s
@@ -911,9 +970,20 @@ def _build_stock_page(code: str) -> str:
     """, (code,))
     themes = cur.fetchall()
 
-    # ファンダメンタルズ（なければ後でオンデマンド取得）
-    cur.execute("SELECT * FROM stock_fundamentals WHERE code = %s", (code,))
-    fund_row = cur.fetchone()
+    # ファンダメンタルズ（列名で取得してdict化 → 列順変更に強い）
+    cur.execute("""
+        SELECT code, shares_outstanding, eps_ttm, eps_forward, bps,
+               dividend_rate, annual_dps, payout_ratio, roe, roa, debt_to_equity,
+               operating_margin, profit_margin, beta, market_cap,
+               per, pbr, div_yield, updated_at
+        FROM stock_fundamentals WHERE code = %s
+    """, (code,))
+    fund_raw = cur.fetchone()
+    fund_cols = ["code","shares_outstanding","eps_ttm","eps_forward","bps",
+                 "dividend_rate","annual_dps","payout_ratio","roe","roa","debt_to_equity",
+                 "operating_margin","profit_margin","beta","market_cap",
+                 "per","pbr","div_yield","updated_at"]
+    fund = dict(zip(fund_cols, fund_raw)) if fund_raw else {}
 
     # 直近1年の配当金合計（dividendsテーブルから）
     from_div = date.today() - timedelta(days=365)
@@ -921,29 +991,35 @@ def _build_stock_page(code: str) -> str:
         SELECT SUM(amount) FROM dividends
         WHERE code = %s AND ex_date >= %s
     """, (code, from_div))
-    div_sum_row = cur.fetchone()
-    div_ttm = float(div_sum_row[0]) if div_sum_row and div_sum_row[0] else None
+    div_row = cur.fetchone()
+    div_ttm = float(div_row[0]) if div_row and div_row[0] else None
 
     cur.close()
     conn.close()
 
     # ─ ファンダメンタルズ オンデマンド取得 ─
-    # DB になし、または 7 日以上古い場合は即時取得（1〜2秒程度）
-    _FUND_TTL_DAYS = 7
-    need_fetch = fund_row is None
-    if not need_fetch and fund_row[15]:
-        updated = fund_row[15] if isinstance(fund_row[15], datetime) else datetime.combine(fund_row[15], datetime.min.time())
-        need_fetch = (datetime.now() - updated).days >= _FUND_TTL_DAYS
+    need_fetch = not fund
+    if not need_fetch:
+        upd = fund.get("updated_at")
+        if upd:
+            upd_dt = upd if isinstance(upd, datetime) else datetime.combine(upd, datetime.min.time())
+            need_fetch = (datetime.now() - upd_dt).days >= _FUND_TTL_DAYS
     if need_fetch:
         try:
-            from fundamentals import fetch_one_on_demand
+            from fundamentals import fetch_one_on_demand, recompute_price_metrics
             print(f"[app] ファンダメンタルズ取得: {code}")
             if fetch_one_on_demand(code):
-                # 取得成功 → 再クエリ
-                conn2 = get_conn()
-                cur2  = conn2.cursor()
-                cur2.execute("SELECT * FROM stock_fundamentals WHERE code = %s", (code,))
-                fund_row = cur2.fetchone()
+                recompute_price_metrics()
+                conn2 = get_conn(); cur2 = conn2.cursor()
+                cur2.execute("""
+                    SELECT code, shares_outstanding, eps_ttm, eps_forward, bps,
+                           dividend_rate, annual_dps, payout_ratio, roe, roa, debt_to_equity,
+                           operating_margin, profit_margin, beta, market_cap,
+                           per, pbr, div_yield, updated_at
+                    FROM stock_fundamentals WHERE code = %s
+                """, (code,))
+                fund_raw2 = cur2.fetchone()
+                fund = dict(zip(fund_cols, fund_raw2)) if fund_raw2 else {}
                 cur2.close(); conn2.close()
         except Exception as e:
             print(f"[app] ファンダメンタルズ取得失敗: {code} / {e}")
@@ -955,129 +1031,86 @@ def _build_stock_page(code: str) -> str:
         price_str = f"{cur_price:,.0f}"
         chg       = float(latest[6] or 0)
         vol       = int(latest[5] or 0)
+        price_date = str(latest[0])
     else:
-        cur_price, price_str, chg, vol = 0.0, "-", 0.0, 0
+        cur_price, price_str, chg, vol, price_date = 0.0, "—", 0.0, 0, "—"
 
-    chg_cls = "up" if chg > 0 else ("dn" if chg < 0 else "muted")
+    chg_cls   = "up" if chg > 0 else ("dn" if chg < 0 else "muted")
+    chg_arrow = "▲" if chg > 0 else ("▼" if chg < 0 else "")
 
-    # ─ ファンダメンタルズ解析 ─
-    def _fd(idx):
-        if fund_row and fund_row[idx] is not None:
-            return float(fund_row[idx])
-        return None
+    # ─ ファンダメンタルズ値を取り出す ─
+    def _fv(key):
+        v = fund.get(key)
+        return float(v) if v is not None else None
 
-    shares   = _fd(1)   # shares_outstanding
-    eps_ttm  = _fd(2)   # EPS実績
-    eps_fwd  = _fd(3)   # EPS予想
-    bps      = _fd(4)   # BPS
-    div_rate = _fd(5)   # 年間配当（予想）
-    ann_dps  = _fd(6)   # 年間配当（直近実績）- Yahoo
-    payout   = _fd(7)   # 配当性向
-    roe      = _fd(8)
-    roa      = _fd(9)
-    dte      = _fd(10)  # D/E比率
-    op_mgn   = _fd(11)  # 営業利益率
-    pr_mgn   = _fd(12)  # 純利益率
-    beta     = _fd(13)
-    mktcap_s = _fd(14)  # market_cap from Yahoo（API取得時の価格ベース）
+    shares   = _fv("shares_outstanding")
+    eps_ttm  = _fv("eps_ttm")
+    eps_fwd  = _fv("eps_forward")
+    bps_val  = _fv("bps")
+    ann_dps  = _fv("annual_dps")
+    payout   = _fv("payout_ratio")
+    roe      = _fv("roe")
+    roa      = _fv("roa")
+    dte      = _fv("debt_to_equity")
+    op_mgn   = _fv("operating_margin")
+    pr_mgn   = _fv("profit_margin")
+    beta     = _fv("beta")
 
-    # 価格から再計算（常に最新価格ベース）
-    mktcap = cur_price * shares if cur_price and shares else mktcap_s
-    per_ttm = cur_price / eps_ttm if cur_price and eps_ttm and eps_ttm > 0 else None
+    # 最新株価で再計算（PER/PBR/時価総額は毎日変わる）
+    mktcap  = cur_price * shares if cur_price and shares else _fv("market_cap")
+    per_ttm = cur_price / eps_ttm if cur_price and eps_ttm and eps_ttm > 0 else _fv("per")
     per_fwd = cur_price / eps_fwd if cur_price and eps_fwd and eps_fwd > 0 else None
-    pbr     = cur_price / bps     if cur_price and bps     and bps     > 0 else None
-    # 配当利回り: dividendsテーブル合計を優先、なければ Yahoo の値
+    pbr     = cur_price / bps_val if cur_price and bps_val and bps_val > 0 else _fv("pbr")
     dps_use = div_ttm if div_ttm else ann_dps
-    div_yld = (dps_use / cur_price * 100) if dps_use and cur_price else None
+    div_yld = (dps_use / cur_price * 100) if dps_use and cur_price else _fv("div_yield")
 
-    def _f(v, fmt="{:.1f}", suffix="", fallback="—"):
-        return f"{fmt.format(v)}{suffix}" if v is not None else fallback
+    fund_updated = str(fund.get("updated_at", ""))[:10] or "—"
 
-    def _pct(v, fallback="—"):
-        return f"{v*100:.1f}%" if v is not None else fallback
+    # ─ 表示ヘルパー ─
+    def _fmtv(v, fmt="{:.1f}", sfx=""):
+        return f"{fmt.format(float(v))}{sfx}" if v is not None else "—"
 
-    def _signed_color(v):
-        if v is None: return "#e6edf3"
-        return "#E84040" if float(v) > 0 else ("#3A9FE0" if float(v) < 0 else "#e6edf3")
+    def _pct(v):
+        return f"{float(v)*100:.1f}%" if v is not None else "—"
 
-    no_data = fund_row is None
+    def _mktcap(v):
+        if not v: return "—"
+        v = float(v)
+        return f"{v/1e12:.2f}兆円" if v >= 1e12 else f"{v/1e8:.0f}億円"
 
-    # ─ 投資指標グリッド ─
-    metrics_html = ""
-    if not no_data:
-        # 行1: 時価総額・PER・PBR
-        # 行2: 配当利回り・配当金・EPS（実績/予想）
-        # 行3: ROE・ROA・営業利益率
-        # 行4: D/E比率・配当性向・ベータ
-        grid_css = """display:grid;grid-template-columns:repeat(3,1fr);
-                      gap:10px;margin-bottom:24px"""
+    def _color(v, invert=False):
+        if v is None: return ""
+        pos = float(v) > 0
+        if invert:
+            pos = not pos
+        return "color:#E84040" if pos else "color:#3A9FE0"
 
-        row1 = (
-            _metric_box("時価総額", _fmt_mktcap(mktcap), "最新株価×発行済株数") +
-            _metric_box("PER（実績）",
-                        _f(per_ttm, "{:.1f}", "倍") if per_ttm and 0 < per_ttm < 500 else "—",
-                        f"EPS {_f(eps_ttm, '{:.2f}', '円')}") +
-            _metric_box("PBR",
-                        _f(pbr, "{:.2f}", "倍") if pbr and 0 < pbr < 100 else "—",
-                        f"BPS {_f(bps, '{:,.0f}', '円')}")
-        )
-        row2 = (
-            _metric_box("配当利回り",
-                        _f(div_yld, "{:.2f}", "%") if div_yld else "—",
-                        f"年間配当 {_f(dps_use, '{:.0f}', '円')}",
-                        color="#ffa657" if div_yld and div_yld >= 3 else "") +
-            _metric_box("配当性向",
-                        _pct(payout),
-                        "内部留保との配分") +
-            _metric_box("PER（予想）",
-                        _f(per_fwd, "{:.1f}", "倍") if per_fwd and 0 < per_fwd < 500 else "—",
-                        f"予想EPS {_f(eps_fwd, '{:.2f}', '円')}")
-        )
-        row3 = (
-            _metric_box("ROE",
-                        _pct(roe),
-                        "自己資本利益率",
-                        color=_signed_color(roe)) +
-            _metric_box("ROA",
-                        _pct(roa),
-                        "総資産利益率",
-                        color=_signed_color(roa)) +
-            _metric_box("営業利益率",
-                        _pct(op_mgn),
-                        "本業の収益性",
-                        color=_signed_color(op_mgn))
-        )
-        row4 = (
-            _metric_box("純利益率",
-                        _pct(pr_mgn),
-                        "最終的な収益率",
-                        color=_signed_color(pr_mgn)) +
-            _metric_box("D/E比率",
-                        _f(dte, "{:.1f}", "倍") if dte is not None else "—",
-                        "有利子負債÷自己資本",
-                        color="#E84040" if dte and dte > 150 else "#e6edf3") +
-            _metric_box("ベータ",
-                        _f(beta, "{:.2f}"),
-                        "市場との連動性（1=同等）")
-        )
-
-        fund_updated = str(fund_row[15])[:10] if fund_row and fund_row[15] else "—"
-        metrics_html = f"""
-<h2 class="sect-h2">投資指標</h2>
-<div style="{grid_css}">{row1}</div>
-<div style="{grid_css}">{row2}</div>
-<div style="{grid_css}">{row3}</div>
-<div style="{grid_css}">{row4}</div>
-<p style="font-size:11px;color:#484f58;text-align:right;margin-bottom:20px">
-  ※ 指標データ更新: {fund_updated}　PER/PBR/時価総額は当日終値で再計算
-</p>"""
-    else:
-        metrics_html = """
-<h2 class="sect-h2">投資指標</h2>
-<div class="alert" style="margin-bottom:20px">
-  この銘柄の指標データはまだ取得されていません。
-  テーマ登録銘柄は週次で自動更新されます。
+    # ─ キーメトリクス 4カード ─
+    has_fund = bool(fund)
+    def _km(label, val, sub="", color=""):
+        col = f";{color}" if color else ""
+        return f"""<div class="km-card">
+  <div class="km-label">{label}</div>
+  <div class="km-value" style="color:#e6edf3{col}">{val}</div>
+  {f'<div class="km-sub">{sub}</div>' if sub else ""}
 </div>"""
+
+    if has_fund:
+        key_metrics_html = f"""<div class="key-metrics">
+  {_km("時価総額", _mktcap(mktcap))}
+  {_km("PER（実績）",
+       _fmtv(per_ttm, "{:.1f}", "倍") if per_ttm and 0 < per_ttm < 500 else "—",
+       f"EPS {_fmtv(eps_ttm, '{:.2f}', '円')}")}
+  {_km("PBR",
+       _fmtv(pbr, "{:.2f}", "倍") if pbr and 0 < pbr < 100 else "—",
+       f"BPS {_fmtv(bps_val, '{:,.0f}', '円')}")}
+  {_km("配当利回り",
+       _fmtv(div_yld, "{:.2f}", "%") if div_yld else "—",
+       f"年間 {_fmtv(dps_use, '{:.0f}', '円')}",
+       "color:#ffa657" if div_yld and float(div_yld) >= 3 else "")}
+</div>"""
+    else:
+        key_metrics_html = '<div class="alert" style="margin-bottom:16px">指標データを取得中です。しばらくお待ちください。</div>'
 
     # ─ ローソク足チャート ─
     if prices:
@@ -1092,15 +1125,44 @@ def _build_stock_page(code: str) -> str:
             name="株価",
         ))
         fig.update_layout(
-            template="plotly_dark", height=360,
+            template="plotly_dark", height=320,
             margin=dict(l=50, r=10, t=10, b=30),
             xaxis_rangeslider_visible=False,
-            font=dict(size=12),
+            font=dict(size=11),
+            paper_bgcolor="#161b22",
+            plot_bgcolor="#161b22",
         )
-        chart_html = fig.to_html(full_html=False, include_plotlyjs="cdn",
-                                 config={"responsive": True})
+        chart_div = fig.to_html(full_html=False, include_plotlyjs="cdn",
+                                config={"responsive": True})
     else:
-        chart_html = '<p class="muted" style="padding:20px">価格データなし</p>'
+        chart_div = '<p class="muted" style="padding:40px;text-align:center">価格データなし</p>'
+
+    # ─ 詳細指標パネル ─
+    def _mp_row(key, val, color=""):
+        col = f' style="{color}"' if color else ''
+        return f'<div class="mp-row"><span class="mp-key">{key}</span><span class="mp-val"{col}>{val}</span></div>'
+
+    if has_fund:
+        metrics_panel = f"""<div class="metrics-panel">
+  <div class="mp-title">詳細指標</div>
+  {_mp_row("ROE（自己資本利益率）", _pct(roe), _color(roe))}
+  {_mp_row("ROA（総資産利益率）",   _pct(roa), _color(roa))}
+  {_mp_row("営業利益率",           _pct(op_mgn), _color(op_mgn))}
+  {_mp_row("純利益率",             _pct(pr_mgn), _color(pr_mgn))}
+  <div class="mp-row" style="background:#0d1117"></div>
+  {_mp_row("D/E比率",  _fmtv(dte, "{:.1f}", "倍"),
+           "color:#E84040" if dte and dte > 150 else "")}
+  {_mp_row("配当性向",             _pct(payout))}
+  {_mp_row("PER（予想）",
+           _fmtv(per_fwd, "{:.1f}", "倍") if per_fwd and 0 < per_fwd < 500 else "—")}
+  {_mp_row("予想EPS",              _fmtv(eps_fwd, "{:.2f}", "円"))}
+  {_mp_row("ベータ",               _fmtv(beta, "{:.2f}"))}
+  <div style="padding:6px 14px;font-size:10px;color:#484f58">
+    更新: {fund_updated}
+  </div>
+</div>"""
+    else:
+        metrics_panel = ""
 
     # ─ テーマバッジ ─
     report_date = _latest_report_date()
@@ -1109,76 +1171,88 @@ def _build_stock_page(code: str) -> str:
     for tname, tcode, rel in themes:
         lbl, fg, bg = _REL.get(rel, ("?", "#aaa", "#222"))
         badges.append(
-            f'<a href="{report_link}" style="text-decoration:none">'
-            f'<span style="display:inline-flex;align-items:center;gap:6px;'
-            f'background:{bg};border-radius:6px;padding:4px 10px;margin:3px">'
+            f'<a class="theme-badge" href="{report_link}" style="background:{bg}">'
             f'<span style="color:{fg};font-size:11px;font-weight:700">{lbl}</span>'
             f'<span style="color:#c9d1d9;font-size:13px">{tname}</span>'
-            f'</span></a>'
+            f'</a>'
         )
-    theme_html = "".join(badges) if badges else '<span class="muted">なし</span>'
+    theme_html = f'<div class="theme-badges">{"".join(badges)}</div>' if badges else \
+                 '<p class="muted" style="font-size:13px">テーマ未分類</p>'
 
     # ─ 直近20日テーブル ─
     recent20 = list(reversed(prices[-20:]))
     trows = ""
     for p in recent20:
         c = float(p[6] or 0)
-        cls = "up" if c > 0 else ("dn" if c < 0 else "")
+        cls = "up" if c > 0 else ("dn" if c < 0 else "muted")
+        tv = float(p[5] or 0) * float(p[4] or 0)
+        tv_str = f"{tv/1e8:.2f}億" if tv >= 1e8 else (f"{tv/1e4:.0f}万" if tv > 0 else "—")
         trows += (
             f'<tr>'
             f'<td class="left">{p[0]}</td>'
             f'<td>{float(p[4] or 0):,.0f}</td>'
             f'<td class="{cls}">{c:+.1f}%</td>'
-            f'<td class="muted">{int(p[5] or 0):,}</td>'
+            f'<td class="muted" style="font-size:12px">{int(p[5] or 0):,}</td>'
+            f'<td class="muted" style="font-size:12px">{tv_str}</td>'
             f'</tr>'
         )
 
+    # チャート＋指標の配置（指標なしなら1列）
+    if metrics_panel:
+        chart_section = f"""<div class="chart-metrics-row">
+  <div class="chart-box">{chart_div}</div>
+  {metrics_panel}
+</div>"""
+    else:
+        chart_section = f'<div class="chart-box" style="margin-bottom:20px">{chart_div}</div>'
+
     body = f"""\
-<style>
-.sect-h2 {{
-  font-size:14px;font-weight:600;color:#e6edf3;
-  border-bottom:1px solid #30363d;padding-bottom:8px;margin:20px 0 12px;
-}}
-@media(max-width:768px){{
-  .metrics-grid {{ grid-template-columns: repeat(2,1fr) !important; }}
-}}
-</style>
+<style>{_STOCK_CSS}</style>
 
-<h1 style="font-size:22px;font-weight:700;color:#e6edf3;margin-bottom:4px">{s_name}</h1>
-<p class="muted" style="font-size:13px;margin-bottom:16px">
-  {s_code} &nbsp;|&nbsp; {market or "—"} &nbsp;|&nbsp; {sector or "—"}
-</p>
-
-<div style="display:flex;align-items:center;gap:14px;margin-bottom:24px;flex-wrap:wrap">
-  <div>
-    <span style="font-size:36px;font-weight:700;color:#e6edf3">{price_str}</span>
-    <span class="{chg_cls}" style="font-size:20px;font-weight:600;margin-left:8px">{chg:+.1f}%</span>
-    <span class="muted" style="font-size:12px;margin-left:6px">前日比</span>
+<div class="s-header">
+  <div class="s-name">{s_name}</div>
+  <div class="s-meta">
+    {s_code}
+    {f"&nbsp;｜&nbsp;{market}" if market else ""}
+    {f"&nbsp;｜&nbsp;{sector}" if sector else ""}
   </div>
-  <div class="muted" style="font-size:13px">
-    出来高 {vol:,}株
-  </div>
-  <form method="POST" action="/watchlist/add" style="margin-left:auto">
-    <input type="hidden" name="code" value="{s_code}">
-    <input type="hidden" name="next" value="/stock/{s_code}">
-    <button type="submit" class="btn-sm">⭐ ウォッチリストへ</button>
-  </form>
 </div>
 
-{metrics_html}
+<div class="s-price-row">
+  <div>
+    <span class="s-price">¥{price_str}</span>
+    <span class="s-chg {chg_cls}" style="margin-left:10px">
+      {chg_arrow} {abs(chg):.2f}%
+    </span>
+    <span class="s-sub" style="margin-left:8px">前日比</span>
+  </div>
+  <div class="s-sub">
+    出来高 &nbsp;<strong style="color:#c9d1d9">{vol:,}</strong> 株
+    &nbsp;｜&nbsp; {price_date}
+  </div>
+  <div class="s-wl-btn">
+    <form method="POST" action="/watchlist/add">
+      <input type="hidden" name="code" value="{s_code}">
+      <input type="hidden" name="next" value="/stock/{s_code}">
+      <button type="submit" class="btn-sm">⭐ ウォッチリスト</button>
+    </form>
+  </div>
+</div>
 
-<h2 class="sect-h2">所属テーマ</h2>
-<div style="margin-bottom:20px">{theme_html}</div>
+{key_metrics_html}
 
-<h2 class="sect-h2">株価チャート（直近3ヶ月）</h2>
-{chart_html}
+{chart_section}
 
-<h2 class="sect-h2">直近20営業日</h2>
+<p class="price-section-header">所属テーマ</p>
+{theme_html}
+
+<p class="price-section-header">直近20営業日</p>
 <div class="table-wrap">
   <div class="card">
     <table>
       <thead><tr>
-        <th class="left">日付</th><th>終値</th><th>前日比</th><th>出来高</th>
+        <th class="left">日付</th><th>終値</th><th>前日比</th>
+        <th>出来高</th><th>売買代金</th>
       </tr></thead>
       <tbody>{trows}</tbody>
     </table>
