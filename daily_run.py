@@ -19,6 +19,7 @@ from rankings import compute_daily_rankings, compute_weekly_rankings, print_rank
 from theme_score import compute_day as compute_theme_day
 from fundamentals import fetch_all_known as update_fundamentals, recompute_price_metrics
 from event_researcher import research_top_movers
+from market_indices import fetch_and_store as update_market_indices, ensure_table as ensure_indices_table
 
 
 def _log(fetch_type: str, status: str, rows: int = 0, error: str = None):
@@ -42,6 +43,18 @@ def run(init: bool = False, rankings_only: bool = False):
     print(f"\n{'='*50}")
     print(f"日次更新開始: {start.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*50}")
+
+    # 0. 主要指数データ更新（毎日・差分）
+    if not rankings_only:
+        print("\n[0/4] 主要指数データ更新...")
+        try:
+            ensure_indices_table()
+            n = update_market_indices(init=False)
+            print(f"  完了: {n} 件")
+            _log("market_indices", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("market_indices", "failed", error=str(e))
 
     if not rankings_only:
         # 1. 銘柄マスタ更新

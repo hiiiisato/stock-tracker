@@ -239,6 +239,48 @@ tr:hover { background: #1c2128; }
   margin-bottom: 16px;
 }
 
+/* ─ 主要指数カード ─ */
+.idx-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.idx-card {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 12px 14px; position: relative; overflow: hidden;
+}
+.idx-card-label { font-size: 11px; color: #8b949e; margin-bottom: 4px; display: flex; gap: 5px; align-items: center; }
+.idx-note { font-size: 9px; background: #21262d; color: #484f58; border-radius: 3px; padding: 1px 4px; }
+.idx-value { font-size: 20px; font-weight: 700; color: #e6edf3; letter-spacing: -0.5px; line-height: 1.1; margin-bottom: 3px; }
+.idx-chg { font-size: 12px; font-weight: 600; }
+.idx-date { font-size: 10px; color: #484f58; margin-top: 3px; }
+.idx-accent {
+  position: absolute; top: 0; left: 0; width: 3px; height: 100%; border-radius: 8px 0 0 8px;
+}
+.idx-accent.up   { background: #E84040; }
+.idx-accent.down { background: #3A9FE0; }
+.idx-accent.flat { background: #484f58; }
+
+/* ─ 指数チャート ─ */
+.idx-chart-wrap {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  overflow: hidden; margin-bottom: 20px;
+}
+.idx-chart-tabs {
+  display: flex; gap: 0; border-bottom: 1px solid #30363d; padding: 0 10px;
+  overflow-x: auto; scrollbar-width: none;
+}
+.idx-chart-tabs::-webkit-scrollbar { display: none; }
+.idx-tab {
+  padding: 8px 14px; font-size: 12px; font-weight: 600; color: #8b949e;
+  border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent;
+  white-space: nowrap; transition: color .15s;
+}
+.idx-tab:hover { color: #c9d1d9; }
+.idx-tab.active { color: #58a6ff; border-bottom-color: #388bfd; }
+.idx-chart-body { padding: 4px; }
+
 /* ─ Responsive ─ */
 @media (max-width: 768px) {
   .page { padding: 12px 10px; }
@@ -248,6 +290,8 @@ tr:hover { background: #1c2128; }
   .page-title { font-size: 17px; }
   th, td { padding: 6px 8px; font-size: 12px; }
   .nav-logo { font-size: 13px; margin-right: 12px; }
+  .idx-grid { grid-template-columns: repeat(2, 1fr); }
+  .idx-value { font-size: 16px; }
 }
 """
 
@@ -328,6 +372,124 @@ def _fmt_chg(v) -> str:
         return "-"
     f = float(v)
     return f'<span class="{"up" if f > 0 else "dn" if f < 0 else "muted"}">{f:+.2f}%</span>'
+
+
+def _build_index_section() -> str:
+    """主要指数カードとチャートのHTMLを生成する。"""
+    try:
+        from market_indices import get_latest_values, get_history_for_chart
+    except Exception:
+        return ""
+
+    values  = get_latest_values()
+    history = get_history_for_chart(days=90)
+
+    if not values:
+        return ""
+
+    # ─ 指数カード ─
+    def _card(v: dict) -> str:
+        pct  = v["change_pct"]
+        cls  = "up" if pct and pct > 0 else ("down" if pct and pct < 0 else "flat")
+        arrow = "▲" if cls == "up" else ("▼" if cls == "down" else "")
+        pct_str = f"{arrow}{abs(pct):.2f}%" if pct is not None else "—"
+        pct_color = "#E84040" if cls == "up" else ("#3A9FE0" if cls == "down" else "#484f58")
+
+        val = v["close"]
+        if val >= 10000:
+            val_str = f"{val:,.0f}"
+        elif val >= 100:
+            val_str = f"{val:,.2f}"
+        else:
+            val_str = f"{val:.3f}"
+
+        note_html = f'<span class="idx-note">{v["note"]}</span>' if v["note"] else ""
+        return f"""<div class="idx-card">
+  <div class="idx-accent {cls}"></div>
+  <div class="idx-card-label">{v['name']} {note_html}</div>
+  <div class="idx-value">{val_str}</div>
+  <div class="idx-chg" style="color:{pct_color}">{pct_str}</div>
+  <div class="idx-date">{v['date']}</div>
+</div>"""
+
+    cards_html = "".join(_card(v) for v in values)
+    idx_grid = f'<div class="idx-grid">{cards_html}</div>'
+
+    # ─ 切り替えチャート ─
+    if not history:
+        return idx_grid
+
+    syms = list(history.keys())
+    # タブボタン
+    tabs_html = "".join(
+        f'<button class="idx-tab{" active" if i == 0 else ""}" '
+        f'onclick="switchIdx({i})" id="tab-{i}">'
+        f'{history[s]["name"]}</button>'
+        for i, s in enumerate(syms)
+    )
+
+    # Plotly trace ごとの JS データ
+    traces_js = []
+    for i, s in enumerate(syms):
+        h = history[s]
+        dates_js  = str([str(d) for d in h["dates"]])
+        closes_js = str(h["closes"])
+        name_js   = h["name"]
+        traces_js.append(
+            f'{{sym:"{s}",name:"{name_js}",dates:{dates_js},closes:{closes_js}}}'
+        )
+    traces_data = "[" + ",".join(traces_js) + "]"
+
+    chart_html = f"""<div class="idx-chart-wrap">
+  <div class="idx-chart-tabs">{tabs_html}</div>
+  <div class="idx-chart-body" id="idx-chart-div" style="height:260px"></div>
+</div>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+<script>
+(function() {{
+  var TRACES = {traces_data};
+  var currentIdx = 0;
+  var layout = {{
+    template: "plotly_dark",
+    paper_bgcolor: "#161b22",
+    plot_bgcolor: "#161b22",
+    margin: {{l:50,r:10,t:10,b:30}},
+    xaxis: {{showgrid:false, tickfont:{{size:10}}}},
+    yaxis: {{showgrid:true, gridcolor:"#21262d", tickfont:{{size:10}}}},
+    showlegend: false,
+    height: 260,
+  }};
+  var config = {{responsive:true, displayModeBar:false}};
+
+  function draw(idx) {{
+    var t = TRACES[idx];
+    var color = "#58a6ff";
+    var data = [{{
+      type: "scatter", mode: "lines",
+      x: t.dates, y: t.closes,
+      line: {{color: color, width: 2}},
+      fill: "tozeroy",
+      fillcolor: "rgba(88,166,255,0.06)",
+    }}];
+    Plotly.newPlot("idx-chart-div", data, layout, config);
+    document.querySelectorAll(".idx-tab").forEach(function(b,i) {{
+      b.classList.toggle("active", i === idx);
+    }});
+    currentIdx = idx;
+  }}
+
+  window.switchIdx = function(idx) {{ draw(idx); }};
+  draw(0);
+}})();
+</script>"""
+
+    return f"""<div style="margin-bottom:20px">
+  <div class="page-section-header" style="font-size:13px;font-weight:600;color:#8b949e;margin-bottom:10px;letter-spacing:0.5px;text-transform:uppercase">
+    主要指数
+  </div>
+  {idx_grid}
+  {chart_html}
+</div>"""
 
 
 def _build_home() -> str:
@@ -560,11 +722,16 @@ def _build_home() -> str:
   </a>
 </div>"""
 
+    # 主要指数セクション（DBから取得、失敗時は非表示）
+    index_section = _build_index_section()
+
     body = f"""\
 <div class="page-header">
   <div class="page-title">マーケット ダッシュボード</div>
   <div class="page-subtitle">最終更新: {latest_date}</div>
 </div>
+
+{index_section}
 
 {nav_cards}
 
