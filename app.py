@@ -1371,17 +1371,17 @@ def _chart_grid_toolbar(codes_js: str, show_added_sort: bool = False) -> str:
     added_opt = '<option value="added">登録順</option>' if show_added_sort else ""
     return f"""<div class="cg-toolbar">
   <div style="display:flex;gap:4px">
-    <button class="cg-view-btn active" id="btn-list" onclick="cgSetView('list')">☰ リスト</button>
-    <button class="cg-view-btn" id="btn-chart" onclick="cgSetView('chart')">⊞ チャート</button>
+    <button class="cg-view-btn active" id="btn-list">☰ リスト</button>
+    <button class="cg-view-btn" id="btn-chart">⊞ チャート</button>
   </div>
-  <div id="cg-chart-opts" style="display:none;gap:6px;align-items:center;flex-wrap:wrap">
+  <div id="cg-chart-opts" style="display:none;flex-wrap:wrap;gap:6px;align-items:center">
     <div style="display:flex;gap:3px">
       <button class="cg-period-btn active" data-period="1M">1M</button>
       <button class="cg-period-btn" data-period="3M">3M</button>
       <button class="cg-period-btn" data-period="6M">6M</button>
       <button class="cg-period-btn" data-period="1Y">1Y</button>
     </div>
-    <select class="cg-sort-select" id="cg-sort" onchange="cgSort()">
+    <select class="cg-sort-select" id="cg-sort">
       {added_opt}
       <option value="chg_desc">前日比 ↓</option>
       <option value="chg_asc">前日比 ↑</option>
@@ -1397,117 +1397,132 @@ def _chart_grid_script() -> str:
     return """<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <script>
 (function(){
-  var PERIOD='1M';
-  var allData=null;
-  var loaded=false;
+  var PERIOD = '1M';
+  var allData = null;
+  var loaded  = false;
 
-  function cgSetView(v){
-    var isList=(v==='list');
-    document.getElementById('view-list').style.display=isList?'':'none';
-    document.getElementById('view-chart').style.display=isList?'none':'';
-    document.getElementById('btn-list').classList.toggle('active',isList);
-    document.getElementById('btn-chart').classList.toggle('active',!isList);
-    var opts=document.getElementById('cg-chart-opts');
-    if(opts) opts.style.display=isList?'none':'flex';
-    localStorage.setItem('cgView',v);
-    if(!isList && !loaded){ loadData(); }
+  function show(id, vis) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = vis;
   }
-  window.cgSetView=cgSetView;
 
-  function loadData(){
-    if(!CG_CODES||!CG_CODES.length){
-      document.getElementById('cg-grid').innerHTML='<div class="cg-loading">銘柄が登録されていません</div>';
+  function setView(v) {
+    var isChart = (v === 'chart');
+    show('view-list',  isChart ? 'none' : '');
+    show('view-chart', isChart ? ''     : 'none');
+    var btnList  = document.getElementById('btn-list');
+    var btnChart = document.getElementById('btn-chart');
+    if (btnList)  btnList.classList.toggle('active',  !isChart);
+    if (btnChart) btnChart.classList.toggle('active', isChart);
+    var opts = document.getElementById('cg-chart-opts');
+    if (opts) opts.style.display = isChart ? 'flex' : 'none';
+    if (isChart && !loaded) loadData();
+  }
+
+  function loadData() {
+    if (!CG_CODES || !CG_CODES.length) {
+      var g = document.getElementById('cg-grid');
+      if (g) g.innerHTML = '<div class="cg-loading">銘柄が登録されていません</div>';
       return;
     }
-    fetch('/api/chart_grid?codes='+CG_CODES.join(','))
-      .then(function(r){return r.json();})
-      .then(function(data){
-        allData=data;
-        loaded=true;
+    fetch('/api/chart_grid?codes=' + CG_CODES.join(','))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        allData = data;
+        loaded  = true;
         buildGrid();
       })
-      .catch(function(){ document.getElementById('cg-grid').innerHTML='<div class="cg-loading">読み込み失敗</div>'; });
+      .catch(function() {
+        var g = document.getElementById('cg-grid');
+        if (g) g.innerHTML = '<div class="cg-loading">読み込み失敗</div>';
+      });
   }
 
-  function filterPrices(prices){
-    var days={'1M':31,'3M':92,'6M':183,'1Y':366};
-    var n=days[PERIOD]||31;
-    var from=new Date(Date.now()-n*864e5).toISOString().slice(0,10);
-    return prices.filter(function(p){return p.date>=from;});
+  function filterPrices(prices) {
+    var days = {'1M':31,'3M':92,'6M':183,'1Y':366};
+    var n    = days[PERIOD] || 31;
+    var from = new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+    return prices.filter(function(p) { return p.date >= from; });
   }
 
-  function buildGrid(){
-    var sorted=sortData(allData.slice());
-    var grid=document.getElementById('cg-grid');
-    grid.innerHTML='';
-    sorted.forEach(function(item){
-      var card=document.createElement('div');
-      card.className='cg-card';
-      card.dataset.code=item.code;
-      card.dataset.chg=item.change_pct!=null?item.change_pct:'-9999';
-      card.dataset.cap=item.market_cap||0;
-      var chg=item.change_pct;
-      var chgStr=chg!=null?(chg>0?'+':'')+chg.toFixed(2)+'%':'—';
-      var chgCol=chg>0?'#E84040':chg<0?'#3A9FE0':'#8b949e';
-      var chartId='cgc-'+item.code;
-      card.innerHTML=
-        '<div class="cg-card-hd" onclick="location.href=\'/stock/'+item.code+'\'">'+
-          '<div><div class="cg-name">'+item.name+'</div>'+
-          '<div class="cg-code-label">'+item.code+'</div></div>'+
-          '<div><div class="cg-price">'+(item.close?item.close.toLocaleString():'-')+'</div>'+
-          '<div class="cg-chg" style="color:'+chgCol+'">'+chgStr+'</div></div>'+
-        '</div>'+
-        '<div id="'+chartId+'" class="cg-plot"></div>';
+  function getSortKey() {
+    var sel = document.getElementById('cg-sort');
+    return sel ? sel.value : 'added';
+  }
+
+  function buildGrid() {
+    var v      = getSortKey();
+    var sorted = allData.slice().sort(function(a, b) {
+      if (v === 'chg_desc') return (b.change_pct || 0) - (a.change_pct || 0);
+      if (v === 'chg_asc')  return (a.change_pct || 0) - (b.change_pct || 0);
+      if (v === 'cap_desc') return (b.market_cap  || 0) - (a.market_cap || 0);
+      if (v === 'cap_asc')  return (a.market_cap  || 0) - (b.market_cap || 0);
+      return 0;
+    });
+    var grid = document.getElementById('cg-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    sorted.forEach(function(item) {
+      var chg     = item.change_pct;
+      var chgStr  = chg != null ? (chg > 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
+      var chgCol  = chg > 0 ? '#E84040' : chg < 0 ? '#3A9FE0' : '#8b949e';
+      var chartId = 'cgc-' + item.code;
+      var card    = document.createElement('div');
+      card.className = 'cg-card';
+      card.innerHTML =
+        '<div class="cg-card-hd">' +
+          '<div><div class="cg-name">' + item.name + '</div>' +
+          '<div class="cg-code-label">' + item.code + '</div></div>' +
+          '<div><div class="cg-price">' + (item.close ? item.close.toLocaleString() : '-') + '</div>' +
+          '<div class="cg-chg" style="color:' + chgCol + '">' + chgStr + '</div></div>' +
+        '</div>' +
+        '<div id="' + chartId + '" class="cg-plot"></div>';
+      card.querySelector('.cg-card-hd').addEventListener('click', function() {
+        window.location.href = '/stock/' + item.code;
+      });
       grid.appendChild(card);
-      drawChart(chartId,filterPrices(item.prices));
+      drawChart(chartId, filterPrices(item.prices));
     });
   }
 
-  function drawChart(id,prices){
-    if(!prices.length){return;}
-    var layout={
-      paper_bgcolor:'#161b22',plot_bgcolor:'#161b22',
-      height:150,margin:{l:42,r:4,t:4,b:20},
+  function drawChart(id, prices) {
+    if (!prices.length || typeof Plotly === 'undefined') return;
+    Plotly.react(id, [{
+      type: 'candlestick',
+      x:     prices.map(function(p) { return p.date;  }),
+      open:  prices.map(function(p) { return p.open;  }),
+      high:  prices.map(function(p) { return p.high;  }),
+      low:   prices.map(function(p) { return p.low;   }),
+      close: prices.map(function(p) { return p.close; }),
+      increasing: {line:{color:'#E84040'}, fillcolor:'rgba(232,64,64,0.5)'},
+      decreasing: {line:{color:'#3A9FE0'}, fillcolor:'rgba(58,159,224,0.5)'},
+    }], {
+      paper_bgcolor:'#161b22', plot_bgcolor:'#161b22',
+      height:150, margin:{l:42,r:4,t:4,b:20},
       xaxis:{type:'category',nticks:4,tickfont:{size:9},color:'#6e7681',showgrid:false},
       yaxis:{tickfont:{size:9},color:'#6e7681',gridcolor:'#21262d',side:'right'},
       showlegend:false,
-    };
-    Plotly.react(id,[{
-      type:'candlestick',
-      x:prices.map(function(p){return p.date;}),
-      open:prices.map(function(p){return p.open;}),
-      high:prices.map(function(p){return p.high;}),
-      low:prices.map(function(p){return p.low;}),
-      close:prices.map(function(p){return p.close;}),
-      increasing:{line:{color:'#E84040'},fillcolor:'rgba(232,64,64,0.5)'},
-      decreasing:{line:{color:'#3A9FE0'},fillcolor:'rgba(58,159,224,0.5)'},
-    }],layout,{responsive:true,displayModeBar:false});
+    }, {responsive:true, displayModeBar:false});
   }
 
-  function sortData(data){
-    var v=document.getElementById('cg-sort').value;
-    data.sort(function(a,b){
-      if(v==='chg_desc') return (b.change_pct||0)-(a.change_pct||0);
-      if(v==='chg_asc')  return (a.change_pct||0)-(b.change_pct||0);
-      if(v==='cap_desc') return (b.market_cap||0)-(a.market_cap||0);
-      if(v==='cap_asc')  return (a.market_cap||0)-(b.market_cap||0);
-      return 0; // added: preserve original order
-    });
-    return data;
-  }
-  window.cgSort=function(){ if(allData) buildGrid(); };
+  // ── イベントリスナー ──
+  var btnList  = document.getElementById('btn-list');
+  var btnChart = document.getElementById('btn-chart');
+  if (btnList)  btnList.addEventListener('click',  function() { setView('list');  });
+  if (btnChart) btnChart.addEventListener('click', function() { setView('chart'); });
 
-  document.querySelectorAll('.cg-period-btn').forEach(function(btn){
-    btn.addEventListener('click',function(){
-      document.querySelectorAll('.cg-period-btn').forEach(function(b){b.classList.remove('active');});
+  document.querySelectorAll('.cg-period-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.cg-period-btn').forEach(function(b) { b.classList.remove('active'); });
       btn.classList.add('active');
-      PERIOD=btn.dataset.period;
-      if(allData) buildGrid();
+      PERIOD = btn.dataset.period;
+      if (allData) buildGrid();
     });
   });
 
-  var saved=localStorage.getItem('cgView');
-  if(saved==='chart'){ cgSetView('chart'); }
+  var sortSel = document.getElementById('cg-sort');
+  if (sortSel) sortSel.addEventListener('change', function() { if (allData) buildGrid(); });
+
 })();
 </script>"""
 
