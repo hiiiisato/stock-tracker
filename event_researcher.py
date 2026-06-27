@@ -11,6 +11,7 @@ from datetime import date, timedelta
 from config import get_conn
 from research_strategy import (
     fetch_news,
+    summarize_news,
     get_strategy_description,
     RESEARCH_THRESHOLD_PCT,
     RESEARCH_MAX_PER_DIRECTION,
@@ -24,6 +25,23 @@ def _format_news_text(news_items: list) -> str:
         dt_str = it["dt"].strftime("%m/%d %H:%M")
         lines.append(f"[{dt_str}][{it['category']}] {it['title']}")
     return "\n".join(lines)
+
+
+def _ensure_ai_summary_column():
+    """price_events に ai_summary カラムが存在しなければ追加する。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("ALTER TABLE price_events ADD COLUMN ai_summary TEXT")
+        conn.commit()
+        print("  [migration] price_events.ai_summary カラムを追加しました")
+    except Exception:
+        pass  # 既に存在する場合は無視
+    cur.close()
+    conn.close()
+
+
+_ai_column_checked = False
 
 
 def _get_company_name(code: str) -> str:
@@ -51,24 +69,36 @@ def research_and_save(code: str, event_date: date, direction: str,
     1銘柄のニュースを収集して price_events に保存する。
     既存レコードがある場合は上書き更新。
     """
+    global _ai_column_checked
+    if not _ai_column_checked:
+        _ensure_ai_summary_column()
+        _ai_column_checked = True
+
     company_name = _get_company_name(code)
     news = fetch_news(code, target_date=event_date, company_name=company_name)
-    news_text = _format_news_text(news) if news else None
+    news_text  = _format_news_text(news) if news else None
+    ai_summary = summarize_news(news, code, company_name, event_date) if news else None
+
+    if ai_summary:
+        print(f"    [AI要約完了] {code}")
 
     try:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO price_events
-              (code, event_date, direction, change_pct, ranking, period, news_items, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+              (code, event_date, direction, change_pct, ranking, period,
+               news_items, ai_summary, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
             ON DUPLICATE KEY UPDATE
               direction  = VALUES(direction),
               change_pct = VALUES(change_pct),
               ranking    = VALUES(ranking),
               news_items = VALUES(news_items),
+              ai_summary = VALUES(ai_summary),
               created_at = NOW()
-        """, (code, event_date, direction, change_pct, ranking, period, news_text))
+        """, (code, event_date, direction, change_pct, ranking, period,
+              news_text, ai_summary))
         conn.commit()
         cur.close()
         conn.close()
@@ -265,13 +295,13 @@ def get_events_for_date(event_date: date = None, period: str = "daily") -> dict:
 
     cur.execute("""
         SELECT pe.code, s.name, pe.direction, pe.change_pct,
-               pe.ranking, pe.news_items
+               pe.ranking, pe.news_items, pe.ai_summary
         FROM price_events pe
         JOIN stocks s ON pe.code = s.code
         WHERE pe.event_date = %s AND pe.period = %s
         ORDER BY pe.direction, ABS(pe.change_pct) DESC
     """, (event_date, period))
-    cols = ["code","name","direction","change_pct","ranking","news_items"]
+    cols = ["code","name","direction","change_pct","ranking","news_items","ai_summary"]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     cur.close()
     conn.close()
@@ -303,13 +333,15 @@ def get_events_for_stock(code: str, limit: int = 20) -> list:
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT event_date, direction, change_pct, ranking, period, news_items, created_at
+        SELECT event_date, direction, change_pct, ranking, period,
+               news_items, ai_summary, created_at
         FROM price_events
         WHERE code = %s
         ORDER BY event_date DESC, period
         LIMIT %s
     """, (code, limit))
-    cols = ["event_date","direction","change_pct","ranking","period","news_items","created_at"]
+    cols = ["event_date","direction","change_pct","ranking","period",
+            "news_items","ai_summary","created_at"]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     cur.close()
     conn.close()

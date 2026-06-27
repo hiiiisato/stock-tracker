@@ -1003,6 +1003,40 @@ _EVENTS_CSS = """
 .ev-news-cat.業績,
 .ev-news-cat.決算 { background: rgba(88,166,255,0.15); color: #58a6ff; }
 .ev-news-cat.注目 { background: rgba(188,140,255,0.15); color: #bc8cff; }
+.ev-news-title { color: #8b949e; }
+
+/* AI 要約ブロック */
+.ev-ai-summary {
+  margin: 8px 0 4px; border-left: 2px solid #388bfd;
+  padding-left: 10px; display: flex; flex-direction: column; gap: 6px;
+}
+.ev-summary-section { display: flex; flex-direction: column; gap: 2px; }
+.ev-summary-section.sources { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 4px; }
+.ev-summary-label {
+  font-size: 10px; font-weight: 700; color: #388bfd; letter-spacing: 0.03em;
+}
+.ev-summary-section.sources .ev-summary-label { white-space: nowrap; }
+.ev-summary-body {
+  font-size: 12px; color: #c9d1d9; line-height: 1.7; margin: 0;
+}
+.ev-source-badge {
+  font-size: 10px; padding: 1px 6px; border-radius: 10px;
+  background: #21262d; color: #8b949e; border: 1px solid #30363d;
+}
+
+/* 元データ折りたたみ */
+.ev-raw-toggle {
+  margin-top: 6px;
+}
+.ev-raw-toggle summary {
+  font-size: 11px; color: #484f58; cursor: pointer; user-select: none;
+  list-style: none; display: flex; align-items: center; gap: 4px;
+}
+.ev-raw-toggle summary::-webkit-details-marker { display: none; }
+.ev-raw-toggle summary::before { content: "▶"; font-size: 8px; transition: transform 0.15s; }
+.ev-raw-toggle[open] summary::before { transform: rotate(90deg); }
+.ev-raw-toggle .ev-news-list { margin-top: 4px; }
+
 .ev-empty {
   background: #161b22; border: 1px solid #30363d; border-top: none;
   padding: 30px; text-align: center; color: #484f58; font-size: 13px;
@@ -1020,11 +1054,47 @@ _EVENTS_CSS = """
 """
 
 
-def _render_news_items(news_text: str) -> str:
-    """保存済みニューステキストをHTML化。最大3件表示。"""
+def _render_ai_summary(ai_text: str) -> str:
+    """AI要約テキスト（【変動理由】【背景・詳細】【参考ソース】形式）をHTMLに変換。"""
+    if not ai_text or not ai_text.strip():
+        return ""
+    import re
+    # セクションを抽出
+    sections = re.split(r'【([^】]+)】', ai_text.strip())
+    # sections[0] は空文字 or 前置き、以降は [ラベル, 内容, ラベル, 内容, ...] の繰り返し
+    parts = []
+    i = 1
+    while i < len(sections) - 1:
+        label   = sections[i].strip()
+        content = sections[i + 1].strip()
+        i += 2
+        if not content:
+            continue
+        if label == "参考ソース":
+            # 箇条書きをインラインバッジに変換
+            sources = [s.lstrip("・- ").strip() for s in content.split("\n") if s.strip()]
+            badges  = "".join(f'<span class="ev-source-badge">{s}</span>' for s in sources)
+            parts.append(
+                f'<div class="ev-summary-section sources">'
+                f'<span class="ev-summary-label">参考</span>{badges}</div>'
+            )
+        else:
+            icon = "📌" if label == "変動理由" else "📋"
+            parts.append(
+                f'<div class="ev-summary-section">'
+                f'<span class="ev-summary-label">{icon} {label}</span>'
+                f'<p class="ev-summary-body">{content}</p></div>'
+            )
+    if not parts:
+        return f'<div class="ev-summary-body">{ai_text.strip()}</div>'
+    return f'<div class="ev-ai-summary">{"".join(parts)}</div>'
+
+
+def _render_news_items(news_text: str, collapsed: bool = False) -> str:
+    """保存済みニューステキストをHTML化。collapsed=True のとき折りたたみ表示。"""
     if not news_text:
         return ""
-    lines = [l for l in news_text.strip().split("\n") if l.strip()][:3]
+    lines = [l for l in news_text.strip().split("\n") if l.strip()]
     items = []
     for line in lines:
         # "[MM/DD HH:MM][カテゴリ] タイトル" 形式
@@ -1042,9 +1112,14 @@ def _render_news_items(news_text: str) -> str:
         cat_html = f'<span class="ev-news-cat {cat_cls}">{cat}</span>' if cat else ""
         items.append(
             f'<div class="ev-news-item">{cat_html}'
-            f'<span>{title}</span></div>'
+            f'<span class="ev-news-title">{title}</span></div>'
         )
-    return f'<div class="ev-news-list">{"".join(items)}</div>'
+    list_html = f'<div class="ev-news-list">{"".join(items)}</div>'
+    if collapsed and items:
+        return (f'<details class="ev-raw-toggle">'
+                f'<summary>元データ（{len(items)}件）</summary>'
+                f'{list_html}</details>')
+    return list_html
 
 
 def _build_events_page(event_date_str: str = None, period: str = "daily") -> str:
@@ -1127,7 +1202,9 @@ def _build_events_page(event_date_str: str = None, period: str = "daily") -> str
             pct  = float(s["change_pct"] or 0)
             rk   = s["ranking"]
             rk_str = f"第{rk}位" if rk else ""
-            news_html = _render_news_items(s["news_items"] or "")
+            ai_html   = _render_ai_summary(s.get("ai_summary") or "")
+            news_html  = _render_news_items(s["news_items"] or "",
+                                            collapsed=bool(ai_html))
             sign = "+" if pct > 0 else ""
             cards.append(f"""<div class="ev-card">
   <div class="ev-card-top">
@@ -1135,6 +1212,7 @@ def _build_events_page(event_date_str: str = None, period: str = "daily") -> str
     <a class="ev-stock-link" href="/stock/{code}">{name}（{code}）</a>
     <span class="ev-rank">{rk_str}</span>
   </div>
+  {ai_html}
   {news_html}
 </div>""")
         return header + f'<div class="ev-card-list">{"".join(cards)}</div>'
@@ -1343,6 +1421,13 @@ _STOCK_CSS = """
 .event-period { font-size: 11px; color: #484f58; }
 .event-news { font-size: 12px; color: #8b949e; line-height: 1.7; white-space: pre-wrap; }
 
+/* 株詳細: AI 要約（イベントページと共通クラスを再利用） */
+.event-card .ev-ai-summary { margin: 6px 0 4px; }
+.event-card .ev-raw-toggle summary { color: #484f58; }
+.event-card .ev-news-list { font-size: 12px; color: #8b949e; line-height: 1.65; }
+.event-card .ev-news-item { display: flex; gap: 6px; }
+.event-card .ev-news-title { color: #8b949e; }
+
 /* メモ */
 .memo-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
 .memo-card {
@@ -1435,13 +1520,15 @@ def _build_stock_page(code: str) -> str:
 
     # イベント履歴（price_events）
     cur.execute("""
-        SELECT event_date, direction, change_pct, ranking, period, news_items
+        SELECT event_date, direction, change_pct, ranking, period,
+               news_items, ai_summary
         FROM price_events
         WHERE code = %s
         ORDER BY event_date DESC, period
         LIMIT 15
     """, (code,))
-    ev_cols = ["event_date","direction","change_pct","ranking","period","news_items"]
+    ev_cols = ["event_date","direction","change_pct","ranking","period",
+               "news_items","ai_summary"]
     events = [dict(zip(ev_cols, r)) for r in cur.fetchall()]
 
     # メモ（stock_memos）
@@ -1676,16 +1763,19 @@ def _build_stock_page(code: str) -> str:
             pct    = float(ev["change_pct"] or 0)
             rk     = ev["ranking"]
             period = "日次" if ev["period"] == "daily" else "週次"
-            news   = ev["news_items"] or ""
             arrow  = "▲" if direc == "up" else "▼"
             rk_str = f"（{period}第{rk}位）" if rk else f"（{period}）"
+            ai_html   = _render_ai_summary(ev.get("ai_summary") or "")
+            news_html = _render_news_items(ev["news_items"] or "",
+                                           collapsed=bool(ai_html))
             ev_cards.append(f"""<div class="event-card">
   <div class="event-header">
     <span class="event-date">{d}</span>
     <span class="event-badge {direc}">{arrow}{abs(pct):.1f}%</span>
     <span class="event-period">{rk_str}</span>
   </div>
-  {f'<div class="event-news">{news}</div>' if news else ""}
+  {ai_html}
+  {news_html}
 </div>""")
         events_html = f'<p class="price-section-header">イベント履歴</p><div class="event-list">{"".join(ev_cards)}</div>'
     else:

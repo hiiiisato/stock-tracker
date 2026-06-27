@@ -10,16 +10,20 @@
 ◆ ソース設定を変えるには
   SOURCE_CONFIGS の各パラメーターを編集する。
 
+◆ AI 要約を有効にするには
+  環境変数 GEMINI_API_KEY を設定する（Google AI Studio で無料取得）。
+  AI_SUMMARY_CONFIG の enabled を True にする。
+
 現在の仕組み
 --------------
   2ソースを並行して取得し、日付フィルタ後にマージする。
 
   1. kabutan.jp  : 銘柄別ニュースページをスクレイピング（材料・開示を優先）
   2. Google News RSS : 複数媒体（日経・株探・みんかぶ・Yahoo・四季報）を横断検索
+  3. Gemini AI   : 収集した記事タイトルをもとに【変動理由】【背景】【参考ソース】に要約
 
   将来追加候補:
-  3. TDnet（東証適時開示）: 公式IR情報
-  4. Claude AI 要約        : APIキー取得後に有効化
+  4. TDnet（東証適時開示）: 公式IR情報
 """
 
 import time
@@ -41,6 +45,15 @@ RESEARCH_THRESHOLD_PCT = 10.0
 
 # 上昇・下落それぞれの最大調査件数
 RESEARCH_MAX_PER_DIRECTION = 20
+
+# ──────────────────────────────────────────────────────────────
+#  AI 要約設定（Gemini 1.5 Flash 無料枠）
+# ──────────────────────────────────────────────────────────────
+AI_SUMMARY_CONFIG = {
+    "enabled":           True,
+    "model":             "gemini-1.5-flash",
+    "rate_limit_delay":  4.1,   # 無料枠 15 RPM → 4秒以上空ける
+}
 
 # ──────────────────────────────────────────────────────────────
 #  ソース別設定
@@ -74,6 +87,7 @@ _HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Apple
 def fetch_news(code: str, target_date: date, company_name: str = "") -> list:
     """
     指定銘柄のニュースを全有効ソースから取得してマージして返す。
+    Google News の記事は対象銘柄に言及しているものだけを残す。
     戻り値: [{"dt": datetime, "date": date, "source": str, "category": str, "title": str}, ...]
     """
     all_items = []
@@ -87,10 +101,12 @@ def fetch_news(code: str, target_date: date, company_name: str = "") -> list:
     if SOURCE_CONFIGS["google_news"]["enabled"]:
         cfg = SOURCE_CONFIGS["google_news"]
         time.sleep(cfg["delay_seconds"])
-        gnews_items = _fetch_google_news(code, company_name, target_date, cfg)
+        gnews_raw = _fetch_google_news(code, company_name, target_date, cfg)
+        # 対象銘柄に言及していない集合記事などを除外
+        gnews_filtered = _filter_relevant_gnews(gnews_raw, code, company_name)
         # kabutan と重複するタイトルを除去
         existing_titles = {_normalize_title(it["title"]) for it in all_items}
-        for it in gnews_items:
+        for it in gnews_filtered:
             if _normalize_title(it["title"]) not in existing_titles:
                 all_items.append(it)
                 existing_titles.add(_normalize_title(it["title"]))
@@ -101,9 +117,64 @@ def fetch_news(code: str, target_date: date, company_name: str = "") -> list:
     return all_items
 
 
+def summarize_news(items: list, code: str, company_name: str,
+                   target_date: date):
+    """
+    Gemini API でニュース記事タイトルを構造化要約する。
+    GEMINI_API_KEY 未設定 / AI_SUMMARY_CONFIG 無効時は None を返す。
+    戻り値: "【変動理由】\n...\n【背景・詳細】\n...\n【参考ソース】\n..." | None
+    """
+    if not AI_SUMMARY_CONFIG.get("enabled") or not items:
+        return None
+
+    try:
+        import google.generativeai as genai
+        from config import GEMINI_API_KEY
+        if not GEMINI_API_KEY:
+            return None
+        genai.configure(api_key=GEMINI_API_KEY)
+    except Exception:
+        return None
+
+    name_label = company_name or code
+    articles_text = "\n".join(
+        f"- [{it['dt'].strftime('%m/%d %H:%M')}][{it['category']}] {it['title']}"
+        for it in items
+    )
+
+    prompt = f"""以下は{name_label}（証券コード: {code}）の{target_date.strftime('%Y年%m月%d日')}前後の株価変動に関するニュース記事タイトル一覧です。
+
+{articles_text}
+
+これらをもとに、{name_label}の株価変動理由をまとめてください。
+・他の銘柄に関する内容は含めないでください
+・情報が不十分な場合は「情報不足」と記載してください
+・以下のフォーマットで返答してください（フォーマット以外の余分な文章は不要）
+
+【変動理由】
+（1〜2文で変動の主な理由を簡潔に）
+
+【背景・詳細】
+（2〜3文で詳細や文脈を補足）
+
+【参考ソース】
+（使用した主な媒体名を箇条書き。同じ媒体は1回のみ）"""
+
+    try:
+        time.sleep(AI_SUMMARY_CONFIG.get("rate_limit_delay", 4.1))
+        model = genai.GenerativeModel(AI_SUMMARY_CONFIG["model"])
+        resp = model.generate_content(prompt)
+        return resp.text.strip()
+    except Exception as e:
+        print(f"    [AI要約] {code}: {e}")
+        return None
+
+
 def get_strategy_description() -> str:
     """現在の有効ソース一覧を返す（ログ表示用）。"""
     active = [cfg["description"] for cfg in SOURCE_CONFIGS.values() if cfg["enabled"]]
+    if AI_SUMMARY_CONFIG.get("enabled"):
+        active.append("Gemini AI 要約")
     return " + ".join(active)
 
 
@@ -287,3 +358,16 @@ def _normalize_title(title: str) -> str:
     # 媒体名サフィックス "- 株探" 等を除去
     t = re.sub(r"\s+-\s+\S+$", "", t)
     return t[:50]
+
+
+def _filter_relevant_gnews(items: list, code: str, company_name: str) -> list:
+    """
+    Google News 記事から対象銘柄に言及していないものを除外する。
+    証券コードか社名（先頭4文字も許容）がタイトルに含まれる記事のみ残す。
+    """
+    keywords = [code]
+    if company_name:
+        keywords.append(company_name)
+        if len(company_name) > 4:
+            keywords.append(company_name[:4])
+    return [it for it in items if any(kw in it["title"] for kw in keywords)]
