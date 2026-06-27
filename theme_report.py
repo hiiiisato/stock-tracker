@@ -464,6 +464,27 @@ h2 { color: #e6edf3; font-size: 16px; margin: 28px 0 12px;
 .pos  { color: #E84040; }
 .neg  { color: #3A9FE0; }
 
+/* ── アプリ共通ナビバー ─────────────────────────── */
+.app-nav {
+  background: #161b22; border-bottom: 1px solid #30363d;
+  padding: 0 20px; position: sticky; top: 0; z-index: 200;
+  display: flex; align-items: center; height: 48px; gap: 0;
+}
+.app-nav-logo {
+  font-weight: 700; font-size: 15px; color: #e6edf3;
+  text-decoration: none; margin-right: 20px; white-space: nowrap;
+}
+.app-nav-logo:hover { text-decoration: none; color: #e6edf3; }
+.app-nav-links { display: flex; align-items: center; gap: 4px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.app-nav-links::-webkit-scrollbar { display: none; }
+.app-nav-link {
+  color: #8b949e; font-size: 13px; text-decoration: none;
+  padding: 0 10px; height: 48px; display: flex; align-items: center;
+  border-bottom: 2px solid transparent; white-space: nowrap;
+}
+.app-nav-link:hover { color: #e6edf3; text-decoration: none; }
+.app-nav-link.active { color: #e6edf3; border-bottom-color: #1f6feb; }
+
 /* ── モバイル対応 (〜768px) ─────────────────────── */
 @media (max-width: 768px) {
   .container { padding: 12px 10px; }
@@ -528,6 +549,15 @@ def generate_report(report_date: date, out_path: str = None) -> str:
   <style>{CSS}</style>
 </head>
 <body>
+<nav class="app-nav">
+  <a class="app-nav-logo" href="/">📈 株式テーマ分析</a>
+  <div class="app-nav-links">
+    <a class="app-nav-link" href="/">ホーム</a>
+    <a class="app-nav-link active" href="#">テーマ分析</a>
+    <a class="app-nav-link" href="/rankings">ランキング</a>
+    <a class="app-nav-link" href="/watchlist">ウォッチリスト</a>
+  </div>
+</nav>
 <div class="container">
 
   <h1>テーマ別資金フローレポート</h1>
