@@ -51,7 +51,7 @@ RESEARCH_MAX_PER_DIRECTION = 20
 # ──────────────────────────────────────────────────────────────
 AI_SUMMARY_CONFIG = {
     "enabled":           True,
-    "model":             "gemini-1.5-flash",
+    "model":             "gemini-2.5-flash",
     "rate_limit_delay":  4.1,   # 無料枠 15 RPM → 4秒以上空ける
 }
 
@@ -128,11 +128,11 @@ def summarize_news(items: list, code: str, company_name: str,
         return None
 
     try:
-        import google.generativeai as genai
+        from google import genai as _genai
         from config import GEMINI_API_KEY
         if not GEMINI_API_KEY:
             return None
-        genai.configure(api_key=GEMINI_API_KEY)
+        _client = _genai.Client(api_key=GEMINI_API_KEY)
     except Exception:
         return None
 
@@ -162,8 +162,10 @@ def summarize_news(items: list, code: str, company_name: str,
 
     try:
         time.sleep(AI_SUMMARY_CONFIG.get("rate_limit_delay", 4.1))
-        model = genai.GenerativeModel(AI_SUMMARY_CONFIG["model"])
-        resp = model.generate_content(prompt)
+        resp = _client.models.generate_content(
+            model=AI_SUMMARY_CONFIG["model"],
+            contents=prompt,
+        )
         return resp.text.strip()
     except Exception as e:
         print(f"    [AI要約] {code}: {e}")
