@@ -1565,9 +1565,9 @@ def _chart_grid_script() -> str:
     });
     Plotly.react(id, traces, {
       paper_bgcolor:'#161b22', plot_bgcolor:'#161b22',
-      height:150, margin:{l:2,r:46,t:4,b:20},
+      height:150, margin:{l:2,r:65,t:4,b:20},
       xaxis:{type:'category',nticks:4,tickfont:{size:9},color:'#6e7681',showgrid:false,rangeslider:{visible:false}},
-      yaxis:{tickfont:{size:9},color:'#6e7681',gridcolor:'#21262d',side:'right'},
+      yaxis:{tickfont:{size:9},color:'#6e7681',gridcolor:'#21262d',side:'right',automargin:true},
       showlegend:false,
     }, {responsive:true, displayModeBar:false});
   }
@@ -1971,6 +1971,7 @@ def _fetch_company_info(code: str) -> dict:
 
 def _build_screen_page() -> str:
     return _page_html("スクリーニング", f"""<style>{_SCREEN_CSS}</style>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <div class="sc-wrap">
   <div class="sc-page-title">スクリーニング</div>
 
@@ -2064,6 +2065,10 @@ def _build_screen_page() -> str:
 
   <div class="sc-result-header">
     <span class="sc-count" id="sc-count">読み込み中...</span>
+    <div style="display:flex;gap:4px;margin:0 8px">
+      <button class="cg-view-btn active" id="sc-btn-list">☰ リスト</button>
+      <button class="cg-view-btn" id="sc-btn-chart">⊞ チャート</button>
+    </div>
     <select class="sc-sort" id="sc-sort">
       <option value="market_cap-desc">時価総額 大きい順</option>
       <option value="market_cap-asc">時価総額 小さい順</option>
@@ -2083,6 +2088,23 @@ def _build_screen_page() -> str:
       <option value="change_pct-desc">前日上昇率 高い順</option>
       <option value="change_pct-asc">前日下落率 高い順</option>
     </select>
+  </div>
+
+  <div id="sc-chart-wrap" style="display:none">
+    <div style="display:flex;gap:6px;padding:8px 0;flex-wrap:wrap;align-items:center">
+      <div style="display:flex;gap:3px">
+        <button class="cg-period-btn sc-period-btn active" data-period="1M">1M</button>
+        <button class="cg-period-btn sc-period-btn" data-period="3M">3M</button>
+        <button class="cg-period-btn sc-period-btn" data-period="6M">6M</button>
+        <button class="cg-period-btn sc-period-btn" data-period="1Y">1Y</button>
+      </div>
+      <div style="display:flex;gap:3px">
+        <button class="cg-ma-btn sc-ma-btn" data-ma="25">MA25</button>
+        <button class="cg-ma-btn sc-ma-btn" data-ma="75">MA75</button>
+      </div>
+      <span id="sc-chart-note" style="font-size:12px;color:#484f58"></span>
+    </div>
+    <div class="cg-grid" id="sc-cg-grid"></div>
   </div>
 
   <div class="sc-table-wrap">
@@ -2277,6 +2299,167 @@ def _build_screen_page() -> str:
     render();
   }}).catch(function(){{
     document.getElementById('sc-count').textContent='読み込み失敗';
+  }});
+
+  // ── チャートビュー ──────────────────────────────────────────────────────────
+  var scView    = 'list';
+  var SC_PERIOD = '1M';
+  var SC_MA     = [];
+
+  function scCalcMA(closes, period) {{
+    return closes.map(function(_, i) {{
+      if (i < period - 1) return null;
+      var s = 0;
+      for (var j = i - period + 1; j <= i; j++) s += closes[j];
+      return s / period;
+    }});
+  }}
+
+  function scDrawChart(id, prices, fullPrices) {{
+    if (!prices || !prices.length || typeof Plotly === 'undefined') return;
+    var minDate = prices[0].date;
+    var traces = [{{
+      type:'candlestick',
+      x:prices.map(function(p){{return p.date;}}),
+      open:prices.map(function(p){{return p.open;}}),
+      high:prices.map(function(p){{return p.high;}}),
+      low:prices.map(function(p){{return p.low;}}),
+      close:prices.map(function(p){{return p.close;}}),
+      increasing:{{line:{{color:'#E84040'}},fillcolor:'rgba(232,64,64,0.5)'}},
+      decreasing:{{line:{{color:'#3A9FE0'}},fillcolor:'rgba(58,159,224,0.5)'}},
+      showlegend:false,
+    }}];
+    var maColors = {{'25':'#f0b429','75':'#a371f7'}};
+    var src = fullPrices && fullPrices.length ? fullPrices : prices;
+    SC_MA.forEach(function(period) {{
+      var maVals = scCalcMA(src.map(function(p){{return p.close;}}), period);
+      var maDates=[], maData=[];
+      src.forEach(function(p,i){{if(p.date>=minDate){{maDates.push(p.date);maData.push(maVals[i]);}}  }});
+      traces.push({{type:'scatter',mode:'lines',x:maDates,y:maData,
+        line:{{color:maColors[String(period)]||'#fff',width:1}},showlegend:false,hoverinfo:'skip'}});
+    }});
+    Plotly.react(id, traces, {{
+      paper_bgcolor:'#161b22', plot_bgcolor:'#161b22',
+      height:150, margin:{{l:2,r:65,t:4,b:20}},
+      xaxis:{{type:'category',nticks:4,tickfont:{{size:9}},color:'#6e7681',showgrid:false,rangeslider:{{visible:false}}}},
+      yaxis:{{tickfont:{{size:9}},color:'#6e7681',gridcolor:'#21262d',side:'right',automargin:true}},
+      showlegend:false,
+    }}, {{responsive:true,displayModeBar:false}});
+  }}
+
+  function scFilterPrices(prices) {{
+    var days = {{'1M':31,'3M':92,'6M':183,'1Y':366}};
+    var n = days[SC_PERIOD] || 31;
+    var from = new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+    return prices.filter(function(p){{return p.date >= from;}});
+  }}
+
+  function scGetFilteredCodes(limit) {{
+    var f = getFilters();
+    var filtered = stocks.filter(function(s){{return passFilter(s,f);}});
+    filtered.sort(function(a,b){{
+      var av=a[sortCol],bv=b[sortCol];
+      if(av===null&&bv===null)return 0;
+      if(av===null)return 1;
+      if(bv===null)return -1;
+      return (av-bv)*sortDir;
+    }});
+    return filtered.slice(0, limit||200).map(function(s){{return s.code;}});
+  }}
+
+  function scBuildGrid(data, codeOrder) {{
+    var grid = document.getElementById('sc-cg-grid');
+    if (!data || !data.length) {{
+      grid.innerHTML='<div style="color:#8b949e;padding:20px">データなし</div>'; return;
+    }}
+    data.sort(function(a,b){{return codeOrder.indexOf(a.code)-codeOrder.indexOf(b.code);}});
+    grid.innerHTML='';
+    data.forEach(function(item) {{
+      var prices = item.prices;
+      if (!prices || !prices.length) return;
+      var shown = scFilterPrices(prices);
+      if (!shown.length) shown = prices.slice(-30);
+      var n = prices.length;
+      var chg = n>=2?(prices[n-1].close/prices[n-2].close-1)*100:null;
+      var chgStr=chg!==null?(chg>=0?'+':'')+chg.toFixed(2)+'%':'—';
+      var chgCol=chg>0?'#E84040':chg<0?'#3A9FE0':'#8b949e';
+      var cl=prices[n-1].close;
+      var fmtPer=item.per?item.per.toFixed(1)+'x':'—';
+      var fmtPbr=item.pbr?item.pbr.toFixed(2)+'x':'—';
+      var fmtYld=item.div_yield?item.div_yield.toFixed(2)+'%':'—';
+      var cid='sc-cgc-'+item.code;
+      var card=document.createElement('div');
+      card.className='cg-card';
+      card.innerHTML=
+        '<div class="cg-card-hd">'+
+          '<div><div class="cg-name">'+item.name+'</div><div class="cg-code-label">'+item.code+'</div></div>'+
+          '<div><div class="cg-price">'+(cl?cl.toLocaleString('ja-JP',{{maximumFractionDigits:0}}):'—')+'</div>'+
+          '<div class="cg-chg" style="color:'+chgCol+'">'+chgStr+'</div></div>'+
+        '</div>'+
+        '<div id="'+cid+'" class="cg-plot"><div class="cg-loading">読み込み中...</div></div>'+
+        '<div class="cg-metrics">'+
+          '<div class="cg-metric"><span class="cg-metric-lbl">PER</span><span class="cg-metric-val">'+fmtPer+'</span></div>'+
+          '<div class="cg-metric"><span class="cg-metric-lbl">PBR</span><span class="cg-metric-val">'+fmtPbr+'</span></div>'+
+          '<div class="cg-metric"><span class="cg-metric-lbl">配当</span><span class="cg-metric-val">'+fmtYld+'</span></div>'+
+        '</div>';
+      card.querySelector('.cg-card-hd').addEventListener('click',function(){{window.location.href='/stock/'+item.code;}});
+      grid.appendChild(card);
+      scDrawChart(cid, shown, prices);
+    }});
+  }}
+
+  function loadScChart() {{
+    var codes = scGetFilteredCodes(200);
+    var note = document.getElementById('sc-chart-note');
+    if (!codes.length) {{
+      document.getElementById('sc-cg-grid').innerHTML='<div style="color:#8b949e;padding:20px">条件に一致する銘柄がありません</div>';
+      if(note) note.textContent='';
+      return;
+    }}
+    if(note) note.textContent='上位'+codes.length+'件を表示';
+    document.getElementById('sc-cg-grid').innerHTML='<div style="color:#8b949e;padding:30px;text-align:center">チャートを読み込み中...</div>';
+    fetch('/api/chart_grid?codes='+codes.join(','))
+      .then(function(r){{return r.json();}})
+      .then(function(data){{scBuildGrid(data, codes);}})
+      .catch(function(){{document.getElementById('sc-cg-grid').innerHTML='<div style="color:#e84040;padding:20px">読み込み失敗</div>';}});
+  }}
+
+  function setScView(v) {{
+    scView=v;
+    var tableWrap=document.querySelector('.sc-table-wrap');
+    var chartWrap=document.getElementById('sc-chart-wrap');
+    var btnList=document.getElementById('sc-btn-list');
+    var btnChart=document.getElementById('sc-btn-chart');
+    if (v==='chart') {{
+      tableWrap.style.display='none'; chartWrap.style.display='';
+      btnList.classList.remove('active'); btnChart.classList.add('active');
+      loadScChart();
+    }} else {{
+      tableWrap.style.display=''; chartWrap.style.display='none';
+      btnList.classList.add('active'); btnChart.classList.remove('active');
+    }}
+  }}
+
+  document.getElementById('sc-btn-list').addEventListener('click',function(){{setScView('list');}});
+  document.getElementById('sc-btn-chart').addEventListener('click',function(){{setScView('chart');}});
+
+  document.querySelectorAll('.sc-period-btn').forEach(function(btn){{
+    btn.addEventListener('click',function(){{
+      document.querySelectorAll('.sc-period-btn').forEach(function(b){{b.classList.remove('active');}});
+      btn.classList.add('active');
+      SC_PERIOD=btn.dataset.period;
+      if(scView==='chart') loadScChart();
+    }});
+  }});
+
+  document.querySelectorAll('.sc-ma-btn').forEach(function(btn){{
+    btn.addEventListener('click',function(){{
+      var period=parseInt(btn.dataset.ma);
+      var idx=SC_MA.indexOf(period);
+      if(idx>=0){{SC_MA.splice(idx,1);btn.classList.remove('active');}}
+      else{{SC_MA.push(period);btn.classList.add('active');}}
+      if(scView==='chart') loadScChart();
+    }});
   }});
 }})();
 </script>
