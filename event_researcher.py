@@ -1,98 +1,23 @@
 """
 銘柄別ニュース収集・イベント記録モジュール
-kabutan.jp の銘柄ニュースページをスクレイピングして price_events に保存する。
+調査手法の詳細は research_strategy.py を参照・編集すること。
 
 使い方:
-  python event_researcher.py              # 直近の上昇/下落トップ15を調査
+  python event_researcher.py              # ±10%超えの銘柄を調査
   python event_researcher.py 7203 6857   # 指定銘柄を調査
 """
 import sys
-import time
-import requests
-from bs4 import BeautifulSoup
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from config import get_conn
-
-HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-NEWS_URL = "https://kabutan.jp/stock/news?code={code}"
-
-# 重要度の高いカテゴリ（価格変動理由として有用）
-PRIORITY_CATEGORIES = {"材料", "開示", "業績", "決算", "注目"}
-
-
-def scrape_news(code: str, target_date: date = None, max_items: int = 5) -> list:
-    """
-    kabutan.jp から銘柄のニュースを取得する。
-    target_date 指定時はその日前後のニュースを優先して返す。
-    """
-    url = NEWS_URL.format(code=code)
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        if r.status_code != 200:
-            return []
-    except Exception as e:
-        print(f"  [news] {code}: リクエストエラー {e}")
-        return []
-
-    soup = BeautifulSoup(r.text, "html.parser")
-    tbl = soup.find("table", class_="s_news_list")
-    if not tbl:
-        return []
-
-    items = []
-    for row in tbl.find_all("tr"):
-        tds = row.find_all("td")
-        if len(tds) < 3:
-            continue
-        time_el = tds[0].find("time")
-        if not time_el:
-            continue
-        dt_str = time_el.get("datetime", "")
-        # datetime="2026-06-26T12:57:00+09:00" 形式
-        try:
-            news_dt = datetime.fromisoformat(dt_str[:16])
-        except ValueError:
-            try:
-                news_dt = datetime.strptime(dt_str[:10], "%Y-%m-%d")
-            except ValueError:
-                continue
-
-        category = tds[1].text.strip()
-        link = tds[2].find("a")
-        title = link.text.strip() if link else tds[2].text.strip()
-        href = link.get("href", "") if link else ""
-
-        items.append({
-            "dt": news_dt,
-            "date": news_dt.date(),
-            "category": category,
-            "title": title,
-            "href": href,
-        })
-
-    if not items:
-        return []
-
-    if target_date:
-        # target_date ±1日のニュースを優先、次に直近を追加
-        priority = [it for it in items
-                    if abs((it["date"] - target_date).days) <= 1
-                    and it["category"] in PRIORITY_CATEGORIES]
-        nearby   = [it for it in items
-                    if abs((it["date"] - target_date).days) <= 1
-                    and it not in priority]
-        rest     = [it for it in items if it not in priority and it not in nearby]
-        ordered  = priority + nearby + rest
-    else:
-        # 優先カテゴリを前に
-        priority = [it for it in items if it["category"] in PRIORITY_CATEGORIES]
-        rest     = [it for it in items if it not in priority]
-        ordered  = priority + rest
-
-    return ordered[:max_items]
+from research_strategy import (
+    fetch_news,
+    get_strategy_description,
+    RESEARCH_THRESHOLD_PCT,
+    RESEARCH_MAX_PER_DIRECTION,
+)
 
 
-def format_news_text(news_items: list) -> str:
+def _format_news_text(news_items: list) -> str:
     """ニュースリストを保存用テキストに変換。"""
     lines = []
     for it in news_items:
@@ -108,8 +33,8 @@ def research_and_save(code: str, event_date: date, direction: str,
     1銘柄のニュースを収集して price_events に保存する。
     既存レコードがある場合は上書き更新。
     """
-    news = scrape_news(code, target_date=event_date, max_items=8)
-    news_text = format_news_text(news) if news else None
+    news = fetch_news(code, target_date=event_date)
+    news_text = _format_news_text(news) if news else None
 
     try:
         conn = get_conn()
@@ -134,108 +59,172 @@ def research_and_save(code: str, event_date: date, direction: str,
         return False
 
 
-def research_top_movers(target_date: date = None, top_n: int = 15,
-                        period: str = "daily") -> int:
-    """
-    ランキングテーブルから上昇/下落 TOP-N を取得してニュース収集・保存。
-    period: 'daily' | 'weekly'
-    """
-    if target_date is None:
-        target_date = date.today()
-
+def _get_daily_movers(ranking_date: date, threshold: float, max_n: int) -> tuple:
+    """日次の上昇/下落銘柄を取得。threshold% 超えのみ対象。"""
     conn = get_conn()
     cur = conn.cursor()
 
-    # 最新ランキング日付を取得
+    # 上昇: threshold% 超え
     cur.execute("""
-        SELECT MAX(period_end) FROM rankings
-        WHERE period_type = %s AND rank_type = 'change_pct'
-    """, (period,))
-    row = cur.fetchone()
-    ranking_date = row[0] if row and row[0] else target_date
+        SELECT dp.code,
+               ROW_NUMBER() OVER (ORDER BY dp.change_pct DESC) AS rk,
+               dp.change_pct
+        FROM daily_prices dp
+        JOIN stocks s ON dp.code = s.code
+        LEFT JOIN markets m ON s.market_id = m.id
+        WHERE dp.date = %s
+          AND dp.change_pct >= %s
+          AND s.is_active = TRUE
+          AND (s.market_id IS NULL OR m.code IN ('0111','0112','0113'))
+        ORDER BY dp.change_pct DESC
+        LIMIT %s
+    """, (ranking_date, threshold, max_n))
+    gainers = [(r[0], r[1], float(r[2])) for r in cur.fetchall()]
 
-    if period == "daily":
-        # 日次: 上昇は rankings テーブルから、下落は daily_prices から直接取得
-        cur.execute("""
-            SELECT code, `rank`, value
-            FROM rankings
-            WHERE period_type = 'daily' AND period_end = %s AND rank_type = 'change_pct'
-            ORDER BY value DESC
-            LIMIT %s
-        """, (ranking_date, top_n))
-        gainers = [(r[0], r[1], float(r[2])) for r in cur.fetchall()]
+    # 下落: -threshold% 以下
+    cur.execute("""
+        SELECT dp.code,
+               ROW_NUMBER() OVER (ORDER BY dp.change_pct ASC) AS rk,
+               dp.change_pct
+        FROM daily_prices dp
+        JOIN stocks s ON dp.code = s.code
+        LEFT JOIN markets m ON s.market_id = m.id
+        WHERE dp.date = %s
+          AND dp.change_pct <= %s
+          AND s.is_active = TRUE
+          AND (s.market_id IS NULL OR m.code IN ('0111','0112','0113'))
+        ORDER BY dp.change_pct ASC
+        LIMIT %s
+    """, (ranking_date, -threshold, max_n))
+    losers = [(r[0], r[1], float(r[2])) for r in cur.fetchall()]
 
-        cur.execute("""
-            SELECT dp.code, ROW_NUMBER() OVER (ORDER BY dp.change_pct ASC) AS rk, dp.change_pct
-            FROM daily_prices dp
-            JOIN stocks s ON dp.code = s.code
-            LEFT JOIN markets m ON s.market_id = m.id
-            WHERE dp.date = %s
-              AND dp.change_pct IS NOT NULL AND dp.change_pct < 0
-              AND s.is_active = TRUE
-              AND (s.market_id IS NULL OR m.code IN ('0111','0112','0113'))
-            ORDER BY dp.change_pct ASC
-            LIMIT %s
-        """, (ranking_date, top_n))
-        losers = [(r[0], r[1], float(r[2])) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return gainers, losers
 
-    else:
-        # 週次: rankings テーブルに上昇のみ → 下落は別途計算
-        cur.execute("""
-            SELECT code, `rank`, value
-            FROM rankings
-            WHERE period_type = 'weekly' AND period_end = %s AND rank_type = 'change_pct'
-            ORDER BY value DESC
-            LIMIT %s
-        """, (ranking_date, top_n))
-        gainers = [(r[0], r[1], float(r[2])) for r in cur.fetchall()]
 
-        week_start = ranking_date - timedelta(days=6)
-        cur.execute("""
-            WITH week_prices AS (
-                SELECT code,
-                    FIRST_VALUE(close) OVER (PARTITION BY code ORDER BY date) AS first_close,
-                    LAST_VALUE(close)  OVER (
-                        PARTITION BY code ORDER BY date
-                        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-                    ) AS last_close
-                FROM daily_prices
-                WHERE date BETWEEN %s AND %s
-            ),
-            weekly AS (
-                SELECT code,
-                    MAX(first_close) AS first_close,
-                    MAX(last_close)  AS last_close
-                FROM week_prices GROUP BY code
-                HAVING MAX(first_close) > 0
-            )
+def _get_weekly_movers(ranking_date: date, threshold: float, max_n: int) -> tuple:
+    """週次の上昇/下落銘柄を取得。threshold% 超えのみ対象。"""
+    week_start = ranking_date - timedelta(days=6)
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        WITH week_prices AS (
+            SELECT code,
+                FIRST_VALUE(close) OVER (PARTITION BY code ORDER BY date) AS first_close,
+                LAST_VALUE(close)  OVER (
+                    PARTITION BY code ORDER BY date
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                ) AS last_close
+            FROM daily_prices
+            WHERE date BETWEEN %s AND %s AND close > 0
+        ),
+        weekly AS (
+            SELECT code,
+                MAX(first_close) AS first_close,
+                MAX(last_close)  AS last_close
+            FROM week_prices GROUP BY code
+            HAVING MAX(first_close) > 0
+        ),
+        ranked AS (
             SELECT w.code,
-                ROW_NUMBER() OVER (ORDER BY (w.last_close - w.first_close)/w.first_close ASC) AS rk,
                 ROUND((w.last_close - w.first_close) / w.first_close * 100, 4) AS chg
             FROM weekly w
             JOIN stocks s ON w.code = s.code
             LEFT JOIN markets m ON s.market_id = m.id
             WHERE s.is_active = TRUE
               AND (s.market_id IS NULL OR m.code IN ('0111','0112','0113'))
-              AND (w.last_close - w.first_close) / w.first_close < 0
-            ORDER BY chg ASC
-            LIMIT %s
-        """, (week_start, ranking_date, top_n))
-        losers = [(r[0], r[1], float(r[2])) for r in cur.fetchall()]
+        )
+        SELECT code, ROW_NUMBER() OVER (ORDER BY chg DESC) AS rk, chg
+        FROM ranked WHERE chg >= %s ORDER BY chg DESC LIMIT %s
+    """, (week_start, ranking_date, threshold, max_n))
+    gainers = [(r[0], r[1], float(r[2])) for r in cur.fetchall()]
+
+    cur.execute("""
+        WITH week_prices AS (
+            SELECT code,
+                FIRST_VALUE(close) OVER (PARTITION BY code ORDER BY date) AS first_close,
+                LAST_VALUE(close)  OVER (
+                    PARTITION BY code ORDER BY date
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                ) AS last_close
+            FROM daily_prices
+            WHERE date BETWEEN %s AND %s AND close > 0
+        ),
+        weekly AS (
+            SELECT code,
+                MAX(first_close) AS first_close,
+                MAX(last_close)  AS last_close
+            FROM week_prices GROUP BY code
+            HAVING MAX(first_close) > 0
+        ),
+        ranked AS (
+            SELECT w.code,
+                ROUND((w.last_close - w.first_close) / w.first_close * 100, 4) AS chg
+            FROM weekly w
+            JOIN stocks s ON w.code = s.code
+            LEFT JOIN markets m ON s.market_id = m.id
+            WHERE s.is_active = TRUE
+              AND (s.market_id IS NULL OR m.code IN ('0111','0112','0113'))
+        )
+        SELECT code, ROW_NUMBER() OVER (ORDER BY chg ASC) AS rk, chg
+        FROM ranked WHERE chg <= %s ORDER BY chg ASC LIMIT %s
+    """, (week_start, ranking_date, -threshold, max_n))
+    losers = [(r[0], r[1], float(r[2])) for r in cur.fetchall()]
 
     cur.close()
     conn.close()
+    return gainers, losers
 
-    saved = 0
-    all_targets = [(c, rk, pct, "up") for c, rk, pct in gainers] + \
+
+def research_top_movers(target_date: date = None, period: str = "daily") -> int:
+    """
+    ±RESEARCH_THRESHOLD_PCT% 超えの銘柄のニュースを収集・保存。
+    閾値・最大件数は research_strategy.py で設定する。
+    period: 'daily' | 'weekly'
+    """
+    if target_date is None:
+        target_date = date.today()
+
+    # 最新データ日付を取得
+    conn = get_conn()
+    cur = conn.cursor()
+    if period == "daily":
+        cur.execute("SELECT MAX(date) FROM daily_prices WHERE close IS NOT NULL")
+    else:
+        cur.execute("""
+            SELECT MAX(period_end) FROM rankings
+            WHERE period_type = 'weekly' AND rank_type = 'change_pct'
+        """)
+    row = cur.fetchone()
+    ranking_date = row[0] if row and row[0] else target_date
+    cur.close()
+    conn.close()
+
+    threshold = RESEARCH_THRESHOLD_PCT
+    max_n = RESEARCH_MAX_PER_DIRECTION
+
+    if period == "daily":
+        gainers, losers = _get_daily_movers(ranking_date, threshold, max_n)
+    else:
+        gainers, losers = _get_weekly_movers(ranking_date, threshold, max_n)
+
+    print(f"  [{period}] {ranking_date} ±{threshold}%超え: "
+          f"上昇{len(gainers)}件 / 下落{len(losers)}件")
+    print(f"  調査戦略: {get_strategy_description()}")
+
+    all_targets = [(c, rk, pct, "up")   for c, rk, pct in gainers] + \
                   [(c, rk, pct, "down") for c, rk, pct in losers]
 
-    print(f"  [{period}] {ranking_date} の上昇/下落 各{top_n}件を調査中...")
+    if not all_targets:
+        print(f"  調査対象なし（閾値 ±{threshold}%）")
+        return 0
+
+    saved = 0
     for i, (code, rank, pct, direction) in enumerate(all_targets):
         if research_and_save(code, ranking_date, direction, pct, rank, period):
             saved += 1
-        # kabutan.jpへの過負荷を防ぐ
-        time.sleep(0.8)
         if (i + 1) % 10 == 0:
             print(f"    {i+1}/{len(all_targets)} 完了")
 
@@ -243,8 +232,55 @@ def research_top_movers(target_date: date = None, top_n: int = 15,
     return saved
 
 
+def get_events_for_date(event_date: date = None, period: str = "daily") -> dict:
+    """指定日の全イベントを取得（events ページ用）。"""
+    conn = get_conn()
+    cur = conn.cursor()
+
+    if event_date is None:
+        cur.execute("""
+            SELECT MAX(event_date) FROM price_events WHERE period = %s
+        """, (period,))
+        row = cur.fetchone()
+        event_date = row[0] if row and row[0] else date.today()
+
+    cur.execute("""
+        SELECT pe.code, s.name, pe.direction, pe.change_pct,
+               pe.ranking, pe.news_items
+        FROM price_events pe
+        JOIN stocks s ON pe.code = s.code
+        WHERE pe.event_date = %s AND pe.period = %s
+        ORDER BY pe.direction, ABS(pe.change_pct) DESC
+    """, (event_date, period))
+    cols = ["code","name","direction","change_pct","ranking","news_items"]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+
+    gainers = [r for r in rows if r["direction"] == "up"]
+    losers  = [r for r in rows if r["direction"] == "down"]
+    return {"date": event_date, "gainers": gainers, "losers": losers}
+
+
+def get_available_event_dates(period: str = "daily", limit: int = 30) -> list:
+    """イベントが存在する日付一覧を返す（日付選択UI用）。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT event_date
+        FROM price_events
+        WHERE period = %s
+        ORDER BY event_date DESC
+        LIMIT %s
+    """, (period, limit))
+    dates = [r[0] for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return dates
+
+
 def get_events_for_stock(code: str, limit: int = 20) -> list:
-    """銘柄の直近イベント一覧を取得（app.py 表示用）。"""
+    """銘柄の直近イベント一覧を取得（stock detail ページ用）。"""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -254,7 +290,7 @@ def get_events_for_stock(code: str, limit: int = 20) -> list:
         ORDER BY event_date DESC, period
         LIMIT %s
     """, (code, limit))
-    cols = ["event_date", "direction", "change_pct", "ranking", "period", "news_items", "created_at"]
+    cols = ["event_date","direction","change_pct","ranking","period","news_items","created_at"]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     cur.close()
     conn.close()
@@ -265,17 +301,18 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         codes = sys.argv[1:]
         today = date.today()
+        print(f"調査戦略: {get_strategy_description()}")
         for code in codes:
-            print(f"=== {code} のニュースを調査 ===")
-            news = scrape_news(code, target_date=today, max_items=8)
+            print(f"\n=== {code} のニュースを調査 ===")
+            news = fetch_news(code, target_date=today)
             for n in news:
                 print(f"  [{n['dt'].strftime('%m/%d %H:%M')}][{n['category']}] {n['title']}")
             if news:
                 research_and_save(code, today, "up", 0.0, period="daily")
                 print(f"  保存完了")
     else:
-        print("=== 日次 TOP15 上昇/下落を調査 ===")
-        n = research_top_movers(period="daily", top_n=15)
-        print(f"\n=== 週次 TOP15 上昇/下落を調査 ===")
-        n2 = research_top_movers(period="weekly", top_n=15)
+        print(f"=== 日次 ±{RESEARCH_THRESHOLD_PCT}%超えを調査 ===")
+        n = research_top_movers(period="daily")
+        print(f"\n=== 週次 ±{RESEARCH_THRESHOLD_PCT}%超えを調査 ===")
+        n2 = research_top_movers(period="weekly")
         print(f"\n合計: {n + n2} 件")

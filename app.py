@@ -257,6 +257,7 @@ def _nav(active: str = "") -> str:
         ("home",      "/",           "ホーム"),
         ("themes",    "#",           "テーマ分析"),
         ("rankings",  "/rankings",   "ランキング"),
+        ("events",    "/events",     "イベント"),
         ("watchlist", "/watchlist",  "ウォッチリスト"),
     ]
     items = []
@@ -750,6 +751,225 @@ def _build_rankings_page() -> str:
 </div>"""
 
     return _page_html(f"ランキング {latest_date}", body, active="rankings")
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  イベントページ
+# ════════════════════════════════════════════════════════════════════════
+
+_EVENTS_CSS = """
+.ev-controls {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.ev-date-nav { display: flex; align-items: center; gap: 6px; }
+.ev-date-label {
+  font-size: 18px; font-weight: 700; color: #e6edf3; padding: 0 8px;
+}
+.ev-nav-btn {
+  background: #21262d; border: 1px solid #30363d; color: #8b949e;
+  border-radius: 6px; padding: 5px 10px; text-decoration: none; font-size: 14px;
+}
+.ev-nav-btn:hover { background: #30363d; color: #e6edf3; }
+.ev-period-tabs { display: flex; gap: 4px; margin-left: auto; }
+.ev-period-tab {
+  padding: 5px 14px; border-radius: 6px; font-size: 13px; font-weight: 600;
+  text-decoration: none; color: #8b949e; border: 1px solid #30363d;
+}
+.ev-period-tab.active { background: #388bfd; border-color: #388bfd; color: #fff; }
+.ev-period-tab:hover:not(.active) { background: #21262d; color: #e6edf3; }
+
+.ev-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+}
+.ev-col-header {
+  font-size: 14px; font-weight: 700; padding: 8px 14px;
+  border-radius: 6px 6px 0 0; margin-bottom: 0;
+  display: flex; align-items: center; gap: 8px;
+}
+.ev-col-header.up   { background: rgba(232,64,64,0.12); color: #E84040; border: 1px solid rgba(232,64,64,0.25); border-bottom: none; }
+.ev-col-header.down { background: rgba(58,159,224,0.12); color: #3A9FE0; border: 1px solid rgba(58,159,224,0.25); border-bottom: none; }
+.ev-col-header .ev-count { font-size: 12px; font-weight: 400; opacity: 0.7; }
+
+.ev-card-list { display: flex; flex-direction: column; gap: 0; }
+.ev-card {
+  background: #161b22; border: 1px solid #30363d; border-top: none;
+  padding: 12px 14px;
+}
+.ev-card:last-child { border-radius: 0 0 6px 6px; }
+.ev-card-top {
+  display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; flex-wrap: wrap;
+}
+.ev-pct {
+  font-size: 18px; font-weight: 700; min-width: 70px;
+}
+.ev-pct.up   { color: #E84040; }
+.ev-pct.down { color: #3A9FE0; }
+.ev-stock-link {
+  font-size: 14px; font-weight: 600; color: #e6edf3; text-decoration: none; flex: 1;
+}
+.ev-stock-link:hover { color: #58a6ff; }
+.ev-rank { font-size: 11px; color: #484f58; }
+.ev-news-list { font-size: 12px; color: #8b949e; line-height: 1.65; }
+.ev-news-item { display: flex; gap: 6px; }
+.ev-news-cat {
+  font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 3px;
+  background: #21262d; color: #8b949e; white-space: nowrap; align-self: flex-start; margin-top: 2px;
+}
+.ev-news-cat.材料 { background: rgba(63,185,80,0.15); color: #3fb950; }
+.ev-news-cat.開示 { background: rgba(255,166,87,0.15); color: #ffa657; }
+.ev-news-cat.業績,
+.ev-news-cat.決算 { background: rgba(88,166,255,0.15); color: #58a6ff; }
+.ev-news-cat.注目 { background: rgba(188,140,255,0.15); color: #bc8cff; }
+.ev-empty {
+  background: #161b22; border: 1px solid #30363d; border-top: none;
+  padding: 30px; text-align: center; color: #484f58; font-size: 13px;
+  border-radius: 0 0 6px 6px;
+}
+.ev-no-data {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 60px; text-align: center; color: #484f58;
+}
+
+@media (max-width: 768px) {
+  .ev-grid { grid-template-columns: 1fr; }
+  .ev-date-label { font-size: 15px; }
+}
+"""
+
+
+def _render_news_items(news_text: str) -> str:
+    """保存済みニューステキストをHTML化。最大3件表示。"""
+    if not news_text:
+        return ""
+    lines = [l for l in news_text.strip().split("\n") if l.strip()][:3]
+    items = []
+    for line in lines:
+        # "[MM/DD HH:MM][カテゴリ] タイトル" 形式
+        cat = ""
+        title = line
+        if line.startswith("[") and "][" in line:
+            try:
+                cat_end = line.index("][") + 1
+                close   = line.index("]", cat_end + 1)
+                cat   = line[cat_end + 1:close]
+                title = line[close + 2:].strip()
+            except ValueError:
+                pass
+        cat_cls = cat if cat in {"材料","開示","業績","決算","注目"} else ""
+        cat_html = f'<span class="ev-news-cat {cat_cls}">{cat}</span>' if cat else ""
+        items.append(
+            f'<div class="ev-news-item">{cat_html}'
+            f'<span>{title}</span></div>'
+        )
+    return f'<div class="ev-news-list">{"".join(items)}</div>'
+
+
+def _build_events_page(event_date_str: str = None, period: str = "daily") -> str:
+    from event_researcher import (
+        get_events_for_date, get_available_event_dates,
+        RESEARCH_THRESHOLD_PCT,
+    )
+
+    # 利用可能な日付一覧
+    avail_dates = get_available_event_dates(period=period, limit=30)
+
+    if not avail_dates:
+        body = f"""<style>{_EVENTS_CSS}</style>
+<div class="ev-no-data">
+  <p style="font-size:28px;margin-bottom:8px">📭</p>
+  <p>イベントデータがまだありません。</p>
+  <p style="font-size:12px;margin-top:8px">daily_run.py 実行後にデータが表示されます。</p>
+</div>"""
+        return _page_html("イベント履歴", body, active="events")
+
+    # 表示日付の決定
+    if event_date_str:
+        try:
+            from datetime import date as _date
+            target = _date.fromisoformat(event_date_str)
+        except ValueError:
+            target = avail_dates[0]
+    else:
+        target = avail_dates[0]
+
+    # 前後の日付ナビゲーション
+    try:
+        idx = avail_dates.index(target)
+    except ValueError:
+        idx = 0
+        target = avail_dates[0]
+
+    prev_date = avail_dates[idx + 1] if idx + 1 < len(avail_dates) else None
+    next_date = avail_dates[idx - 1] if idx > 0 else None
+
+    # イベントデータ取得
+    data = get_events_for_date(target, period=period)
+    gainers = data["gainers"]
+    losers  = data["losers"]
+
+    # 日付ナビゲーション HTML
+    prev_href = f"/events?date={prev_date}&period={period}" if prev_date else "#"
+    next_href = f"/events?date={next_date}&period={period}" if next_date else "#"
+    prev_cls  = "ev-nav-btn" if prev_date else "ev-nav-btn" + ' style="opacity:0.3;pointer-events:none"'
+
+    date_nav = f"""<div class="ev-date-nav">
+  <a class="ev-nav-btn" href="{prev_href}" {"style='opacity:0.3;pointer-events:none'" if not prev_date else ""}>◀</a>
+  <span class="ev-date-label">{target.strftime('%Y年%m月%d日')}</span>
+  <a class="ev-nav-btn" href="{next_href}" {"style='opacity:0.3;pointer-events:none'" if not next_date else ""}>▶</a>
+</div>"""
+
+    # 期間タブ
+    period_tabs = f"""<div class="ev-period-tabs">
+  <a class="ev-period-tab {'active' if period == 'daily' else ''}" href="/events?date={target}&period=daily">日次</a>
+  <a class="ev-period-tab {'active' if period == 'weekly' else ''}" href="/events?date={target}&period=weekly">週次</a>
+</div>"""
+
+    threshold = RESEARCH_THRESHOLD_PCT
+
+    # 上昇・下落カラムのHTML生成
+    def _col_cards(stocks: list, direction: str) -> str:
+        arrow = "▲" if direction == "up" else "▼"
+        color = "up" if direction == "up" else "down"
+        label = "上昇" if direction == "up" else "下落"
+        header = (f'<div class="ev-col-header {color}">'
+                  f'{arrow} {label}銘柄 <span class="ev-count">±{threshold:.0f}%超え {len(stocks)}件</span>'
+                  f'</div>')
+        if not stocks:
+            return header + '<div class="ev-empty">該当なし</div>'
+
+        cards = []
+        for s in stocks:
+            code = s["code"]
+            name = s["name"] or code
+            pct  = float(s["change_pct"] or 0)
+            rk   = s["ranking"]
+            rk_str = f"第{rk}位" if rk else ""
+            news_html = _render_news_items(s["news_items"] or "")
+            sign = "+" if pct > 0 else ""
+            cards.append(f"""<div class="ev-card">
+  <div class="ev-card-top">
+    <span class="ev-pct {color}">{arrow}{sign}{pct:.1f}%</span>
+    <a class="ev-stock-link" href="/stock/{code}">{name}（{code}）</a>
+    <span class="ev-rank">{rk_str}</span>
+  </div>
+  {news_html}
+</div>""")
+        return header + f'<div class="ev-card-list">{"".join(cards)}</div>'
+
+    body = f"""<style>{_EVENTS_CSS}</style>
+
+<div class="ev-controls">
+  {date_nav}
+  {period_tabs}
+</div>
+
+<div class="ev-grid">
+  <div>{_col_cards(gainers, "up")}</div>
+  <div>{_col_cards(losers,  "down")}</div>
+</div>"""
+
+    return _page_html(f"イベント {target}", body, active="events")
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -1422,6 +1642,20 @@ def rankings():
     if not html:
         print("[app] ランキング生成")
         html = _build_rankings_page()
+        _set(key, html)
+    return html
+
+
+@app.route("/events")
+def events_page():
+    event_date = request.args.get("date", "")
+    period     = request.args.get("period", "daily")
+    if period not in ("daily", "weekly"):
+        period = "daily"
+    key = f"events_{event_date}_{period}"
+    html = _get(key)
+    if not html:
+        html = _build_events_page(event_date or None, period)
         _set(key, html)
     return html
 
