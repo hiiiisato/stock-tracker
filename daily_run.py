@@ -18,6 +18,7 @@ from financials import fetch_all_financials
 from rankings import compute_daily_rankings, compute_weekly_rankings, print_rankings
 from theme_score import compute_day as compute_theme_day
 from fundamentals import fetch_all_known as update_fundamentals, recompute_price_metrics
+from event_researcher import research_top_movers
 
 
 def _log(fetch_type: str, status: str, rows: int = 0, error: str = None):
@@ -143,6 +144,17 @@ def run(init: bool = False, rankings_only: bool = False):
     except Exception as e:
         print(f"  エラー: {e}")
         _log("rankings", "failed", error=str(e))
+
+    # ニュース収集（日次＋週次 TOP15）
+    if not rankings_only:
+        print("\n[ニュース] 上昇/下落 TOP15 の材料を収集中...")
+        try:
+            n_d = research_top_movers(period="daily",  top_n=15)
+            n_w = research_top_movers(period="weekly", top_n=15)
+            _log("events", "done", n_d + n_w)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("events", "failed", error=str(e))
 
     elapsed = (datetime.now() - start).total_seconds()
     print(f"\n{'='*50}")

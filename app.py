@@ -922,6 +922,43 @@ _STOCK_CSS = """
 /* 指標更新日 */
 .fund-note { font-size: 11px; color: #484f58; text-align: right; margin-bottom: 10px; }
 
+/* イベント履歴 */
+.event-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+.event-card {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 12px 14px;
+}
+.event-header {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap;
+}
+.event-date { font-size: 12px; color: #8b949e; }
+.event-badge {
+  font-size: 11px; font-weight: 700; padding: 2px 8px;
+  border-radius: 4px; line-height: 1.6;
+}
+.event-badge.up   { background: rgba(232,64,64,0.15); color: #E84040; }
+.event-badge.down { background: rgba(58,159,224,0.15); color: #3A9FE0; }
+.event-period { font-size: 11px; color: #484f58; }
+.event-news { font-size: 12px; color: #8b949e; line-height: 1.7; white-space: pre-wrap; }
+
+/* メモ */
+.memo-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.memo-card {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 10px 14px; display: flex; align-items: flex-start; gap: 10px;
+}
+.memo-content { flex: 1; font-size: 13px; color: #c9d1d9; white-space: pre-wrap; line-height: 1.6; }
+.memo-meta { font-size: 11px; color: #484f58; white-space: nowrap; }
+.memo-del { color: #484f58; background: none; border: none; cursor: pointer; font-size: 14px; padding: 0; }
+.memo-del:hover { color: #E84040; }
+.memo-form { display: flex; gap: 8px; align-items: flex-end; }
+.memo-form textarea {
+  flex: 1; background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+  color: #e6edf3; font-size: 13px; padding: 8px 10px; resize: vertical;
+  font-family: inherit; min-height: 60px;
+}
+.memo-form textarea:focus { outline: none; border-color: #58a6ff; }
+
 @media (max-width: 768px) {
   .s-price { font-size: 28px; }
   .s-chg   { font-size: 15px; }
@@ -993,6 +1030,28 @@ def _build_stock_page(code: str) -> str:
     """, (code, from_div))
     div_row = cur.fetchone()
     div_ttm = float(div_row[0]) if div_row and div_row[0] else None
+
+    # イベント履歴（price_events）
+    cur.execute("""
+        SELECT event_date, direction, change_pct, ranking, period, news_items
+        FROM price_events
+        WHERE code = %s
+        ORDER BY event_date DESC, period
+        LIMIT 15
+    """, (code,))
+    ev_cols = ["event_date","direction","change_pct","ranking","period","news_items"]
+    events = [dict(zip(ev_cols, r)) for r in cur.fetchall()]
+
+    # メモ（stock_memos）
+    cur.execute("""
+        SELECT id, content, created_at
+        FROM stock_memos
+        WHERE code = %s
+        ORDER BY created_at DESC
+        LIMIT 20
+    """, (code,))
+    memo_cols = ["id","content","created_at"]
+    memos = [dict(zip(memo_cols, r)) for r in cur.fetchall()]
 
     cur.close()
     conn.close()
@@ -1206,6 +1265,54 @@ def _build_stock_page(code: str) -> str:
     else:
         chart_section = f'<div class="chart-box" style="margin-bottom:20px">{chart_div}</div>'
 
+    # ─ イベント履歴 HTML ─
+    if events:
+        ev_cards = []
+        for ev in events:
+            d      = str(ev["event_date"])
+            direc  = ev["direction"]
+            pct    = float(ev["change_pct"] or 0)
+            rk     = ev["ranking"]
+            period = "日次" if ev["period"] == "daily" else "週次"
+            news   = ev["news_items"] or ""
+            arrow  = "▲" if direc == "up" else "▼"
+            rk_str = f"（{period}第{rk}位）" if rk else f"（{period}）"
+            ev_cards.append(f"""<div class="event-card">
+  <div class="event-header">
+    <span class="event-date">{d}</span>
+    <span class="event-badge {direc}">{arrow}{abs(pct):.1f}%</span>
+    <span class="event-period">{rk_str}</span>
+  </div>
+  {f'<div class="event-news">{news}</div>' if news else ""}
+</div>""")
+        events_html = f'<p class="price-section-header">イベント履歴</p><div class="event-list">{"".join(ev_cards)}</div>'
+    else:
+        events_html = ""
+
+    # ─ メモ HTML ─
+    memo_cards = ""
+    for m in memos:
+        created = str(m["created_at"])[:16]
+        content = m["content"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        memo_cards += f"""<div class="memo-card">
+  <div class="memo-content">{content}</div>
+  <div style="text-align:right">
+    <div class="memo-meta">{created}</div>
+    <form method="POST" action="/memo/delete" style="margin-top:4px">
+      <input type="hidden" name="id" value="{m['id']}">
+      <input type="hidden" name="code" value="{s_code}">
+      <button type="submit" class="memo-del" title="削除">✕</button>
+    </form>
+  </div>
+</div>"""
+    memos_html = f"""<p class="price-section-header">メモ</p>
+<div class="memo-list">{memo_cards if memo_cards else '<p class="muted" style="font-size:13px">メモなし</p>'}</div>
+<form class="memo-form" method="POST" action="/memo/add">
+  <input type="hidden" name="code" value="{s_code}">
+  <textarea name="content" placeholder="メモを追加..." rows="2"></textarea>
+  <button type="submit" class="btn-sm">追加</button>
+</form>"""
+
     body = f"""\
 <style>{_STOCK_CSS}</style>
 
@@ -1257,7 +1364,11 @@ def _build_stock_page(code: str) -> str:
       <tbody>{trows}</tbody>
     </table>
   </div>
-</div>"""
+</div>
+
+{events_html}
+
+{memos_html}"""
 
     return _page_html(f"{s_name}（{s_code}）", body, active="")
 
@@ -1354,6 +1465,43 @@ def watchlist_remove():
         except Exception as e:
             print(f"[watchlist_remove] error: {e}")
     return redirect("/watchlist")
+
+
+@app.route("/memo/add", methods=["POST"])
+def memo_add():
+    code    = request.form.get("code", "").strip().upper()
+    content = request.form.get("content", "").strip()
+    if code and content:
+        try:
+            conn = get_conn()
+            cur  = conn.cursor()
+            cur.execute(
+                "INSERT INTO stock_memos (code, content) VALUES (%s, %s)",
+                (code, content)
+            )
+            conn.commit()
+            cur.close(); conn.close()
+            _bust_prefix(f"stock_{code}")
+        except Exception as e:
+            print(f"[memo_add] error: {e}")
+    return redirect(f"/stock/{code}")
+
+
+@app.route("/memo/delete", methods=["POST"])
+def memo_delete():
+    memo_id = request.form.get("id", "").strip()
+    code    = request.form.get("code", "").strip().upper()
+    if memo_id and code:
+        try:
+            conn = get_conn()
+            cur  = conn.cursor()
+            cur.execute("DELETE FROM stock_memos WHERE id = %s", (memo_id,))
+            conn.commit()
+            cur.close(); conn.close()
+            _bust_prefix(f"stock_{code}")
+        except Exception as e:
+            print(f"[memo_delete] error: {e}")
+    return redirect(f"/stock/{code}")
 
 
 @app.route("/stock/<code>")
