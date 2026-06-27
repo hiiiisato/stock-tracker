@@ -17,6 +17,7 @@ from dividends import fetch_all_dividends
 from financials import fetch_all_financials
 from rankings import compute_daily_rankings, compute_weekly_rankings, print_rankings
 from theme_score import compute_day as compute_theme_day
+from fundamentals import fetch_theme_stocks as update_fundamentals
 
 
 def _log(fetch_type: str, status: str, rows: int = 0, error: str = None):
@@ -84,9 +85,9 @@ def run(init: bool = False, rankings_only: bool = False):
             traceback.print_exc()
             _log("prices", "failed", error=str(e))
 
-    # 4. 配当・財務データ更新（毎週月曜のみ）
+    # 4. 配当・財務・ファンダメンタルズ更新（毎週月曜のみ）
     if datetime.now().weekday() == 0 and not rankings_only:
-        print("\n[4/5] 配当データ更新（週次）...")
+        print("\n[4/6] 配当データ更新（週次）...")
         try:
             n = fetch_all_dividends()
             _log("dividends", "done", n)
@@ -94,13 +95,21 @@ def run(init: bool = False, rankings_only: bool = False):
             print(f"  エラー: {e}")
             _log("dividends", "failed", error=str(e))
 
-        print("\n[5/5] 財務諸表更新（週次）...")
+        print("\n[5/6] 財務諸表更新（週次）...")
         try:
             n = fetch_all_financials()
             _log("financials", "done", n)
         except Exception as e:
             print(f"  エラー: {e}")
             _log("financials", "failed", error=str(e))
+
+        print("\n[6/6] ファンダメンタルズ更新（週次・テーマ銘柄）...")
+        try:
+            n = update_fundamentals()
+            _log("fundamentals", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("fundamentals", "failed", error=str(e))
 
     # テーマスコア計算（価格更新後）
     if not rankings_only:
