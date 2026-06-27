@@ -3219,7 +3219,7 @@ def theme_page(theme_id: int):
 def api_chart_grid():
     codes_param = request.args.get("codes", "")
     codes = [c.strip() for c in codes_param.split(",") if c.strip()]
-    if not codes or len(codes) > 80:
+    if not codes or len(codes) > 200:
         return _json.dumps({"error": "invalid"}), 400
 
     from datetime import timedelta as _td
