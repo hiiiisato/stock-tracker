@@ -189,11 +189,12 @@ def _build_stock_page(code: str) -> str:
         ))
         fig.update_layout(
             template="plotly_dark", height=380,
-            margin=dict(l=55, r=20, t=20, b=30),
+            margin=dict(l=50, r=10, t=20, b=30),
             xaxis_rangeslider_visible=False,
             font=dict(size=12),
         )
-        chart_html = fig.to_html(full_html=False, include_plotlyjs="cdn")
+        chart_html = fig.to_html(full_html=False, include_plotlyjs="cdn",
+                                 config={"responsive": True})
     else:
         chart_html = '<p style="color:#8b949e;padding:20px">価格データなし</p>'
 
@@ -243,19 +244,28 @@ def _build_stock_page(code: str) -> str:
     .back:hover{{text-decoration:underline}}
     h1{{font-size:22px;color:#e6edf3;margin:12px 0 4px}}
     .meta{{color:#8b949e;font-size:13px;margin-bottom:16px}}
-    .price-row{{display:flex;align-items:baseline;gap:14px;margin-bottom:20px}}
+    .price-row{{display:flex;align-items:baseline;gap:14px;margin-bottom:20px;flex-wrap:wrap}}
     .price{{font-size:36px;font-weight:700;color:#e6edf3}}
     .chg{{font-size:22px;font-weight:600}}
     h2{{font-size:15px;font-weight:600;color:#e6edf3;
         border-bottom:1px solid #30363d;padding-bottom:8px;margin:24px 0 12px}}
     .themes{{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px}}
+    .table-wrap{{overflow-x:auto;-webkit-overflow-scrolling:touch}}
     table{{width:100%;border-collapse:collapse;background:#161b22;border-radius:8px;overflow:hidden}}
-    th{{background:#21262d;padding:8px 12px;color:#8b949e;font-size:12px;text-align:right}}
+    th{{background:#21262d;padding:8px 12px;color:#8b949e;font-size:12px;text-align:right;white-space:nowrap}}
     th.left{{text-align:left}}
-    td{{padding:7px 12px;border-bottom:1px solid #1c2128;font-size:13px;text-align:right}}
+    td{{padding:7px 12px;border-bottom:1px solid #1c2128;font-size:13px;text-align:right;white-space:nowrap}}
     td.left{{text-align:left}}
     tr:last-child td{{border-bottom:none}}
     tr:hover{{background:#1c2128}}
+    @media(max-width:768px){{
+      .wrap{{padding:12px 10px}}
+      h1{{font-size:18px}}
+      .price{{font-size:28px}}
+      .chg{{font-size:18px}}
+      h2{{font-size:14px;margin:16px 0 8px}}
+      th,td{{padding:5px 8px;font-size:12px}}
+    }}
   </style>
 </head>
 <body>
@@ -277,17 +287,19 @@ def _build_stock_page(code: str) -> str:
   {chart_html}
 
   <h2>直近20営業日</h2>
-  <table>
-    <thead>
-      <tr>
-        <th class="left">日付</th>
-        <th>終値</th>
-        <th>前日比</th>
-        <th>出来高</th>
-      </tr>
-    </thead>
-    <tbody>{trows}</tbody>
-  </table>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th class="left">日付</th>
+          <th>終値</th>
+          <th>前日比</th>
+          <th>出来高</th>
+        </tr>
+      </thead>
+      <tbody>{trows}</tbody>
+    </table>
+  </div>
 </div>
 </body>
 </html>"""

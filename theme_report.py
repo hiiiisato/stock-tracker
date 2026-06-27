@@ -259,7 +259,8 @@ def _heat_chart_html(theme_stats: list) -> str:
         font=dict(size=12),
         showlegend=False,
     )
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+    return fig.to_html(full_html=False, include_plotlyjs=False,
+                       config={"responsive": True})
 
 
 def _trend_chart_html(theme_stats: list) -> str:
@@ -295,7 +296,8 @@ def _trend_chart_html(theme_stats: list) -> str:
         hovermode="x unified",
         legend=dict(orientation="v", x=1.01, y=1, font=dict(size=9)),
     )
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+    return fig.to_html(full_html=False, include_plotlyjs=False,
+                       config={"responsive": True})
 
 
 # ═══════════════════════════════════════════════════════════
@@ -409,17 +411,17 @@ h2 { color: #e6edf3; font-size: 16px; margin: 28px 0 12px;
 
 /* チャート横並び */
 .charts-row { display: flex; gap: 16px; margin-bottom: 24px; }
-.chart-box  { flex: 1; background: #161b22; border: 1px solid #30363d;
+.chart-box  { flex: 1; min-width: 0; background: #161b22; border: 1px solid #30363d;
               border-radius: 8px; padding: 8px; overflow: hidden; }
 
 /* サマリーテーブル */
-.summary-wrap { overflow-x: auto; }
+.summary-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .summary-table { width: 100%; border-collapse: collapse;
                  background: #161b22; border-radius: 8px; overflow: hidden; }
 .summary-table th { background: #21262d; padding: 8px 12px; color: #8b949e;
                     font-size: 11px; font-weight: 600; text-align: right; white-space: nowrap; }
 .summary-table th.left { text-align: left; }
-.summary-table td { padding: 7px 12px; border-bottom: 1px solid #1c2128; }
+.summary-table td { padding: 7px 12px; border-bottom: 1px solid #1c2128; white-space: nowrap; }
 .summary-table td.left { text-align: left; font-weight: 500; }
 .summary-table tr:last-child td { border-bottom: none; }
 .summary-table tr:hover { background: #1c2128; }
@@ -461,6 +463,31 @@ h2 { color: #e6edf3; font-size: 16px; margin: 28px 0 12px;
 .left { text-align: left; }
 .pos  { color: #E84040; }
 .neg  { color: #3A9FE0; }
+
+/* ── モバイル対応 (〜768px) ─────────────────────── */
+@media (max-width: 768px) {
+  .container { padding: 12px 10px; }
+  h1 { font-size: 17px; }
+  h2 { font-size: 14px; margin: 18px 0 10px; }
+  .subtitle { font-size: 11px; margin-bottom: 14px; }
+
+  /* チャートを縦積みに */
+  .charts-row { flex-direction: column; gap: 10px; }
+
+  /* テーマカードを1列に */
+  .theme-grid { grid-template-columns: 1fr; gap: 10px; }
+  .theme-card { padding: 10px; }
+  .theme-name { font-size: 13px; }
+  .heat-val   { font-size: 16px; }
+  .theme-stats { gap: 8px; font-size: 11px; padding: 6px 10px; }
+  .badge { font-size: 16px; }
+
+  /* 銘柄テーブル: モバイルで売買代金列を非表示 */
+  .stock-table .tval, .stock-table th:last-child { display: none; }
+  .stock-table td { padding: 4px 6px; }
+  .stock-table { font-size: 11px; }
+  .stock-table td.sname { max-width: 120px; }
+}
 """
 
 
