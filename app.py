@@ -626,13 +626,13 @@ def _build_home() -> str:
 
     # テーマ過熱度（最新日）
     cur.execute("""
-        SELECT tc.name, tc.code, tds.heat_score, tds.avg_change_pct, tds.breadth_ratio
+        SELECT tc.id, tc.name, tc.code, tds.heat_score, tds.avg_change_pct, tds.breadth_ratio
         FROM theme_daily_stats tds
         JOIN theme_categories tc ON tds.theme_id = tc.id
         WHERE tds.date = (SELECT MAX(date) FROM theme_daily_stats) AND tc.level = 2
         ORDER BY tds.heat_score DESC
     """)
-    themes = cur.fetchall()  # (name, code, heat, avg_change_pct, breadth_ratio)
+    themes = cur.fetchall()  # (id, name, code, heat, avg_change_pct, breadth_ratio)
 
     # 本日の値上がりTOP5（日次銘柄から直接取得）
     cur.execute("""
@@ -707,11 +707,11 @@ def _build_home() -> str:
         return f'<span class="badge badge-neu">中立</span>'
 
     theme_rows = ""
-    for tname, tcode, heat, avg_chg, breadth in themes:
+    for tid, tname, tcode, heat, avg_chg, breadth in themes:
         h = float(heat or 0)
         c = float(avg_chg or 0)
         theme_rows += f"""<tr>
-      <td class="left"><a class="tbl-link" href="{report_link}#{tcode}">{tname}</a></td>
+      <td class="left"><a class="tbl-link" href="/theme/{tid}">{tname}</a></td>
       <td>{_heat_badge(h)}</td>
       <td class="{'up' if h > 0 else 'dn' if h < 0 else 'muted'}">{h:+.1f}</td>
       <td class="{'up' if c > 0 else 'dn' if c < 0 else 'muted'}">{c:+.2f}%</td>
@@ -1325,6 +1325,155 @@ def _build_events_page(event_date_str: str = None, period: str = "daily") -> str
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  チャートグリッド共通部品
+# ════════════════════════════════════════════════════════════════════════
+
+def _chart_grid_toolbar(codes_js: str, show_added_sort: bool = False) -> str:
+    added_opt = '<option value="added">登録順</option>' if show_added_sort else ""
+    return f"""<div class="cg-toolbar">
+  <div style="display:flex;gap:4px">
+    <button class="cg-view-btn active" id="btn-list" onclick="cgSetView('list')">☰ リスト</button>
+    <button class="cg-view-btn" id="btn-chart" onclick="cgSetView('chart')">⊞ チャート</button>
+  </div>
+  <div id="cg-chart-opts" style="display:none;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+    <div style="display:flex;gap:3px">
+      <button class="cg-period-btn active" data-period="1M">1M</button>
+      <button class="cg-period-btn" data-period="3M">3M</button>
+      <button class="cg-period-btn" data-period="6M">6M</button>
+      <button class="cg-period-btn" data-period="1Y">1Y</button>
+    </div>
+    <select class="cg-sort-select" id="cg-sort" onchange="cgSort()">
+      {added_opt}
+      <option value="chg_desc">前日比 ↓</option>
+      <option value="chg_asc">前日比 ↑</option>
+      <option value="cap_desc">時価総額 ↓</option>
+      <option value="cap_asc">時価総額 ↑</option>
+    </select>
+  </div>
+</div>
+<script>var CG_CODES={codes_js};</script>"""
+
+
+def _chart_grid_script() -> str:
+    return """<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script>
+(function(){
+  var PERIOD='1M';
+  var allData=null;
+  var loaded=false;
+
+  function cgSetView(v){
+    var isList=(v==='list');
+    document.getElementById('view-list').style.display=isList?'':'none';
+    document.getElementById('view-chart').style.display=isList?'none':'';
+    document.getElementById('btn-list').classList.toggle('active',isList);
+    document.getElementById('btn-chart').classList.toggle('active',!isList);
+    var opts=document.getElementById('cg-chart-opts');
+    opts.style.display=isList?'none':'flex';
+    localStorage.setItem('cgView',v);
+    if(!isList && !loaded){ loadData(); }
+  }
+  window.cgSetView=cgSetView;
+
+  function loadData(){
+    if(!CG_CODES||!CG_CODES.length){
+      document.getElementById('cg-grid').innerHTML='<div class="cg-loading">銘柄が登録されていません</div>';
+      return;
+    }
+    fetch('/api/chart_grid?codes='+CG_CODES.join(','))
+      .then(function(r){return r.json();})
+      .then(function(data){
+        allData=data;
+        loaded=true;
+        buildGrid();
+      })
+      .catch(function(){ document.getElementById('cg-grid').innerHTML='<div class="cg-loading">読み込み失敗</div>'; });
+  }
+
+  function filterPrices(prices){
+    var days={'1M':31,'3M':92,'6M':183,'1Y':366};
+    var n=days[PERIOD]||31;
+    var from=new Date(Date.now()-n*864e5).toISOString().slice(0,10);
+    return prices.filter(function(p){return p.date>=from;});
+  }
+
+  function buildGrid(){
+    var sorted=sortData(allData.slice());
+    var grid=document.getElementById('cg-grid');
+    grid.innerHTML='';
+    sorted.forEach(function(item){
+      var card=document.createElement('div');
+      card.className='cg-card';
+      card.dataset.code=item.code;
+      card.dataset.chg=item.change_pct!=null?item.change_pct:'-9999';
+      card.dataset.cap=item.market_cap||0;
+      var chg=item.change_pct;
+      var chgStr=chg!=null?(chg>0?'+':'')+chg.toFixed(2)+'%':'—';
+      var chgCol=chg>0?'#E84040':chg<0?'#3A9FE0':'#8b949e';
+      var chartId='cgc-'+item.code;
+      card.innerHTML=
+        '<div class="cg-card-hd" onclick="location.href=\'/stock/'+item.code+'\'">'+
+          '<div><div class="cg-name">'+item.name+'</div>'+
+          '<div class="cg-code-label">'+item.code+'</div></div>'+
+          '<div><div class="cg-price">'+(item.close?item.close.toLocaleString():'-')+'</div>'+
+          '<div class="cg-chg" style="color:'+chgCol+'">'+chgStr+'</div></div>'+
+        '</div>'+
+        '<div id="'+chartId+'" class="cg-plot"></div>';
+      grid.appendChild(card);
+      drawChart(chartId,filterPrices(item.prices));
+    });
+  }
+
+  function drawChart(id,prices){
+    if(!prices.length){return;}
+    var layout={
+      paper_bgcolor:'#161b22',plot_bgcolor:'#161b22',
+      height:150,margin:{l:42,r:4,t:4,b:20},
+      xaxis:{type:'category',nticks:4,tickfont:{size:9},color:'#6e7681',showgrid:false},
+      yaxis:{tickfont:{size:9},color:'#6e7681',gridcolor:'#21262d',side:'right'},
+      showlegend:false,
+    };
+    Plotly.react(id,[{
+      type:'candlestick',
+      x:prices.map(function(p){return p.date;}),
+      open:prices.map(function(p){return p.open;}),
+      high:prices.map(function(p){return p.high;}),
+      low:prices.map(function(p){return p.low;}),
+      close:prices.map(function(p){return p.close;}),
+      increasing:{line:{color:'#E84040'},fillcolor:'rgba(232,64,64,0.5)'},
+      decreasing:{line:{color:'#3A9FE0'},fillcolor:'rgba(58,159,224,0.5)'},
+    }],layout,{responsive:true,displayModeBar:false});
+  }
+
+  function sortData(data){
+    var v=document.getElementById('cg-sort').value;
+    data.sort(function(a,b){
+      if(v==='chg_desc') return (b.change_pct||0)-(a.change_pct||0);
+      if(v==='chg_asc')  return (a.change_pct||0)-(b.change_pct||0);
+      if(v==='cap_desc') return (b.market_cap||0)-(a.market_cap||0);
+      if(v==='cap_asc')  return (a.market_cap||0)-(b.market_cap||0);
+      return 0; // added: preserve original order
+    });
+    return data;
+  }
+  window.cgSort=function(){ if(allData) buildGrid(); };
+
+  document.querySelectorAll('.cg-period-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      document.querySelectorAll('.cg-period-btn').forEach(function(b){b.classList.remove('active');});
+      btn.classList.add('active');
+      PERIOD=btn.dataset.period;
+      if(allData) buildGrid();
+    });
+  });
+
+  var saved=localStorage.getItem('cgView');
+  if(saved==='chart'){ cgSetView('chart'); }
+})();
+</script>"""
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  ウォッチリストページ
 # ════════════════════════════════════════════════════════════════════════
 
@@ -1344,7 +1493,6 @@ def _build_watchlist_page(msg: str = "") -> str:
         ORDER BY w.added_at DESC
     """, (latest_date,))
     items = cur.fetchall()
-
     cur.close()
     conn.close()
 
@@ -1370,7 +1518,6 @@ def _build_watchlist_page(msg: str = "") -> str:
             </form>
           </td>
         </tr>"""
-
         table_html = f"""<div class="card" style="margin-bottom:16px">
       <div class="card-header">登録銘柄（{len(items)}件）</div>
       <div class="table-wrap">
@@ -1387,30 +1534,34 @@ def _build_watchlist_page(msg: str = "") -> str:
     else:
         table_html = '<div class="alert">ウォッチリストに銘柄が登録されていません。</div>'
 
+    codes_js = _json.dumps([r[0] for r in items])
+
     body = f"""\
 <div class="page-header">
   <div class="page-title">ウォッチリスト</div>
   <div class="page-subtitle">登録した銘柄の最新状況を確認</div>
 </div>
-
 {msg_html}
-
-<div class="card" style="margin-bottom:24px">
-  <div class="card-header">銘柄を追加</div>
-  <div class="card-body">
-    <form method="POST" action="/watchlist/add">
-      <div class="form-row">
-        <input type="text" name="code" placeholder="証券コード（例: 7203）" autocomplete="off">
-        <button type="submit" class="btn">追加</button>
-      </div>
-      <p style="font-size:12px;color:#8b949e">
-        東証上場銘柄のコードを入力してください（アルファベット含む英数字 4-5 文字）
-      </p>
-    </form>
+{_chart_grid_toolbar(codes_js, show_added_sort=True)}
+<div id="view-list">
+  <div class="card" style="margin-bottom:24px">
+    <div class="card-header">銘柄を追加</div>
+    <div class="card-body">
+      <form method="POST" action="/watchlist/add">
+        <div class="form-row">
+          <input type="text" name="code" placeholder="証券コード（例: 7203）" autocomplete="off">
+          <button type="submit" class="btn">追加</button>
+        </div>
+        <p style="font-size:12px;color:#8b949e">東証上場銘柄のコードを入力してください</p>
+      </form>
+    </div>
   </div>
+  {table_html}
 </div>
-
-{table_html}"""
+<div id="view-chart" style="display:none">
+  <div class="cg-grid" id="cg-grid"><div class="cg-loading">読み込み中...</div></div>
+</div>
+{_chart_grid_script()}"""
 
     return _page_html("ウォッチリスト", body, active="watchlist")
 
@@ -1575,6 +1726,45 @@ _STOCK_CSS = """
   .km-value { font-size: 18px; }
   .chart-metrics-row { grid-template-columns: 1fr; }
 }
+
+/* ── チャートグリッドビュー ── */
+.cg-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;
+}
+.cg-view-btn {
+  background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+  color: #8b949e; font-size: 12px; padding: 4px 14px; cursor: pointer; transition: all 0.15s;
+}
+.cg-view-btn.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.cg-period-btn {
+  background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+  color: #8b949e; font-size: 12px; padding: 3px 10px; cursor: pointer; transition: all 0.15s;
+}
+.cg-period-btn.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.cg-sort-select {
+  background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+  color: #c9d1d9; font-size: 12px; padding: 3px 8px; cursor: pointer;
+}
+.cg-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+}
+.cg-card {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden;
+  transition: border-color 0.15s;
+}
+.cg-card:hover { border-color: #58a6ff; }
+.cg-card-hd {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 10px 12px 4px; cursor: pointer;
+}
+.cg-name { font-size: 13px; font-weight: 600; color: #e6edf3; }
+.cg-code-label { font-size: 11px; color: #8b949e; }
+.cg-price { font-size: 14px; font-weight: 600; color: #e6edf3; text-align: right; }
+.cg-chg  { font-size: 12px; font-weight: 600; text-align: right; }
+.cg-plot { height: 150px; }
+.cg-loading { text-align: center; color: #8b949e; font-size: 12px; padding: 40px; }
+@media (max-width: 900px) { .cg-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .cg-grid { grid-template-columns: 1fr; } }
 """
 
 
@@ -2615,6 +2805,127 @@ def events_page():
         html = _build_events_page(event_date or None, period)
         _set(key, html)
     return html
+
+
+@app.route("/theme/<int:theme_id>")
+def theme_page(theme_id: int):
+    conn = get_conn()
+    cur  = conn.cursor()
+    cur.execute("SELECT id, name, level FROM theme_categories WHERE id = %s", (theme_id,))
+    theme = cur.fetchone()
+    if not theme:
+        cur.close(); conn.close()
+        return "テーマが見つかりません", 404
+
+    cur.execute("""
+        SELECT st.code, s.name, st.relevance
+        FROM stock_themes st
+        JOIN stocks s ON st.code = s.code
+        WHERE st.theme_id = %s
+        ORDER BY st.relevance DESC, st.code
+    """, (theme_id,))
+    stocks_in_theme = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    theme_name = theme[1]
+    codes = [r[0] for r in stocks_in_theme]
+    codes_js = _json.dumps(codes)
+
+    body = f"""<div class="page-header">
+  <div class="page-title">{theme_name}</div>
+  <div class="page-subtitle">テーマ銘柄 {len(codes)} 件</div>
+</div>
+{_chart_grid_toolbar(codes_js, show_added_sort=False)}
+<div id="view-list">
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th class="left">銘柄</th><th>コード</th><th>関連度</th></tr></thead>
+        <tbody>{''.join(
+            f'<tr><td class="left"><a class="tbl-link" href="/stock/{c}">{n}</a></td>'
+            f'<td class="muted">{c}</td>'
+            f'<td>{"★"*r}{"☆"*(3-r)}</td></tr>'
+            for c, n, r in stocks_in_theme
+        )}</tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<div id="view-chart" style="display:none">
+  <div class="cg-grid" id="cg-grid"><div class="cg-loading">読み込み中...</div></div>
+</div>
+{_chart_grid_script()}"""
+
+    return _page_html(f"{theme_name} | テーマ", body)
+
+
+@app.route("/api/chart_grid")
+def api_chart_grid():
+    codes_param = request.args.get("codes", "")
+    codes = [c.strip() for c in codes_param.split(",") if c.strip()]
+    if not codes or len(codes) > 80:
+        return _json.dumps({"error": "invalid"}), 400
+
+    from datetime import timedelta as _td
+    date_from = (date.today() - _td(days=380)).strftime("%Y-%m-%d")
+
+    conn = get_conn()
+    cur  = conn.cursor()
+
+    ph = ",".join(["%s"] * len(codes))
+    cur.execute(f"""
+        SELECT dp.code, s.name, dp.date, dp.open, dp.high, dp.low, dp.close
+        FROM daily_prices dp
+        JOIN stocks s ON dp.code = s.code
+        WHERE dp.code IN ({ph}) AND dp.date >= %s AND dp.close IS NOT NULL
+        ORDER BY dp.code, dp.date
+    """, (*codes, date_from))
+    rows = cur.fetchall()
+
+    cur.execute(f"""
+        SELECT lp.code, lp.close, lp.change_pct, f.market_cap
+        FROM (
+            SELECT dp.code, dp.close, dp.change_pct
+            FROM daily_prices dp
+            JOIN (SELECT code, MAX(date) AS mx FROM daily_prices GROUP BY code) t
+              ON dp.code = t.code AND dp.date = t.mx
+            WHERE dp.code IN ({ph})
+        ) lp
+        LEFT JOIN stock_fundamentals f ON lp.code = f.code
+    """, (*codes,))
+    latest = {r[0]: {"close": r[1], "change_pct": r[2], "market_cap": r[3]}
+              for r in cur.fetchall()}
+
+    cur.close()
+    conn.close()
+
+    from collections import defaultdict as _dd
+    price_map = _dd(list)
+    name_map  = {}
+    for code, name, dt, o, h, l, c in rows:
+        name_map[code] = name
+        price_map[code].append({
+            "date":  str(dt),
+            "open":  float(o or 0),
+            "high":  float(h or 0),
+            "low":   float(l or 0),
+            "close": float(c or 0),
+        })
+
+    result = []
+    for code in codes:
+        lat = latest.get(code, {})
+        result.append({
+            "code":       code,
+            "name":       name_map.get(code, code),
+            "close":      float(lat["close"]) if lat.get("close") else None,
+            "change_pct": float(lat["change_pct"]) if lat.get("change_pct") is not None else None,
+            "market_cap": float(lat["market_cap"]) if lat.get("market_cap") else None,
+            "prices":     price_map.get(code, []),
+        })
+
+    return _json.dumps(result, ensure_ascii=False, default=str)
 
 
 @app.route("/watchlist")
