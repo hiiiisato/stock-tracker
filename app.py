@@ -1565,7 +1565,7 @@ def _chart_grid_script() -> str:
     });
     Plotly.react(id, traces, {
       paper_bgcolor:'#161b22', plot_bgcolor:'#161b22',
-      height:150, margin:{l:42,r:4,t:4,b:20},
+      height:150, margin:{l:2,r:46,t:4,b:20},
       xaxis:{type:'category',nticks:4,tickfont:{size:9},color:'#6e7681',showgrid:false,rangeslider:{visible:false}},
       yaxis:{tickfont:{size:9},color:'#6e7681',gridcolor:'#21262d',side:'right'},
       showlegend:false,
