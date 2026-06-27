@@ -1,62 +1,53 @@
 """
-EDINET から有価証券報告書の「事業の内容」を一括取得して stocks テーブルに保存する。
+edinetdb.jp API を使って「事業の内容」を一括取得して stocks テーブルに保存する。
 
 ━━━━ 事前準備 ━━━━
-1. EDINET API キーを無料取得（メール登録のみ・即時発行）
-   → https://api.edinet-api.fsa.go.jp/
-
+1. edinetdb.jp でAPIキーを取得 → https://edinetdb.jp/developers
 2. .env に追記:
-   EDINET_API_KEY=your_key_here
+   EDINETDB_API_KEY=your_key_here
 
 ━━━━ 実行方法 ━━━━
-# 全銘柄（目安: 60〜90 分）
+# 全銘柄（無料プランは 100件/日。毎日実行で数週間かかります）
 python3 edinet_biz.py
 
-# 特定銘柄だけ試す（動作確認に最適）
+# 特定銘柄だけ試す
 python3 edinet_biz.py 7203 6758 9984
 
 # 取得済みも強制更新
 python3 edinet_biz.py --force
 
 ━━━━ 処理フロー ━━━━
-1. EDINET コードリスト ZIP をダウンロード
-   → 証券コード（4桁）↔ EDINET コード の対応表を stocks.edinet_code に保存
-
-2. 過去15ヶ月の書類一覧 API を日単位で取得
-   → 各社の最新有価証券報告書 docID をインデックス化
-
-3. 各社の有価証券報告書 XBRL ZIP をダウンロード
-   → 「事業の内容」セクションをパースして stocks.business_description に保存
-
-4. XBRL パース失敗時は kabutan.jp からフォールバック取得
+1. edinetdb.jp 検索API（認証不要）で証券コード → EDINETコード を取得・DB保存
+2. edinetdb.jp text-blocks API で「事業の内容」テキストを取得（要APIキー）
+3. 失敗時は kabutan.jp からフォールバック取得
 """
 
-import io
 import os
-import re
 import sys
 import time
-import zipfile
 import requests
-from datetime import date, timedelta
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 from config import get_conn
 
+load_dotenv()
+
 # ─── 設定 ──────────────────────────────────────────────────────────────────
-EDINET_BASE = "https://api.edinet-api.fsa.go.jp/api/v2"
-CDL_URL     = "https://disclosure2dl.edinet-api.fsa.go.jp/searchdocument/codelist/Edinetcode_jp.zip"
-API_KEY     = os.environ.get("EDINET_API_KEY", "")
-A_HEADERS   = {"Subscription-Key": API_KEY}
-UA          = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-DOC_ANNUAL  = "120"    # 有価証券報告書
-INDEX_MONTHS = 15      # 何ヶ月分の書類一覧を検索するか
-API_DELAY   = 0.35     # EDINET API 呼び出し間隔（秒）
-MAX_BIZ_LEN = 4000     # 事業内容の最大文字数
+EDINETDB_BASE = "https://edinetdb.jp/v1"
+EDINETDB_KEY  = os.environ.get("EDINETDB_API_KEY", "")
+EDB_HEADERS   = {"X-API-Key": EDINETDB_KEY, "Accept": "application/json"}
+UA            = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+SEARCH_DELAY  = 0.3      # 検索API呼び出し間隔（秒）
+API_DELAY     = 0.5      # text-blocks API 呼び出し間隔（秒）
+FREE_LIMIT    = 95       # 無料プランの安全マージン（公称100件/日）
+MAX_BIZ_LEN   = 6000     # 事業内容の最大文字数
+
+# 取得したいセクション（優先順、複数あれば連結）
+WANT_SECTIONS = ["事業の内容", "事業方針・経営環境"]
 
 
 # ─── DB マイグレーション ─────────────────────────────────────────────────────
 def _ensure_columns():
-    """必要なカラムが stocks テーブルになければ追加する。"""
     conn = get_conn()
     cur  = conn.cursor()
     for col, definition in [
@@ -69,192 +60,116 @@ def _ensure_columns():
             conn.commit()
             print(f"  [DB] カラム追加: stocks.{col}")
         except Exception:
-            pass   # 既存カラムは無視
+            pass
     cur.close()
     conn.close()
 
 
-# ─── EDINET コードマップ ─────────────────────────────────────────────────────
-def load_edinet_codemap() -> dict:
+# ─── edinetdb.jp 検索で edinet_code を取得 ──────────────────────────────────
+def _search_edinet_code(code4: str) -> str | None:
     """
-    EDINET コードリスト ZIP をダウンロードして
-    {4桁証券コード: EDINETコード（E+5桁）} の辞書を返す。
+    edinetdb.jp の検索API（認証不要）で証券コードを検索し、
+    EDINETコード（E+5桁）を返す。見つからない場合は None。
     """
-    print("  EDINET コードリスト取得中...")
-    r = requests.get(CDL_URL, headers={"User-Agent": UA}, timeout=30)
-    r.raise_for_status()
-    z = zipfile.ZipFile(io.BytesIO(r.content))
-
-    for fname in z.namelist():
-        if not fname.endswith(".csv"):
-            continue
-        raw = z.read(fname).decode("cp932", errors="replace")
-        result = {}
-        for i, line in enumerate(raw.splitlines()):
-            if i < 2:        # ヘッダー2行をスキップ
-                continue
-            parts = line.split(",")
-            if len(parts) < 13:
-                continue
-            edinet_code = parts[0].strip().strip('"')   # 例: E01234
-            stock_code  = parts[12].strip().strip('"')  # 4桁証券コード
-            if edinet_code and stock_code and len(stock_code) == 4:
-                result[stock_code] = edinet_code
-        print(f"  コードマップ: {len(result)} 件")
-        return result
-    return {}
-
-
-def update_edinet_codes(codemap: dict):
-    """stocks.edinet_code を一括更新する。"""
-    conn = get_conn()
-    cur  = conn.cursor()
-    cur.execute("SELECT code FROM stocks WHERE is_active = TRUE")
-    codes = [r[0] for r in cur.fetchall()]
-
-    updated = 0
-    for code4 in codes:
-        ec = codemap.get(code4)
-        if ec:
-            cur.execute(
-                "UPDATE stocks SET edinet_code = %s "
-                "WHERE code = %s AND (edinet_code IS NULL OR edinet_code != %s)",
-                (ec, code4, ec),
-            )
-            updated += cur.rowcount
-
-    conn.commit()
-    cur.close()
-    conn.close()
-    print(f"  edinet_code 更新: {updated} 件")
-
-
-# ─── 書類インデックス構築 ────────────────────────────────────────────────────
-def build_doc_index() -> dict:
-    """
-    過去 INDEX_MONTHS ヶ月の書類一覧を EDINET API から取得し、
-    {edinet_code: docID} の最新有価証券報告書インデックスを返す。
-
-    日付降順で走査するため、最初に見つかった docID が最新になる。
-    """
-    today      = date.today()
-    search_end = today
-    # INDEX_MONTHS ヶ月前の月初
-    y  = today.year - (INDEX_MONTHS // 12)
-    mo = today.month - (INDEX_MONTHS % 12)
-    if mo <= 0:
-        mo += 12; y -= 1
-    search_beg = date(y, mo, 1)
-    total_days = (search_end - search_beg).days
-
-    print(f"  書類インデックス構築: {search_beg} 〜 {search_end}（約{total_days}日）")
-
-    index = {}   # edinet_code → docID
-    d     = search_end
-    done  = 0
-
-    while d >= search_beg:
-        try:
-            time.sleep(API_DELAY)
-            r = requests.get(
-                f"{EDINET_BASE}/documents.json",
-                params={"date": d.strftime("%Y-%m-%d"), "type": 2},
-                headers=A_HEADERS,
-                timeout=15,
-            )
-            if r.status_code in (400, 404):
-                d -= timedelta(days=1); done += 1; continue
-            r.raise_for_status()
-
-            for doc in r.json().get("results", []):
-                if doc.get("docTypeCode") != DOC_ANNUAL:
-                    continue
-                ec = doc.get("edinetCode", "")
-                if ec and ec not in index:
-                    index[ec] = doc.get("docID", "")
-
-        except Exception as e:
-            print(f"    [index] {d}: {e}")
-
-        d -= timedelta(days=1)
-        done += 1
-        if done % 60 == 0 or done >= total_days:
-            pct = done / total_days * 100
-            print(f"    {done}/{total_days}日 ({pct:.0f}%)  {len(index):,}社分インデックス済")
-
-    print(f"  インデックス完成: {len(index):,} 社")
-    return index
-
-
-# ─── XBRL パース ─────────────────────────────────────────────────────────────
-_BIZ_TAG_PATTERNS = [
-    re.compile(r"DescriptionOfBusinessTextBlock$",                re.I),
-    re.compile(r"BusinessDescriptionAndAnalysis.*TextBlock$",     re.I),
-    re.compile(r"DescriptionOfBusiness$",                         re.I),
-]
-
-
-def _extract_from_xbrl(xbrl_bytes: bytes) -> str | None:
-    """XBRL バイト列から「事業の内容」テキストを抽出する。"""
     try:
-        soup = BeautifulSoup(xbrl_bytes, "lxml-xml")
-
-        for pat in _BIZ_TAG_PATTERNS:
-            el = soup.find(name=pat)
-            if not el:
-                continue
-            inner = el.decode_contents().strip()
-            if not inner:
-                continue
-            # 内部 HTML をテキストに変換
-            text = BeautifulSoup(inner, "html.parser").get_text("\n", strip=True)
-            text = re.sub(r"\n{3,}", "\n\n", text).strip()
-            if len(text) > 50:
-                return text[:MAX_BIZ_LEN]
-
-    except Exception:
-        pass
-    return None
-
-
-def fetch_biz_from_edinet(doc_id: str) -> str | None:
-    """
-    EDINET から有価証券報告書（XBRL ZIP, type=5）をダウンロードし
-    事業の内容テキストを返す。失敗時は None。
-    """
-    time.sleep(API_DELAY)
-    try:
+        time.sleep(SEARCH_DELAY)
         r = requests.get(
-            f"{EDINET_BASE}/documents/{doc_id}",
-            params={"type": 5},
-            headers=A_HEADERS,
-            timeout=60,
+            f"{EDINETDB_BASE}/search",
+            params={"q": code4},
+            timeout=10,
         )
         if r.status_code != 200:
             return None
+        sec_code_target = code4 + "0"   # 例: 7203 → 72030
+        for item in r.json().get("data", []):
+            if item.get("sec_code") == sec_code_target:
+                return item.get("edinet_code")
+    except Exception as e:
+        print(f"    [search] {code4}: {e}")
+    return None
 
-        z = zipfile.ZipFile(io.BytesIO(r.content))
 
-        # PublicDoc 以下の .xbrl ファイルを探す（名前が短い＝メイン書類を優先）
-        xbrl_files = sorted(
-            [n for n in z.namelist() if "PublicDoc" in n and n.endswith(".xbrl")],
-            key=len,
+def populate_edinet_codes(codes: list[str]) -> dict:
+    """
+    edinet_code が未設定の銘柄について検索APIで取得し DB に保存する。
+    {code4: edinet_code} を返す。
+    """
+    conn = get_conn()
+    cur  = conn.cursor()
+    ph   = ",".join(["%s"] * len(codes))
+    cur.execute(
+        f"SELECT code, edinet_code FROM stocks WHERE code IN ({ph})", codes
+    )
+    existing = {r[0]: r[1] for r in cur.fetchall()}
+    cur.close()
+    conn.close()
+
+    missing = [c for c in codes if not existing.get(c)]
+    if not missing:
+        return existing
+
+    print(f"  edinet_code 検索: {len(missing)} 銘柄...")
+    result = dict(existing)
+    updated = 0
+
+    for code4 in missing:
+        ec = _search_edinet_code(code4)
+        if ec:
+            result[code4] = ec
+            conn = get_conn()
+            cur  = conn.cursor()
+            cur.execute(
+                "UPDATE stocks SET edinet_code = %s WHERE code = %s",
+                (ec, code4),
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+            updated += 1
+
+    print(f"  edinet_code 取得・更新: {updated} 件")
+    return result
+
+
+# ─── edinetdb.jp text-blocks API ─────────────────────────────────────────────
+def fetch_biz_from_edinetdb(edinet_code: str) -> str | None:
+    """
+    edinetdb.jp から事業内容テキストを取得する。
+    WANT_SECTIONS の順で連結して返す。失敗時は None。
+    """
+    try:
+        time.sleep(API_DELAY)
+        r = requests.get(
+            f"{EDINETDB_BASE}/companies/{edinet_code}/text-blocks",
+            params={"section": "business-overview"},
+            headers=EDB_HEADERS,
+            timeout=20,
         )
-        for fname in xbrl_files:
-            text = _extract_from_xbrl(z.read(fname))
-            if text:
-                return text
+        if r.status_code == 404:
+            return None
+        if r.status_code == 429:
+            print("    [!] レート制限到達（429）")
+            return None
+        r.raise_for_status()
+
+        blocks = {b["section"]: b["text"] for b in r.json().get("data", [])}
+
+        parts = []
+        for section in WANT_SECTIONS:
+            if section in blocks and blocks[section].strip():
+                parts.append(f"【{section}】\n{blocks[section].strip()}")
+
+        if parts:
+            combined = "\n\n".join(parts)
+            return combined[:MAX_BIZ_LEN]
 
     except Exception as e:
-        print(f"    [XBRL] {doc_id}: {e}")
+        print(f"    [edinetdb] {edinet_code}: {e}")
     return None
 
 
 # ─── フォールバック: kabutan.jp ─────────────────────────────────────────────
 def _kabutan_fallback(code4: str) -> str | None:
-    """
-    kabutan.jp の事業内容テキストを取得する（EDINET 失敗時のフォールバック）。
-    """
     try:
         url = f"https://kabutan.jp/stock/info?code={code4}"
         r   = requests.get(url, headers={"User-Agent": UA}, timeout=10)
@@ -272,44 +187,34 @@ def _kabutan_fallback(code4: str) -> str | None:
     return None
 
 
+# ─── DB 保存 ─────────────────────────────────────────────────────────────────
+def _save_biz(code4: str, text: str):
+    conn = get_conn()
+    cur  = conn.cursor()
+    cur.execute(
+        "UPDATE stocks SET business_description = %s, biz_updated_at = NOW() WHERE code = %s",
+        (text, code4),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 # ─── メイン ──────────────────────────────────────────────────────────────────
 def run(target_codes: list = None, force: bool = False):
-    if not API_KEY:
-        print("=" * 60)
-        print("  ERROR: EDINET_API_KEY が設定されていません。")
-        print("=" * 60)
-        print()
-        print("  1. 以下で無料APIキーを取得（メール登録のみ・即時発行）:")
-        print("     https://api.edinet-api.fsa.go.jp/")
-        print()
-        print("  2. .env に追記:")
-        print("     EDINET_API_KEY=<取得したキー>")
-        print()
-        print("  3. 再度実行:")
-        print("     python3 edinet_biz.py")
+    if not EDINETDB_KEY:
+        print("ERROR: EDINETDB_API_KEY が設定されていません。")
+        print("edinetdb.jp でキーを取得して .env に追記してください。")
         return
 
     print("=" * 60)
-    print("  EDINET 事業内容バッチ取得")
+    print("  edinetdb.jp 事業内容バッチ取得")
     print("=" * 60)
-    print()
 
-    # DB カラムの確保
     _ensure_columns()
 
-    # ─ Step 1: EDINET コードマップを取得して DB 更新 ─
-    print("[Step 1] EDINET コードマップ更新")
-    codemap = load_edinet_codemap()
-    update_edinet_codes(codemap)
-    print()
-
-    # ─ Step 2: 書類インデックス構築 ─
-    print("[Step 2] 書類インデックス構築（過去15ヶ月）")
-    doc_index = build_doc_index()
-    print()
-
-    # ─ Step 3: 対象銘柄を取得 ─
-    print("[Step 3] 事業内容を取得・保存")
+    # 対象銘柄を取得
+    print("\n[Step 1] 対象銘柄を特定")
     conn = get_conn()
     cur  = conn.cursor()
 
@@ -324,7 +229,7 @@ def run(target_codes: list = None, force: bool = False):
         cur.execute("""
             SELECT code, edinet_code, business_description
             FROM stocks
-            WHERE is_active = TRUE AND edinet_code IS NOT NULL
+            WHERE is_active = TRUE
             ORDER BY code
         """)
 
@@ -333,7 +238,7 @@ def run(target_codes: list = None, force: bool = False):
     conn.close()
 
     if not force:
-        rows = [r for r in rows if r[2] is None]   # 未取得分のみ
+        rows = [r for r in rows if r[2] is None]
 
     total = len(rows)
     print(f"  対象: {total} 銘柄")
@@ -341,58 +246,64 @@ def run(target_codes: list = None, force: bool = False):
         print("  全銘柄取得済みです（--force で強制更新）")
         return
 
-    # 推定時間
-    est_sec = total * (API_DELAY * 2 + 2)  # XBRL DL 平均2秒
-    print(f"  推定時間: {est_sec/60:.0f}〜{est_sec/60*1.5:.0f} 分")
+    print(f"  今回の上限: {FREE_LIMIT} 件（無料プラン）")
     print()
 
-    ok = 0; fail_xbrl = 0; fail_all = 0
+    # edinet_code を事前取得（検索API・認証不要）
+    all_codes = [r[0] for r in rows[:FREE_LIMIT + 50]]  # 多少余分に取得
+    edinet_map = populate_edinet_codes(all_codes)
+    print()
+
+    # 事業内容を取得・保存
+    print("[Step 2] 事業内容を取得・保存")
+    ok = 0; fallback = 0; fail = 0
+    api_calls = 0
     start_ts = time.time()
 
-    for i, (code4, ec, _) in enumerate(rows, 1):
-        doc_id   = doc_index.get(ec, "")
+    for i, (code4, _, _) in enumerate(rows, 1):
+        if api_calls >= FREE_LIMIT:
+            print(f"\n  [!] 無料プラン上限 {FREE_LIMIT} 件に到達。")
+            print(f"      本日分: {ok} 件取得成功（edinetdb.jp）。明日また実行してください。")
+            break
+
+        ec       = edinet_map.get(code4)
         biz_text = None
 
-        # EDINET から取得
-        if doc_id:
-            biz_text = fetch_biz_from_edinet(doc_id)
-            if not biz_text:
-                fail_xbrl += 1
+        # edinetdb.jp から取得
+        if ec:
+            biz_text = fetch_biz_from_edinetdb(ec)
+            api_calls += 1
+            if biz_text:
+                ok += 1
 
         # フォールバック: kabutan.jp
         if not biz_text:
             time.sleep(0.3)
             biz_text = _kabutan_fallback(code4)
+            if biz_text:
+                fallback += 1
+            else:
+                fail += 1
 
-        # DB 保存
         if biz_text:
-            conn = get_conn()
-            cur  = conn.cursor()
-            cur.execute(
-                "UPDATE stocks SET business_description = %s, biz_updated_at = NOW() "
-                "WHERE code = %s",
-                (biz_text, code4),
-            )
-            conn.commit()
-            cur.close()
-            conn.close()
-            ok += 1
-        else:
-            fail_all += 1
+            _save_biz(code4, biz_text)
 
-        if i % 50 == 0 or i == total:
+        if i % 10 == 0 or i == total or i == 1:
             elapsed = time.time() - start_ts
             remain  = (elapsed / i * (total - i)) / 60 if i < total else 0
-            print(f"  [{i:>4}/{total}]  OK:{ok:>4}  XBRL失敗:{fail_xbrl:>4}  全失敗:{fail_all:>3}  "
-                  f"残り約{remain:.0f}分")
+            print(f"  [{i:>4}/{total}]  OK:{ok:>4}(edinet)  KB:{fallback:>4}(kabutan)  "
+                  f"失敗:{fail:>3}  API使用:{api_calls}  残り約{remain:.0f}分")
 
     elapsed_m = (time.time() - start_ts) / 60
     print()
     print("=" * 60)
     print(f"  完了（{elapsed_m:.1f}分）")
-    print(f"  取得成功: {ok} 銘柄")
-    print(f"  XBRL失敗→kabutan: {fail_xbrl} 銘柄")
-    print(f"  全失敗: {fail_all} 銘柄")
+    print(f"  edinetdb.jp 取得: {ok} 銘柄")
+    print(f"  kabutan フォールバック: {fallback} 銘柄")
+    print(f"  全失敗: {fail} 銘柄")
+    if total > ok + fallback + fail:
+        remaining = total - ok - fallback - fail
+        print(f"  未処理（明日以降）: {remaining} 銘柄")
     print("=" * 60)
 
 
