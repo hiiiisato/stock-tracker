@@ -358,6 +358,18 @@ tr:hover { background: #1c2128; }
 .cg-chg  { font-size: 12px; font-weight: 600; text-align: right; }
 .cg-plot { height: 150px; }
 .cg-loading { text-align: center; color: #8b949e; font-size: 12px; padding: 40px; }
+.cg-metrics {
+  display: flex; border-top: 1px solid #21262d; background: #0d1117; padding: 4px 0;
+}
+.cg-metric { flex: 1; text-align: center; padding: 3px 2px; }
+.cg-metric-lbl { font-size: 9px; color: #484f58; display: block; }
+.cg-metric-val { font-size: 11px; color: #8b949e; font-weight: 600; display: block; }
+.cg-ma-btn {
+  background: transparent; border: 1px solid #30363d; border-radius: 4px;
+  color: #484f58; font-size: 11px; padding: 2px 7px; cursor: pointer; transition: all 0.15s;
+}
+.cg-ma-btn[data-ma="25"].active { color: #f0b429; border-color: #f0b429; }
+.cg-ma-btn[data-ma="75"].active { color: #a371f7; border-color: #a371f7; }
 
 /* ─ Responsive ─ */
 @media (max-width: 900px) { .cg-grid { grid-template-columns: repeat(2, 1fr); } }
@@ -369,9 +381,22 @@ tr:hover { background: #1c2128; }
   .grid-aside { grid-template-columns: 1fr; gap: 12px; }
   .page-title { font-size: 17px; }
   th, td { padding: 6px 8px; font-size: 12px; }
-  .nav-logo { font-size: 13px; margin-right: 12px; }
   .idx-grid { grid-template-columns: repeat(2, 1fr); }
   .idx-value { font-size: 16px; }
+  /* ─ Mobile nav: 2行レイアウト ─ */
+  .nav { flex-wrap: wrap; height: auto; padding: 0 12px; }
+  .nav-logo { font-size: 13px; margin-right: 0; padding: 13px 0; flex: 1 0 auto; }
+  .nav-search { margin-left: 0; padding: 10px 0; }
+  .nav-search-input { width: 140px; }
+  .nav-search-input:focus { width: 180px; }
+  .nav-links {
+    order: 3; width: 100%;
+    border-top: 1px solid #21262d;
+    padding: 4px 0; gap: 0;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+  .nav-links::-webkit-scrollbar { display: none; }
+  .nav-link { height: 36px; font-size: 12px; padding: 0 10px; }
 }
 """
 
@@ -1381,6 +1406,10 @@ def _chart_grid_toolbar(codes_js: str, show_added_sort: bool = False) -> str:
       <button class="cg-period-btn" data-period="6M">6M</button>
       <button class="cg-period-btn" data-period="1Y">1Y</button>
     </div>
+    <div style="display:flex;gap:3px">
+      <button class="cg-ma-btn" data-ma="25">MA25</button>
+      <button class="cg-ma-btn" data-ma="75">MA75</button>
+    </div>
     <select class="cg-sort-select" id="cg-sort">
       {added_opt}
       <option value="chg_desc">前日比 ↓</option>
@@ -1397,9 +1426,10 @@ def _chart_grid_script() -> str:
     return """<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <script>
 (function(){
-  var PERIOD = '1M';
-  var allData = null;
-  var loaded  = false;
+  var PERIOD    = '1M';
+  var ACTIVE_MA = [];
+  var allData   = null;
+  var loaded    = false;
 
   function show(id, vis) {
     var el = document.getElementById(id);
@@ -1467,6 +1497,9 @@ def _chart_grid_script() -> str:
       var chgStr  = chg != null ? (chg > 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
       var chgCol  = chg > 0 ? '#E84040' : chg < 0 ? '#3A9FE0' : '#8b949e';
       var chartId = 'cgc-' + item.code;
+      var fmtPer  = item.per  ? item.per.toFixed(1)  + 'x' : '—';
+      var fmtPbr  = item.pbr  ? item.pbr.toFixed(2)  + 'x' : '—';
+      var fmtYld  = item.div_yield ? item.div_yield.toFixed(2) + '%' : '—';
       var card    = document.createElement('div');
       card.className = 'cg-card';
       card.innerHTML =
@@ -1476,18 +1509,35 @@ def _chart_grid_script() -> str:
           '<div><div class="cg-price">' + (item.close ? item.close.toLocaleString() : '-') + '</div>' +
           '<div class="cg-chg" style="color:' + chgCol + '">' + chgStr + '</div></div>' +
         '</div>' +
-        '<div id="' + chartId + '" class="cg-plot"></div>';
+        '<div id="' + chartId + '" class="cg-plot"></div>' +
+        '<div class="cg-metrics">' +
+          '<div class="cg-metric"><span class="cg-metric-lbl">PER</span><span class="cg-metric-val">' + fmtPer + '</span></div>' +
+          '<div class="cg-metric"><span class="cg-metric-lbl">PBR</span><span class="cg-metric-val">' + fmtPbr + '</span></div>' +
+          '<div class="cg-metric"><span class="cg-metric-lbl">配当</span><span class="cg-metric-val">' + fmtYld + '</span></div>' +
+        '</div>';
       card.querySelector('.cg-card-hd').addEventListener('click', function() {
         window.location.href = '/stock/' + item.code;
       });
       grid.appendChild(card);
-      drawChart(chartId, filterPrices(item.prices));
+      drawChart(chartId, filterPrices(item.prices), item.prices);
     });
   }
 
-  function drawChart(id, prices) {
+  function calcMA(closes, period) {
+    var result = [];
+    for (var i = 0; i < closes.length; i++) {
+      if (i < period - 1) { result.push(null); continue; }
+      var sum = 0;
+      for (var j = i - period + 1; j <= i; j++) sum += closes[j];
+      result.push(sum / period);
+    }
+    return result;
+  }
+
+  function drawChart(id, prices, fullPrices) {
     if (!prices.length || typeof Plotly === 'undefined') return;
-    Plotly.react(id, [{
+    var minDate = prices[0].date;
+    var traces  = [{
       type: 'candlestick',
       x:     prices.map(function(p) { return p.date;  }),
       open:  prices.map(function(p) { return p.open;  }),
@@ -1496,10 +1546,27 @@ def _chart_grid_script() -> str:
       close: prices.map(function(p) { return p.close; }),
       increasing: {line:{color:'#E84040'}, fillcolor:'rgba(232,64,64,0.5)'},
       decreasing: {line:{color:'#3A9FE0'}, fillcolor:'rgba(58,159,224,0.5)'},
-    }], {
+      showlegend: false,
+    }];
+    var maColors = {'25':'#f0b429', '75':'#a371f7'};
+    var src = fullPrices && fullPrices.length ? fullPrices : prices;
+    ACTIVE_MA.forEach(function(period) {
+      var maVals = calcMA(src.map(function(p){return p.close;}), period);
+      var maDates = [], maData = [];
+      src.forEach(function(p, i) {
+        if (p.date >= minDate) { maDates.push(p.date); maData.push(maVals[i]); }
+      });
+      traces.push({
+        type:'scatter', mode:'lines',
+        x: maDates, y: maData,
+        line:{color: maColors[String(period)] || '#fff', width:1},
+        showlegend:false, hoverinfo:'skip',
+      });
+    });
+    Plotly.react(id, traces, {
       paper_bgcolor:'#161b22', plot_bgcolor:'#161b22',
       height:150, margin:{l:42,r:4,t:4,b:20},
-      xaxis:{type:'category',nticks:4,tickfont:{size:9},color:'#6e7681',showgrid:false},
+      xaxis:{type:'category',nticks:4,tickfont:{size:9},color:'#6e7681',showgrid:false,rangeslider:{visible:false}},
       yaxis:{tickfont:{size:9},color:'#6e7681',gridcolor:'#21262d',side:'right'},
       showlegend:false,
     }, {responsive:true, displayModeBar:false});
@@ -1516,6 +1583,16 @@ def _chart_grid_script() -> str:
       document.querySelectorAll('.cg-period-btn').forEach(function(b) { b.classList.remove('active'); });
       btn.classList.add('active');
       PERIOD = btn.dataset.period;
+      if (allData) buildGrid();
+    });
+  });
+
+  document.querySelectorAll('.cg-ma-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var period = parseInt(btn.dataset.ma);
+      var idx = ACTIVE_MA.indexOf(period);
+      if (idx >= 0) { ACTIVE_MA.splice(idx, 1); btn.classList.remove('active'); }
+      else          { ACTIVE_MA.push(period);    btn.classList.add('active');    }
       if (allData) buildGrid();
     });
   });
@@ -2899,7 +2976,7 @@ def api_chart_grid():
     rows = cur.fetchall()
 
     cur.execute(f"""
-        SELECT lp.code, lp.close, lp.change_pct, f.market_cap
+        SELECT lp.code, lp.close, lp.change_pct, f.market_cap, f.per, f.pbr, f.div_yield
         FROM (
             SELECT dp.code, dp.close, dp.change_pct
             FROM daily_prices dp
@@ -2909,7 +2986,8 @@ def api_chart_grid():
         ) lp
         LEFT JOIN stock_fundamentals f ON lp.code = f.code
     """, (*codes,))
-    latest = {r[0]: {"close": r[1], "change_pct": r[2], "market_cap": r[3]}
+    latest = {r[0]: {"close": r[1], "change_pct": r[2], "market_cap": r[3],
+                     "per": r[4], "pbr": r[5], "div_yield": r[6]}
               for r in cur.fetchall()}
 
     cur.close()
@@ -2934,9 +3012,12 @@ def api_chart_grid():
         result.append({
             "code":       code,
             "name":       name_map.get(code, code),
-            "close":      float(lat["close"]) if lat.get("close") else None,
+            "close":      float(lat["close"])      if lat.get("close")      else None,
             "change_pct": float(lat["change_pct"]) if lat.get("change_pct") is not None else None,
             "market_cap": float(lat["market_cap"]) if lat.get("market_cap") else None,
+            "per":        float(lat["per"])        if lat.get("per")        else None,
+            "pbr":        float(lat["pbr"])        if lat.get("pbr")        else None,
+            "div_yield":  float(lat["div_yield"])  if lat.get("div_yield")  else None,
             "prices":     price_map.get(code, []),
         })
 
