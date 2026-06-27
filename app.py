@@ -1937,7 +1937,8 @@ def _build_stock_page(code: str) -> str:
 
     # 銘柄基本情報
     cur.execute("""
-        SELECT s.code, s.name, m.name AS market, sec.name AS sector
+        SELECT s.code, s.name, m.name AS market, sec.name AS sector,
+               s.business_description, s.biz_updated_at
         FROM stocks s
         LEFT JOIN markets  m   ON s.market_id  = m.id
         LEFT JOIN sectors  sec ON s.sector_id  = sec.id
@@ -1947,7 +1948,7 @@ def _build_stock_page(code: str) -> str:
     if not row:
         cur.close(); conn.close()
         abort(404)
-    s_code, s_name, market, sector = row
+    s_code, s_name, market, sector, s_biz_desc, s_biz_updated = row
 
     # 価格データ（直近3年）
     from_dt = date.today() - timedelta(days=365 * 3)
@@ -2298,20 +2299,40 @@ def _build_stock_page(code: str) -> str:
         )
 
     # ─ 会社概要 ─
-    co_info = _fetch_company_info(s_code)
     co_items = []
     if market:  co_items.append(f'<div class="co-kv">上場市場 <span>{market}</span></div>')
     if sector:  co_items.append(f'<div class="co-kv">セクター <span>{sector}</span></div>')
     if shares:  co_items.append(f'<div class="co-kv">発行済株式数 <span>{int(shares/1e4):,}万株</span></div>')
     if mktcap:  co_items.append(f'<div class="co-kv">時価総額 <span>{_mktcap(mktcap)}</span></div>')
-    for kab_key, label in [("設立","設立"), ("上場","上場"), ("資本金","資本金"), ("従業員","従業員"), ("決算","決算")]:
-        v = co_info.get(kab_key, "")
-        if v:
-            co_items.append(f'<div class="co-kv">{label} <span>{v}</span></div>')
-    biz = co_info.get("business", "")
+
+    # 事業内容: EDINETバッチ取得済みならDBから表示、未取得ならkabutan fallback
+    biz = s_biz_desc or ""
+    biz_src = ""
+    if biz:
+        biz_updated_str = str(s_biz_updated)[:10] if s_biz_updated else ""
+        biz_src = f'<span style="font-size:10px;color:#484f58;margin-left:8px">有価証券報告書 {biz_updated_str}</span>'
+    else:
+        # DBに未登録の場合だけ kabutan からリアルタイム取得（フォールバック）
+        co_info = _fetch_company_info(s_code)
+        biz = co_info.get("business", "")
+        for kab_key, label in [("設立","設立"), ("上場","上場"), ("資本金","資本金"), ("従業員","従業員"), ("決算","決算")]:
+            v = co_info.get(kab_key, "")
+            if v:
+                co_items.append(f'<div class="co-kv">{label} <span>{v}</span></div>')
+
+    # 事業内容テキストを段落に分割して表示
+    if biz:
+        biz_escaped = biz.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        biz_html = "".join(
+            f'<p style="margin:0 0 8px">{p.strip()}</p>'
+            for p in biz_escaped.split("\n\n") if p.strip()
+        ) or f'<p style="margin:0">{biz_escaped[:500]}</p>'
+    else:
+        biz_html = ""
+
     co_html = f"""<div class="co-box">
-  <div class="co-title">会社概要</div>
-  {f'<div class="co-desc">{biz}</div>' if biz else ""}
+  <div class="co-title">会社概要{biz_src}</div>
+  {f'<div class="co-desc">{biz_html}</div>' if biz_html else ""}
   <div class="co-meta">{"".join(co_items)}</div>
 </div>"""
 

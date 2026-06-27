@@ -6,6 +6,7 @@ load_dotenv()
 
 JQUANTS_API_KEY = os.environ["JQUANTS_API_KEY"]
 GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY", "")
+EDINET_API_KEY  = os.environ.get("EDINET_API_KEY", "")
 JQUANTS_BASE_URL = "https://api.jquants.com/v2"
 JQUANTS_HEADERS = {"x-api-key": JQUANTS_API_KEY}
 

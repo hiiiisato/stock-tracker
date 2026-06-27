@@ -22,4 +22,6 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false        # Render ダッシュボードで手動設定（Google AI Studio で無料取得）
+      - key: EDINET_API_KEY
+        sync: false        # Render ダッシュボードで手動設定（https://api.edinet-api.fsa.go.jp/ で無料取得）
       # TIDB_SSL_CA は未設定のまま → certifi を自動使用（Linux 対応済み）
