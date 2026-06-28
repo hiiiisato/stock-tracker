@@ -2971,35 +2971,6 @@ def _build_stock_page(code: str) -> str:
         except Exception:
             return None
 
-    # financialsテーブルから BPS/PBR/ROE/ROA を自前計算（Yahoo Finance より正確）
-    # インデックス: [0]period_end [1]type [2]rev [3]op [4]ord [5]net [6]ta [7]te [8]cf
-    if fin_annual_rows:
-        _lat  = fin_annual_rows[-1]
-        _prev = fin_annual_rows[-2] if len(fin_annual_rows) >= 2 else None
-        _lat_net = float(_lat[5]) if _lat[5] is not None else None
-        _lat_ta  = float(_lat[6]) if _lat[6] is not None else None
-        _lat_te  = float(_lat[7]) if _lat[7] is not None else None
-        _prev_te = float(_prev[7]) if _prev and _prev[7] is not None else _lat_te
-        _prev_ta = float(_prev[6]) if _prev and _prev[6] is not None else _lat_ta
-        # BPS = 自己資本 ÷ 発行済株式数、PBR = 株価 ÷ BPS
-        if _lat_te and shares:
-            bps_val = round(_lat_te / float(shares), 2)
-            pbr     = round(float(cur_price) / bps_val, 2) if cur_price and bps_val > 0 else pbr
-        # ROE = 純利益 ÷ 平均自己資本（小数で保持: _pct()が×100するため）
-        if _lat_net is not None and _lat_te:
-            _avg_te = (_lat_te + _prev_te) / 2
-            try:
-                roe = round(_lat_net / _avg_te, 4) if _avg_te else None
-            except Exception:
-                pass
-        # ROA = 純利益 ÷ 平均総資産（同上）
-        if _lat_net is not None and _lat_ta:
-            _avg_ta = (_lat_ta + _prev_ta) / 2
-            try:
-                roa = round(_lat_net / _avg_ta, 4) if _avg_ta else None
-            except Exception:
-                pass
-
     # 配当を年別に集計 (ex_date の年で集計)
     _div_by_year: dict = _col.defaultdict(float)
     for _ex_date, _amount in div_all_rows:
@@ -3013,7 +2984,7 @@ def _build_stock_page(code: str) -> str:
         #   [2]operating_income [3]ordinary_income [4]net_income [5]div_per_share
         # latest_te: 最新実績の自己資本（予想ROE計算用）
         result = []
-        for r in rows:
+        for i, r in enumerate(rows):
             period_end, period_type = str(r[0]), r[1]
             lbl = period_end[:7].replace("-", "/")
             rev  = _to_oku(r[2])
@@ -3025,13 +2996,28 @@ def _build_stock_page(code: str) -> str:
             cf   = _to_oku(r[8])
             yr   = period_end[:4]
             dps  = round(_div_by_year[yr], 1) if yr in _div_by_year else None
-            # ROE = 当期純利益 / 自己資本 × 100
-            roe_val = _safe_pct(r[5], r[7])
+            # ROE = 純利益 ÷ 平均自己資本（当期・前期平均）× 100
+            cur_te = float(r[7]) if r[7] is not None else None
+            cur_ta = float(r[6]) if r[6] is not None else None
+            prev_te = float(rows[i-1][7]) if i > 0 and rows[i-1][7] is not None else cur_te
+            prev_ta = float(rows[i-1][6]) if i > 0 and rows[i-1][6] is not None else cur_ta
+            avg_te = (cur_te + prev_te) / 2 if cur_te is not None and prev_te is not None else cur_te
+            avg_ta = (cur_ta + prev_ta) / 2 if cur_ta is not None and prev_ta is not None else cur_ta
+            roe_val = _safe_pct(r[5], avg_te)
+            # ROA = 純利益 ÷ 平均総資産 × 100
+            roa_val = _safe_pct(r[5], avg_ta)
             # EPS = 当期純利益(円) / 発行済株式数
             eps_val = None
             if shares_cnt and r[5] is not None:
                 try:
                     eps_val = round(float(r[5]) / float(shares_cnt), 1)
+                except Exception:
+                    pass
+            # BPS = 自己資本 / 発行済株式数
+            bps_val_row = None
+            if shares_cnt and r[7] is not None:
+                try:
+                    bps_val_row = round(float(r[7]) / float(shares_cnt), 1)
                 except Exception:
                     pass
             # 配当性向 = DPS / EPS × 100
@@ -3045,7 +3031,9 @@ def _build_stock_page(code: str) -> str:
                 "op_mgn":  _safe_pct(r[3], r[2]),
                 "ord_mgn": _safe_pct(r[4], r[2]),
                 "net_mgn": _safe_pct(r[5], r[2]),
-                "dps": dps, "payout": payout_val, "roe": roe_val, "eps": eps_val,
+                "dps": dps, "payout": payout_val,
+                "roe": roe_val, "roa": roa_val,
+                "eps": eps_val, "bps": bps_val_row,
                 "is_forecast": False,
             })
         if fc_rows:
@@ -3105,6 +3093,30 @@ def _build_stock_page(code: str) -> str:
     _latest_te_raw = float(fin_annual_rows[-1][7]) if fin_annual_rows and fin_annual_rows[-1][7] is not None else None
     fin_annual_data    = _build_fin_rows(fin_annual_rows, fc_rows=forecast_rows, shares_cnt=shares, latest_te=_latest_te_raw)
     fin_quarterly_data = _build_fin_rows(fin_quarterly_rows, shares_cnt=shares)
+
+    # 概要タブの詳細指標を fin_annual_data から一元導出（計算ロジックの単一化）
+    # fin_annual_data と業績タブで完全に同じ値・同じ計算式を使う
+    _fin_acts = [r for r in fin_annual_data if not r.get('is_forecast')]
+    if _fin_acts:
+        _r = _fin_acts[-1]
+        # ROE/ROA: % → 小数（_pct()が×100するため）
+        if _r.get('roe') is not None:
+            roe = round(_r['roe'] / 100, 4)
+        if _r.get('roa') is not None:
+            roa = round(_r['roa'] / 100, 4)
+        # 営業利益率・純利益率（Yahoo Finance 値を上書き）
+        if _r.get('op_mgn') is not None:
+            op_mgn = round(_r['op_mgn'] / 100, 4)
+        if _r.get('net_mgn') is not None:
+            pr_mgn = round(_r['net_mgn'] / 100, 4)
+        # 配当性向
+        if _r.get('payout') is not None:
+            payout = round(_r['payout'] / 100, 4)
+        # BPS/PBR
+        if _r.get('bps') is not None:
+            bps_val = _r['bps']
+            if cur_price and bps_val > 0:
+                pbr = round(float(cur_price) / bps_val, 2)
 
     fin_annual_json    = _json.dumps(fin_annual_data,    ensure_ascii=False)
     fin_quarterly_json = _json.dumps(fin_quarterly_data, ensure_ascii=False)
