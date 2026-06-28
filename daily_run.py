@@ -156,15 +156,29 @@ def run(init: bool = False, rankings_only: bool = False):
             print(f"  エラー: {e}")
             _log("metrics_recompute", "failed", error=str(e))
 
-    # 株価テクニカル指標（MA・騰落率・乖離率）を毎日計算
+    # 株価テクニカル指標（MA・騰落率・乖離率・RSI など）を毎日計算
     if not rankings_only:
-        print("\n[テクニカル指標] MA・騰落率・乖離率を計算中...")
+        print("\n[テクニカル指標] MA・騰落率・RSI・出来高比率を計算中...")
         try:
             n = compute_price_stats()
             _log("price_stats", "done", n)
         except Exception as e:
             print(f"  エラー: {e}")
             _log("price_stats", "failed", error=str(e))
+
+    # スイングトレード候補のスコアリング & LINE 通知
+    if not rankings_only:
+        print("\n[スイング] 候補スコアリング & LINE 通知...")
+        try:
+            from swing_scorer import score_all
+            from swing_notifier import send as send_swing_line
+            candidates = score_all()
+            print(f"  候補: {len(candidates)} 銘柄（スコア55以上）")
+            send_swing_line(candidates)
+            _log("swing_score", "done", len(candidates))
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("swing_score", "failed", error=str(e))
 
     # ランキング計算
     step = "5/5" if datetime.now().weekday() == 0 else "4/4"
