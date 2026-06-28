@@ -2771,7 +2771,7 @@ def _build_stock_page(code: str) -> str:
     fund = dict(zip(fund_cols, fund_raw)) if fund_raw else {}
 
     # 直近1年の配当金合計（dividendsテーブルから）
-    from_div = date.today() - timedelta(days=365)
+    from_div = date.today() - timedelta(days=366)
     cur.execute("""
         SELECT SUM(amount) FROM dividends
         WHERE code = %s AND ex_date >= %s
