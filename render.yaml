@@ -58,3 +58,24 @@ services:
         sync: false        # LINE Messaging API チャネルアクセストークン（スイング通知用）
       - key: LINE_USER_ID
         sync: false        # 通知先 LINE ユーザーID（U から始まる文字列）
+
+  - type: cron
+    name: edinet-text-daily
+    env: python
+    # 毎日 23:45 JST（UTC 14:45）に実行。未取得銘柄から銘柄コード順に最大80件取得。
+    schedule: "45 14 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python edinet_texts.py --all
+    envVars:
+      - key: TIDB_HOST
+        sync: false
+      - key: TIDB_PORT
+        value: "4000"
+      - key: TIDB_DATABASE
+        value: stock_tracker
+      - key: TIDB_USER
+        sync: false
+      - key: TIDB_PASSWORD
+        sync: false
+      - key: EDINETDB_API_KEY
+        sync: false
