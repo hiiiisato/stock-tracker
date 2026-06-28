@@ -2923,10 +2923,39 @@ def _build_stock_page(code: str) -> str:
     # 最新株価で再計算（PER/PBR/時価総額は毎日変わる）
     mktcap  = cur_price * shares if cur_price and shares else _fv("market_cap")
     per_ttm = cur_price / eps_ttm if cur_price and eps_ttm and eps_ttm > 0 else _fv("per")
-    per_fwd = cur_price / eps_fwd if cur_price and eps_fwd and eps_fwd > 0 else None
     pbr     = cur_price / bps_val if cur_price and bps_val and bps_val > 0 else _fv("pbr")
     dps_use = div_ttm if div_ttm else ann_dps
     div_yld = (dps_use / cur_price * 100) if dps_use and cur_price else _fv("div_yield")
+
+    # 会社予想（financials_forecast）ベースで PER・配当利回りを上書き
+    # forecast_rows: [0]fiscal_year_end [1]revenue [2]op [3]ord [4]net_income [5]div_per_share
+    _today_str = str(date.today())
+    _fc_near = None
+    for _row in forecast_rows:
+        if str(_row[0]) >= _today_str:
+            _fc_near = _row
+            break
+    if _fc_near is None and forecast_rows:
+        _fc_near = forecast_rows[-1]
+
+    fc_eps = None
+    fc_dps = None
+    if _fc_near is not None:
+        if _fc_near[4] is not None and shares:
+            try:
+                fc_eps = round(float(_fc_near[4]) / float(shares), 1)
+            except Exception:
+                pass
+        if _fc_near[5] is not None:
+            try:
+                fc_dps = float(_fc_near[5])
+            except Exception:
+                pass
+
+    per_fwd = round(cur_price / fc_eps, 1) if cur_price and fc_eps and fc_eps > 0 else None
+    if fc_dps is not None and cur_price:
+        dps_use = fc_dps
+        div_yld = round(fc_dps / cur_price * 100, 2)
 
     fund_updated = str(fund.get("updated_at", ""))[:10] or "—"
 
@@ -3072,17 +3101,23 @@ def _build_stock_page(code: str) -> str:
 </div>"""
 
     if has_fund:
+        _per_lbl  = "PER（予想）" if per_fwd else "PER（実績）"
+        _per_val  = _fmtv(per_fwd,  "{:.1f}", "倍") if per_fwd  and 0 < per_fwd  < 500 else \
+                    _fmtv(per_ttm,  "{:.1f}", "倍") if per_ttm  and 0 < per_ttm  < 500 else "—"
+        _per_sub  = f"予EPS {_fmtv(fc_eps, '{:.0f}', '円')}" if fc_eps else \
+                    f"実EPS {_fmtv(eps_ttm, '{:.2f}', '円')}"
+        _div_lbl  = "配当利回り（予）" if fc_dps is not None else "配当利回り"
+        _div_sub  = f"予想 {_fmtv(dps_use, '{:.0f}', '円')}/株" if fc_dps is not None else \
+                    f"年間 {_fmtv(dps_use, '{:.0f}', '円')}"
         key_metrics_html = f"""<div class="key-metrics">
   {_km("時価総額", _mktcap(mktcap))}
-  {_km("PER（実績）",
-       _fmtv(per_ttm, "{:.1f}", "倍") if per_ttm and 0 < per_ttm < 500 else "—",
-       f"EPS {_fmtv(eps_ttm, '{:.2f}', '円')}")}
+  {_km(_per_lbl, _per_val, _per_sub)}
   {_km("PBR",
        _fmtv(pbr, "{:.2f}", "倍") if pbr and 0 < pbr < 100 else "—",
        f"BPS {_fmtv(bps_val, '{:,.0f}', '円')}")}
-  {_km("配当利回り",
+  {_km(_div_lbl,
        _fmtv(div_yld, "{:.2f}", "%") if div_yld else "—",
-       f"年間 {_fmtv(dps_use, '{:.0f}', '円')}",
+       _div_sub,
        "color:#ffa657" if div_yld and float(div_yld) >= 3 else "")}
 </div>"""
     else:
