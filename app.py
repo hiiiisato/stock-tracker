@@ -2985,24 +2985,33 @@ def _build_stock_page(code: str) -> str:
         if _lat_te and shares:
             bps_val = round(_lat_te / float(shares), 2)
             pbr     = round(float(cur_price) / bps_val, 2) if cur_price and bps_val > 0 else pbr
-        # ROE = 純利益 ÷ 平均自己資本 × 100
+        # ROE = 純利益 ÷ 平均自己資本（小数で保持: _pct()が×100するため）
         if _lat_net is not None and _lat_te:
-            roe = _safe_pct(_lat_net, (_lat_te + _prev_te) / 2)
-        # ROA = 純利益 ÷ 平均総資産 × 100
+            _avg_te = (_lat_te + _prev_te) / 2
+            try:
+                roe = round(_lat_net / _avg_te, 4) if _avg_te else None
+            except Exception:
+                pass
+        # ROA = 純利益 ÷ 平均総資産（同上）
         if _lat_net is not None and _lat_ta:
-            roa = _safe_pct(_lat_net, (_lat_ta + _prev_ta) / 2)
+            _avg_ta = (_lat_ta + _prev_ta) / 2
+            try:
+                roa = round(_lat_net / _avg_ta, 4) if _avg_ta else None
+            except Exception:
+                pass
 
     # 配当を年別に集計 (ex_date の年で集計)
     _div_by_year: dict = _col.defaultdict(float)
     for _ex_date, _amount in div_all_rows:
         _div_by_year[str(_ex_date)[:4]] += float(_amount or 0)
 
-    def _build_fin_rows(rows, fc_rows=None, shares_cnt=None):
+    def _build_fin_rows(rows, fc_rows=None, shares_cnt=None, latest_te=None):
         # r indices (financials): [0]period_end [1]period_type [2]revenue
         #   [3]operating_income [4]ordinary_income [5]net_income
         #   [6]total_assets [7]total_equity [8]cf_operating
         # r indices (forecast):   [0]fiscal_year_end [1]revenue
         #   [2]operating_income [3]ordinary_income [4]net_income [5]div_per_share
+        # latest_te: 最新実績の自己資本（予想ROE計算用）
         result = []
         for r in rows:
             period_end, period_type = str(r[0]), r[1]
@@ -3057,6 +3066,13 @@ def _build_stock_page(code: str) -> str:
                 fc_payout = None
                 if dps is not None and fc_eps is not None and fc_eps > 0:
                     fc_payout = round(dps / fc_eps * 100, 1)
+                # 予想ROE = 予想純利益(円) ÷ 最新実績自己資本(円) × 100
+                fc_roe = None
+                if r[4] is not None and latest_te:
+                    try:
+                        fc_roe = round(float(r[4]) / float(latest_te) * 100, 1)
+                    except Exception:
+                        pass
                 result.append({
                     "label": lbl, "period_end": fend,
                     "revenue": rev, "op": op, "ord": ord_, "net": net,
@@ -3064,7 +3080,7 @@ def _build_stock_page(code: str) -> str:
                     "op_mgn":  _safe_pct(r[2], r[1]),
                     "ord_mgn": _safe_pct(r[3], r[1]),
                     "net_mgn": _safe_pct(r[4], r[1]),
-                    "dps": dps, "payout": fc_payout, "roe": None, "eps": fc_eps,
+                    "dps": dps, "payout": fc_payout, "roe": fc_roe, "eps": fc_eps,
                     "is_forecast": True,
                 })
         # 前年比（売上高成長率）を計算
@@ -3086,7 +3102,8 @@ def _build_stock_page(code: str) -> str:
                 deduped.append(row)
         return deduped
 
-    fin_annual_data    = _build_fin_rows(fin_annual_rows, fc_rows=forecast_rows, shares_cnt=shares)
+    _latest_te_raw = float(fin_annual_rows[-1][7]) if fin_annual_rows and fin_annual_rows[-1][7] is not None else None
+    fin_annual_data    = _build_fin_rows(fin_annual_rows, fc_rows=forecast_rows, shares_cnt=shares, latest_te=_latest_te_raw)
     fin_quarterly_data = _build_fin_rows(fin_quarterly_rows, shares_cnt=shares)
 
     fin_annual_json    = _json.dumps(fin_annual_data,    ensure_ascii=False)
