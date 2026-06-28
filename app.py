@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 """
-株式テーマ分析 Web アプリ（Flask）
+株式分析 Web アプリ（Flask）
 
 Routes:
   GET /                     ダッシュボード（ホーム）
@@ -421,7 +421,7 @@ def _nav(active: str = "") -> str:
         items.append(f'<a class="{cls}" href="{href}">{label}</a>')
 
     return f"""<nav class="nav">
-  <a class="nav-logo" href="/">📈 株式テーマ分析</a>
+  <a class="nav-logo" href="/">📈 株式分析</a>
   <div class="nav-links">{"".join(items)}</div>
   <div class="nav-search" id="navSearch">
     <span class="nav-search-icon">🔍</span>
@@ -483,7 +483,7 @@ def _page_html(title: str, body: str, active: str = "", extra_head: str = "") ->
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{title} | 株式テーマ分析</title>
+  <title>{title} | 株式分析</title>
   <style>{_BASE_CSS}</style>
   {extra_head}
 </head>
