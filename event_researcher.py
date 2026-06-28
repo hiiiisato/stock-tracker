@@ -81,6 +81,69 @@ def _get_all_company_names(codes: list) -> dict:
         return {}
 
 
+def _get_financials_context(codes: list) -> dict:
+    """
+    最新2期分の業績データを一括取得し、Gemini プロンプト用テキストに整形する。
+    returns: {code: "  決算期: ...\n  売上高: ...\n...", ...}
+    """
+    if not codes:
+        return {}
+    try:
+        conn = get_conn()
+        cur  = conn.cursor()
+        placeholders = ",".join(["%s"] * len(codes))
+        cur.execute(f"""
+            SELECT code, period_end, revenue, operating_income, ordinary_income, net_income
+            FROM (
+                SELECT code, period_end, revenue, operating_income, ordinary_income, net_income,
+                       ROW_NUMBER() OVER (PARTITION BY code ORDER BY period_end DESC) AS rn
+                FROM financials
+                WHERE code IN ({placeholders}) AND period_type = 'A'
+            ) t
+            WHERE rn <= 2
+            ORDER BY code, period_end DESC
+        """, codes)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception:
+        return {}
+
+    # code → [(period_end, rev, op, ord_, net), ...] に集約
+    by_code: dict = {}
+    for row in rows:
+        by_code.setdefault(str(row[0]), []).append(row[1:])
+
+    def _oku(v):
+        return f"{float(v)/1e8:.0f}億円" if v is not None else "不明"
+
+    def _diff(cur_v, prev_v):
+        if cur_v is None or prev_v is None or float(prev_v) == 0:
+            return ""
+        return f"（前期比{(float(cur_v)/float(prev_v)-1)*100:+.0f}%）"
+
+    result = {}
+    for code, periods in by_code.items():
+        if len(periods) >= 2:
+            c, p = periods[0], periods[1]   # c=当期, p=前期
+            lines = [
+                f"決算期: {str(p[0])[:7]} → {str(c[0])[:7]}",
+                f"売上高: {_oku(p[1])} → {_oku(c[1])}{_diff(c[1], p[1])}",
+                f"営業利益: {_oku(p[2])} → {_oku(c[2])}{_diff(c[2], p[2])}",
+                f"経常利益: {_oku(p[3])} → {_oku(c[3])}{_diff(c[3], p[3])}",
+                f"純利益: {_oku(p[4])} → {_oku(c[4])}{_diff(c[4], p[4])}",
+            ]
+        else:
+            p = periods[0]
+            lines = [
+                f"決算期: {str(p[0])[:7]}",
+                f"売上高: {_oku(p[1])}、営業利益: {_oku(p[2])}、純利益: {_oku(p[4])}",
+            ]
+        result[code] = "\n".join(f"  {l}" for l in lines)
+
+    return result
+
+
 def _save_event(code: str, event_date: date, direction: str, change_pct: float,
                 ranking: int, period: str, news_text: str | None,
                 ai_summary: str | None) -> bool:
@@ -266,9 +329,10 @@ def research_top_movers(target_date: date = None, period: str = "daily") -> int:
         print(f"  調査対象なし（閾値 ±{threshold}%）")
         return 0
 
-    # ── Phase 1: 全銘柄のニュースを並行取得 ──────────────────────────────
+    # ── Phase 1: 全銘柄のニュース並行取得 + 財務データ一括取得 ─────────
     codes = [c for c, _, _, _ in all_targets]
-    names = _get_all_company_names(codes)  # 1クエリで一括取得
+    names   = _get_all_company_names(codes)   # 1クエリで一括取得
+    fin_ctx = _get_financials_context(codes)   # 最新2期の業績を一括取得
 
     print(f"\n  [Phase 1] ニュース並行取得中 ({len(all_targets)}銘柄)...")
     stock_specs = [
@@ -277,7 +341,8 @@ def research_top_movers(target_date: date = None, period: str = "daily") -> int:
     ]
     news_by_code = fetch_news_batch(stock_specs)
     news_found   = sum(1 for n in news_by_code.values() if n)
-    print(f"  [Phase 1] 完了: {news_found}/{len(all_targets)} 銘柄でニュースあり")
+    print(f"  [Phase 1] 完了: {news_found}/{len(all_targets)} 銘柄でニュースあり"
+          f"（財務データあり: {len(fin_ctx)}銘柄）")
 
     # ── Phase 2: ニュースがある銘柄をまとめて AI 要約 ───────────────────
     batch_data = [
@@ -285,6 +350,7 @@ def research_top_movers(target_date: date = None, period: str = "daily") -> int:
             "code": c, "name": names.get(c, ""), "date": ranking_date,
             "direction": d, "change_pct": pct,
             "news": news_by_code.get(c, []),
+            "financials": fin_ctx.get(c),   # DB から取得した直近2期の業績
         }
         for c, _, pct, d in all_targets
         if news_by_code.get(c)

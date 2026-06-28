@@ -45,8 +45,8 @@ warnings.filterwarnings("ignore")
 # 調査対象とする最低変動率（絶対値）。これ未満は調査しない
 RESEARCH_THRESHOLD_PCT = 10.0
 
-# 上昇・下落それぞれの最大調査件数
-RESEARCH_MAX_PER_DIRECTION = 20
+# 上昇・下落それぞれの最大調査件数（変動率 10%以上 かつ TOP15）
+RESEARCH_MAX_PER_DIRECTION = 15
 
 # ──────────────────────────────────────────────────────────────
 #  AI 要約設定（Gemini Flash 無料枠）
@@ -235,12 +235,17 @@ def _call_gemini_batch(client, batch: list) -> dict:
         else:
             articles_text = "  （関連ニュースなし）"
 
-        sections.append(
-            f"▼ STOCK:{s['code']} {name_label} {date_str} {dir_label}\n{articles_text}"
-        )
+        # 財務データが提供されている場合は【直近業績】セクションを追加
+        fin_ctx = s.get("financials")
+        if fin_ctx:
+            body = f"  【直近業績（参考数値）】\n{fin_ctx}\n  【関連ニュース】\n{articles_text}"
+        else:
+            body = articles_text
+
+        sections.append(f"▼ STOCK:{s['code']} {name_label} {date_str} {dir_label}\n{body}")
 
     output_template = "\n\n".join(
-        f"STOCK:{c}\n【変動理由】\n（1〜2文）\n【背景・詳細】\n（3〜5文、数値を明記）\n【参考ソース】\n（媒体名を箇条書き）"
+        f"STOCK:{c}\n【変動理由】\n（1〜2文）\n【背景・詳細】\n（3〜5文）\n【参考ソース】\n（媒体名を箇条書き）"
         for c in codes
     )
 
@@ -253,7 +258,9 @@ def _call_gemini_batch(client, batch: list) -> dict:
 
 ## 必須ルール
 - 各銘柄の情報のみ使用すること（他銘柄の情報と混在禁止）
-- 数値（金額・比率・倍率・パーセンテージ）は必ず明記すること
+- 【直近業績】が提供されている場合、金額は「前期: XX億円 → 今期: YY億円（前期比+ZZ%）」の形式で必ず明記すること
+- ニュースタイトルに数値が含まれる場合も同様に具体的な数値を明記すること
+- 「増加した」「改善した」などの曖昧表現だけで数値を省略しないこと
 - 「STOCK:証券コード」の行を各銘柄の先頭に必ず付けること
 - 前置き・後書き・余分な説明は不要
 
