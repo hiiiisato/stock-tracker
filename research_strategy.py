@@ -54,7 +54,7 @@ RESEARCH_MAX_PER_DIRECTION = 15
 AI_SUMMARY_CONFIG = {
     "enabled":           True,
     "model":             "gemini-2.5-flash",
-    "rate_limit_delay":  5.0,   # バッチ間のウェイト（秒）
+    "rate_limit_delay":  8.0,   # バッチ間のウェイト（秒）。無料枠 10 RPM → 8秒で安全マージン確保
     "batch_size":        5,     # 1回の Gemini 呼び出しにまとめる銘柄数
     "max_retries":       3,     # 429 エラー時のリトライ回数
 }
