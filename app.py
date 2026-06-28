@@ -2208,7 +2208,9 @@ _SCREEN_CSS = """
 .sc-fi-flag { display:flex; align-items:center; gap:4px; font-size:12px; color:#8b949e; cursor:pointer; border:1px solid #30363d; border-radius:6px; padding:3px 8px; white-space:nowrap; transition:all 0.15s; }
 .sc-fi-flag input { accent-color:#3fb950; }
 .sc-fi-flag:has(input:checked) { color:#3fb950; border-color:#3fb950; background:#0d1f0d; }
-.sc-clear-btn { padding:3px 12px; background:transparent; border:1px solid #30363d; border-radius:4px; color:#8b949e; font-size:11px; cursor:pointer; margin-left:auto; }
+.sc-apply-btn { padding:4px 14px; background:#1f6feb; border:1px solid #388bfd; border-radius:4px; color:#fff; font-size:12px; font-weight:600; cursor:pointer; margin-left:auto; }
+.sc-apply-btn:hover { background:#388bfd; }
+.sc-clear-btn { padding:3px 12px; background:transparent; border:1px solid #30363d; border-radius:4px; color:#8b949e; font-size:11px; cursor:pointer; }
 .sc-clear-btn:hover { border-color:#e84040; color:#e84040; }
 .sc-cond-chip { cursor:pointer; }
 .sc-cond-chip:hover { border-color:#58a6ff; color:#58a6ff; background:#1f3451; }
@@ -2600,6 +2602,7 @@ def _build_screen_page() -> str:
         <span class="sc-fi-sep">〜</span>
         <input class="sc-fi-inp" id="f-cap-max" type="number" placeholder="上限" step="10">
       </div>
+      <button class="sc-apply-btn" id="scApply">絞り込む</button>
       <button class="sc-clear-btn" id="scClear">✕ クリア</button>
     </div>
   </div>
@@ -3000,14 +3003,19 @@ def _build_screen_page() -> str:
     var dashIdx=this.value.lastIndexOf('-');
     sortCol=this.value.slice(0,dashIdx);sortDir=this.value.slice(dashIdx+1)==='desc'?-1:1;render();
   }});
+  var _ft=null;
+  function scheduleRender(){{if(_ft)clearTimeout(_ft);_ft=setTimeout(render,300);}}
   NUM_IDS.forEach(function(id){{
     var el=document.getElementById(id);
-    if(el)el.addEventListener('input',function(){{el.classList.toggle('active',el.value!=='');render();}});
+    if(!el)return;
+    el.addEventListener('input',function(){{el.classList.toggle('active',el.value!=='');scheduleRender();}});
+    el.addEventListener('change',function(){{el.classList.toggle('active',el.value!=='');render();}});
   }});
   CHK_IDS.forEach(function(id){{
     var el=document.getElementById(id);if(el)el.addEventListener('change',render);
   }});
   document.querySelectorAll('.sc-mkt-chk').forEach(function(el){{el.addEventListener('change',render);}});
+  document.getElementById('scApply').addEventListener('click',render);
   document.getElementById('scClear').addEventListener('click',function(){{
     clearInputs();
     document.getElementById('scStratPanel').style.display='none';
