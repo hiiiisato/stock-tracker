@@ -3482,7 +3482,7 @@ function mkLayout(extra){
   L.margin={l:52,r:52,t:8,b:36};
   L.xaxis={color:'#8b949e',gridcolor:'#21262d',tickfont:{size:10}};
   L.yaxis=Object.assign({color:'#8b949e',gridcolor:'#21262d',tickfont:{size:10},side:'left'},extra.y1||{});
-  L.yaxis2=Object.assign({color:'#888',overlaying:'y',side:'right',showgrid:false,zeroline:false,tickfont:{size:10}},extra.y2||{});
+  L.yaxis2=Object.assign({color:'#888',overlaying:'y',side:'right',showgrid:false,zeroline:false,tickfont:{size:10},rangemode:'tozero'},extra.y2||{});
   if(extra.shapes)L.shapes=extra.shapes;
   return L;
 }
@@ -3549,7 +3549,8 @@ function renderOpChart(d){
       marker:{color:'#58a6ff',opacity:0.25},showlegend:false});
   }
   t.push(mkLine(d,'op_mgn','#E84040','%'));
-  var L=mkLayout({barmode:'group',y1:{ticksuffix:'億'},y2:{tickcolor:'#E84040',tickfont:{color:'#E84040',size:10},ticksuffix:'%'},shapes:fcShapes(d),
+  t.push(mkLine(d,'ord_mgn','#a371f7','%'));
+  var L=mkLayout({barmode:'group',y1:{ticksuffix:'億'},y2:{tickcolor:'#8b949e',tickfont:{color:'#8b949e',size:10},ticksuffix:'%'},shapes:fcShapes(d),
     legend:{x:0,y:1.08,orientation:'h',font:{size:11,color:'#c9d1d9'},bgcolor:'rgba(0,0,0,0)'}});
   Plotly.react('fin-op-chart',t,L,{responsive:true,displayModeBar:false});
 }
@@ -3731,7 +3732,7 @@ function renderFinTable(d){
   </div>
   <div class="fin-chart-box">
     <div class="fin-chart-hd">
-      <span class="fin-chart-title">営業利益・経常利益 &amp; 営業利益率</span>
+      <span class="fin-chart-title">営業利益・経常利益 &amp; 各利益率</span>
       <span class="fin-chart-unit">億円 ／ %</span>
     </div>
     <div id="fin-op-chart" style="height:230px"></div>
