@@ -110,7 +110,15 @@ def _compute_for_codes(codes: list):
             return None
         return best[1]  # close
 
-    rows_to_save = []
+    # (code, date) をキーにしてPER行とROE行をマージする
+    rec: dict[tuple, dict] = {}
+
+    def _get_rec(code, pend_str):
+        key = (code, pend_str)
+        if key not in rec:
+            rec[key] = dict(code=code, date=pend_str, price=None, market_cap=None,
+                            per=None, pbr=None, roe=None, roa=None, ttm_eps=None)
+        return rec[key]
 
     for code in codes:
         shares, bps = shares_map.get(code, (None, None))
@@ -134,26 +142,43 @@ def _compute_for_codes(codes: list):
             if per <= 0 or per > 9999:
                 continue
             mc = int(price * shares) if shares else None
-            rows_to_save.append((
-                code, str(pend), price, mc,
-                per, None, None, None, round(ttm_eps, 2)
-            ))
+            r = _get_rec(code, str(pend))
+            r['price'] = price
+            r['market_cap'] = mc
+            r['per'] = per
+            r['ttm_eps'] = round(ttm_eps, 2)
 
         # ── 年次 ROE / ROA / PBR ─────────────────────────────────
         for pend, ni, eq, assets in a_map.get(code, []):
             roe = round(ni / eq,     4) if eq     and eq     > 0 else None
             roa = round(ni / assets, 4) if assets and assets > 0 else None
+            # 異常値（自己資本が極端に小さい等）はスキップ
+            if roe is not None and abs(roe) > 9999:
+                roe = None
+            if roa is not None and abs(roa) > 9999:
+                roa = None
             if roe is None and roa is None:
                 continue
-            price = nearest_price(code, pend)
-            mc    = int(price * shares) if (price and shares) else None
+            r = _get_rec(code, str(pend))
+            if r['price'] is None:
+                price = nearest_price(code, pend)
+                r['price'] = price
+                r['market_cap'] = int(price * shares) if (price and shares) else None
+            else:
+                price = r['price']
             # PBR = price / BPS, BPS = total_equity / shares
             bps_hist = round(eq / shares, 2) if (eq and shares and shares > 0) else None
             pbr = round(price / bps_hist, 2) if (price and bps_hist and bps_hist > 0) else None
-            rows_to_save.append((
-                code, str(pend), price, mc,
-                None, pbr, roe, roa, None
-            ))
+            r['roe'] = roe
+            r['roa'] = roa
+            r['pbr'] = pbr
+
+    rows_to_save = [
+        (r['code'], r['date'], r['price'], r['market_cap'],
+         r['per'], r['pbr'], r['roe'], r['roa'], r['ttm_eps'])
+        for r in rec.values()
+        if any(v is not None for v in (r['per'], r['roe'], r['roa'], r['pbr']))
+    ]
 
     return rows_to_save
 

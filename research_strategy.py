@@ -84,7 +84,8 @@ SOURCE_CONFIGS = {
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
 
-def fetch_news(code: str, target_date: date, company_name: str = "") -> list:
+def fetch_news(code: str, target_date: date, company_name: str = "",
+               direction: str = "") -> list:
     """
     指定銘柄のニュースを全有効ソースから取得してマージして返す。
     Google News の記事は対象銘柄に言及しているものだけを残す。
@@ -101,7 +102,8 @@ def fetch_news(code: str, target_date: date, company_name: str = "") -> list:
     if SOURCE_CONFIGS["google_news"]["enabled"]:
         cfg = SOURCE_CONFIGS["google_news"]
         time.sleep(cfg["delay_seconds"])
-        gnews_raw = _fetch_google_news(code, company_name, target_date, cfg)
+        gnews_raw = _fetch_google_news(code, company_name, target_date, cfg,
+                                       direction=direction)
         # 対象銘柄に言及していない集合記事などを除外
         gnews_filtered = _filter_relevant_gnews(gnews_raw, code, company_name)
         # kabutan と重複するタイトルを除去
@@ -118,7 +120,7 @@ def fetch_news(code: str, target_date: date, company_name: str = "") -> list:
 
 
 def summarize_news(items: list, code: str, company_name: str,
-                   target_date: date):
+                   target_date: date, direction: str = "", change_pct: float = None):
     """
     Gemini API でニュース記事タイトルを構造化要約する。
     GEMINI_API_KEY 未設定 / AI_SUMMARY_CONFIG 無効時は None を返す。
@@ -142,8 +144,20 @@ def summarize_news(items: list, code: str, company_name: str,
         for it in items
     )
 
+    if direction == "up":
+        dir_label = f"値上がり（当日騰落率: +{abs(change_pct):.2f}%）" if change_pct is not None else "値上がり"
+        dir_instruction = "この銘柄は当日大きく値上がりしています。値上がりの理由を分析してください。"
+    elif direction == "down":
+        dir_label = f"値下がり（当日騰落率: -{abs(change_pct):.2f}%）" if change_pct is not None else "値下がり"
+        dir_instruction = "この銘柄は当日大きく値下がりしています。値下がりの理由を分析してください。"
+    else:
+        dir_label = "株価変動"
+        dir_instruction = "この銘柄の株価変動理由を分析してください。"
+
     prompt = f"""あなたは株式市場の専門アナリストです。
-以下は{name_label}（証券コード: {code}）の{target_date.strftime('%Y年%m月%d日')}前後の株価変動に関するニュース記事の情報です。
+以下は{name_label}（証券コード: {code}）の{target_date.strftime('%Y年%m月%d日')}の{dir_label}に関するニュース記事の情報です。
+
+{dir_instruction}
 
 【収集した記事情報】
 {articles_text}
@@ -155,6 +169,7 @@ def summarize_news(items: list, code: str, company_name: str,
 - タイトルに含まれる数値（金額・利回り・倍率・比率・パーセンテージ等）は必ず明記すること
   例：「純利益が増加」→「純利益が◯億円から◯億円（前期比◯倍）に増加」
 - 数値が不明な場合のみ「詳細は記事本文参照」と書くこと
+- 株価の方向性（{dir_label}）に合致した理由のみを述べること。逆方向の情報は無視すること
 - 「急騰」「上昇」等の事実ではなく、なぜその材料が株価を動かしたかの"理由"を書くこと
 - フォーマット以外の余分な文章・前置き・後書きは不要
 
@@ -279,7 +294,8 @@ _PRIORITY_SOURCES = {
 
 
 def _fetch_google_news(code: str, company_name: str,
-                       target_date: date, cfg: dict) -> list:
+                       target_date: date, cfg: dict,
+                       direction: str = "") -> list:
     """
     Google News RSS から銘柄関連ニュースを取得する。
     company_name が空の場合は証券コードのみで検索する。
@@ -289,9 +305,15 @@ def _fetch_google_news(code: str, company_name: str,
     from_date = target_date - timedelta(days=window)
     to_date   = target_date + timedelta(days=window)
 
-    # 検索クエリ: "証券コード 社名 (急騰 OR 上昇 OR 材料 OR 急落)"
+    # 方向性に応じてクエリを絞る（上昇/下落のニュースを混在させない）
     name_part = company_name if company_name else ""
-    query = f"{code} {name_part} (急騰 OR 上昇 OR 材料 OR 急落 OR 下落 OR 理由)"
+    if direction == "up":
+        kw = "(急騰 OR 上昇 OR 好業績 OR 増益 OR 材料 OR 理由)"
+    elif direction == "down":
+        kw = "(急落 OR 下落 OR 悪材料 OR 減益 OR 売られ OR 材料 OR 理由)"
+    else:
+        kw = "(急騰 OR 上昇 OR 材料 OR 急落 OR 下落 OR 理由)"
+    query = f"{code} {name_part} {kw}"
     url = (f"https://news.google.com/rss/search"
            f"?q={quote(query)}&hl=ja&gl=JP&ceid=JP:ja")
 

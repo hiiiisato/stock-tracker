@@ -75,9 +75,11 @@ def research_and_save(code: str, event_date: date, direction: str,
         _ai_column_checked = True
 
     company_name = _get_company_name(code)
-    news = fetch_news(code, target_date=event_date, company_name=company_name)
+    news = fetch_news(code, target_date=event_date, company_name=company_name,
+                      direction=direction)
     news_text  = _format_news_text(news) if news else None
-    ai_summary = summarize_news(news, code, company_name, event_date) if news else None
+    ai_summary = summarize_news(news, code, company_name, event_date,
+                                direction=direction, change_pct=change_pct) if news else None
 
     if ai_summary:
         print(f"    [AI要約完了] {code}")

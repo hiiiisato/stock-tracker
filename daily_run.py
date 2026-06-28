@@ -19,6 +19,7 @@ from rankings import compute_daily_rankings, compute_weekly_rankings, print_rank
 from theme_score import compute_day as compute_theme_day
 from fundamentals import fetch_all_known as update_fundamentals, recompute_price_metrics
 from compute_price_stats import run as compute_price_stats
+from financials_kabutan import run as fetch_kabutan_financials
 from event_researcher import research_top_movers
 from market_indices import fetch_and_store as update_market_indices, ensure_table as ensure_indices_table
 from research_strategy import RESEARCH_THRESHOLD_PCT
@@ -126,6 +127,14 @@ def run(init: bool = False, rankings_only: bool = False):
         except Exception as e:
             print(f"  エラー: {e}")
             _log("fundamentals", "failed", error=str(e))
+
+        print("\n[週次] kabutan 財務実績・業績予想更新...")
+        try:
+            fetch_kabutan_financials(force=True)
+            _log("kabutan_financials", "done")
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("kabutan_financials", "failed", error=str(e))
 
     # テーマスコア計算（価格更新後）
     if not rankings_only:

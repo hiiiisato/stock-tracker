@@ -370,6 +370,12 @@ tr:hover { background: #1c2128; }
 }
 .cg-ma-btn[data-ma="25"].active { color: #f0b429; border-color: #f0b429; }
 .cg-ma-btn[data-ma="75"].active { color: #a371f7; border-color: #a371f7; }
+.cg-pg-btn {
+  background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+  color: #8b949e; font-size: 12px; padding: 3px 10px; cursor: pointer; transition: all 0.15s;
+}
+.cg-pg-btn:hover:not(:disabled) { border-color: #58a6ff; color: #58a6ff; }
+.cg-pg-btn:disabled { opacity: 0.35; cursor: default; }
 
 /* ─ Responsive ─ */
 @media (max-width: 900px) { .cg-grid { grid-template-columns: repeat(2, 1fr); } }
@@ -538,7 +544,7 @@ def _build_index_section() -> str:
         return ""
 
     values  = get_latest_values()
-    history = get_history_for_chart(days=90)
+    history = get_history_for_chart(days=400)
 
     if not values:
         return ""
@@ -602,12 +608,28 @@ def _build_index_section() -> str:
 
     chart_html = f"""<div class="idx-chart-wrap">
   <div class="idx-chart-tabs">{tabs_html}</div>
+  <div style="display:flex;gap:8px;padding:4px 0 6px;flex-wrap:wrap;align-items:center">
+    <div style="display:flex;gap:3px">
+      <button class="cg-period-btn idx-period-btn" data-period="1M">1M</button>
+      <button class="cg-period-btn idx-period-btn active" data-period="3M">3M</button>
+      <button class="cg-period-btn idx-period-btn" data-period="6M">6M</button>
+      <button class="cg-period-btn idx-period-btn" data-period="1Y">1Y</button>
+    </div>
+    <div style="display:flex;gap:3px">
+      <button class="cg-ma-btn idx-ma-btn" data-ma="25">MA25</button>
+      <button class="cg-ma-btn idx-ma-btn" data-ma="75">MA75</button>
+    </div>
+  </div>
   <div class="idx-chart-body" id="idx-chart-div" style="height:320px"></div>
 </div>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
 <script>
 (function() {{
   var TRACES = {traces_data};
+  var IDX_PERIOD = '3M';
+  var IDX_MA = [];
+  var IDX_CURRENT = 0;
+
   var layout = {{
     template: "plotly_dark",
     paper_bgcolor: "#161b22",
@@ -624,25 +646,55 @@ def _build_index_section() -> str:
       showgrid: true,
       gridcolor: "#21262d",
       tickfont: {{size:10}},
+      automargin: true,
     }},
     showlegend: false,
     height: 320,
   }};
   var config = {{responsive:true, displayModeBar:false}};
 
+  function idxCalcMA(closes, period) {{
+    var result = new Array(closes.length).fill(null);
+    for (var i = period - 1; i < closes.length; i++) {{
+      var sum = 0;
+      for (var j = i - period + 1; j <= i; j++) sum += closes[j];
+      result[i] = parseFloat((sum / period).toFixed(2));
+    }}
+    return result;
+  }}
+
   function draw(idx) {{
+    IDX_CURRENT = idx;
     var t = TRACES[idx];
+    var dayMap = {{'1M':30,'3M':90,'6M':180,'1Y':365}};
+    var days  = dayMap[IDX_PERIOD] || 90;
+    var start = Math.max(0, t.dates.length - days);
+    var dates  = t.dates.slice(start);
+    var opens  = t.opens.slice(start);
+    var highs  = t.highs.slice(start);
+    var lows   = t.lows.slice(start);
+    var closes = t.closes.slice(start);
+
     var data = [{{
       type: "candlestick",
-      x: t.dates,
-      open:  t.opens,
-      high:  t.highs,
-      low:   t.lows,
-      close: t.closes,
+      x: dates, open: opens, high: highs, low: lows, close: closes,
       increasing: {{line: {{color:"#E84040"}}, fillcolor:"#E84040"}},
       decreasing: {{line: {{color:"#3A9FE0"}}, fillcolor:"#3A9FE0"}},
       name: t.name,
     }}];
+
+    IDX_MA.forEach(function(maPeriod) {{
+      var maFull  = idxCalcMA(t.closes, maPeriod);
+      var maSlice = maFull.slice(start);
+      data.push({{
+        type: "scatter",
+        x: dates, y: maSlice,
+        mode: "lines",
+        line: {{width:1.5, color: maPeriod === 25 ? "#f0b429" : "#a371f7"}},
+        name: "MA" + maPeriod,
+      }});
+    }});
+
     Plotly.newPlot("idx-chart-div", data, layout, config);
     document.querySelectorAll(".idx-tab").forEach(function(b,i) {{
       b.classList.toggle("active", i === idx);
@@ -650,6 +702,26 @@ def _build_index_section() -> str:
   }}
 
   window.switchIdx = function(idx) {{ draw(idx); }};
+
+  document.querySelectorAll('.idx-period-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      IDX_PERIOD = this.dataset.period;
+      document.querySelectorAll('.idx-period-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+      this.classList.add('active');
+      draw(IDX_CURRENT);
+    }});
+  }});
+
+  document.querySelectorAll('.idx-ma-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var ma = parseInt(this.dataset.ma);
+      var pos = IDX_MA.indexOf(ma);
+      if (pos >= 0) {{ IDX_MA.splice(pos, 1); this.classList.remove('active'); }}
+      else {{ IDX_MA.push(ma); this.classList.add('active'); }}
+      draw(IDX_CURRENT);
+    }});
+  }});
+
   draw(0);
 }})();
 </script>"""
@@ -1417,6 +1489,16 @@ def _chart_grid_toolbar(codes_js: str, show_added_sort: bool = False) -> str:
       <option value="cap_desc">時価総額 ↓</option>
       <option value="cap_asc">時価総額 ↑</option>
     </select>
+    <div style="display:flex;gap:4px;align-items:center;margin-left:4px">
+      <select id="cg-per-sel" class="cg-sort-select">
+        <option value="50">50件</option>
+        <option value="100">100件</option>
+        <option value="200">200件</option>
+      </select>
+      <button id="cg-pg-prev" class="cg-pg-btn">◀</button>
+      <span id="cg-pg-info" style="font-size:11px;color:#8b949e;white-space:nowrap;padding:0 2px"></span>
+      <button id="cg-pg-next" class="cg-pg-btn">▶</button>
+    </div>
   </div>
 </div>
 <script>var CG_CODES={codes_js};</script>"""
@@ -1430,6 +1512,8 @@ def _chart_grid_script() -> str:
   var ACTIVE_MA = [];
   var allData   = null;
   var loaded    = false;
+  var CG_PAGE   = 0;
+  var CG_PER    = 50;
 
   function show(id, vis) {
     var el = document.getElementById(id);
@@ -1480,6 +1564,15 @@ def _chart_grid_script() -> str:
     return sel ? sel.value : 'added';
   }
 
+  function updatePagination(totalPages) {
+    var info = document.getElementById('cg-pg-info');
+    var prev = document.getElementById('cg-pg-prev');
+    var next = document.getElementById('cg-pg-next');
+    if (info) info.textContent = totalPages > 1 ? (CG_PAGE + 1) + ' / ' + totalPages : '';
+    if (prev) prev.disabled = (CG_PAGE === 0);
+    if (next) next.disabled = (CG_PAGE >= totalPages - 1);
+  }
+
   function buildGrid() {
     var v      = getSortKey();
     var sorted = allData.slice().sort(function(a, b) {
@@ -1489,10 +1582,14 @@ def _chart_grid_script() -> str:
       if (v === 'cap_asc')  return (a.market_cap  || 0) - (b.market_cap || 0);
       return 0;
     });
+    var totalPages = Math.max(1, Math.ceil(sorted.length / CG_PER));
+    CG_PAGE = Math.min(CG_PAGE, totalPages - 1);
+    var page = sorted.slice(CG_PAGE * CG_PER, (CG_PAGE + 1) * CG_PER);
+    updatePagination(totalPages);
     var grid = document.getElementById('cg-grid');
     if (!grid) return;
     grid.innerHTML = '';
-    sorted.forEach(function(item) {
+    page.forEach(function(item) {
       var chg     = item.change_pct;
       var chgStr  = chg != null ? (chg > 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
       var chgCol  = chg > 0 ? '#E84040' : chg < 0 ? '#3A9FE0' : '#8b949e';
@@ -1598,7 +1695,23 @@ def _chart_grid_script() -> str:
   });
 
   var sortSel = document.getElementById('cg-sort');
-  if (sortSel) sortSel.addEventListener('change', function() { if (allData) buildGrid(); });
+  if (sortSel) sortSel.addEventListener('change', function() { CG_PAGE = 0; if (allData) buildGrid(); });
+
+  var perSel = document.getElementById('cg-per-sel');
+  if (perSel) perSel.addEventListener('change', function() {
+    CG_PER  = parseInt(this.value) || 50;
+    CG_PAGE = 0;
+    if (allData) buildGrid();
+  });
+
+  var pgPrev = document.getElementById('cg-pg-prev');
+  var pgNext = document.getElementById('cg-pg-next');
+  if (pgPrev) pgPrev.addEventListener('click', function() {
+    if (CG_PAGE > 0) { CG_PAGE--; if (allData) buildGrid(); }
+  });
+  if (pgNext) pgNext.addEventListener('click', function() {
+    CG_PAGE++; if (allData) buildGrid();
+  });
 
 })();
 </script>"""
@@ -2103,6 +2216,16 @@ def _build_screen_page() -> str:
         <button class="cg-ma-btn sc-ma-btn" data-ma="75">MA75</button>
       </div>
       <span id="sc-chart-note" style="font-size:12px;color:#484f58"></span>
+      <div style="display:flex;gap:4px;align-items:center;margin-left:auto">
+        <select id="sc-per-sel" class="cg-sort-select">
+          <option value="50">50件</option>
+          <option value="100">100件</option>
+          <option value="200">200件</option>
+        </select>
+        <button id="sc-pg-prev" class="cg-pg-btn">◀</button>
+        <span id="sc-pg-info" style="font-size:11px;color:#8b949e;white-space:nowrap;padding:0 2px"></span>
+        <button id="sc-pg-next" class="cg-pg-btn">▶</button>
+      </div>
     </div>
     <div class="cg-grid" id="sc-cg-grid"></div>
   </div>
@@ -2305,6 +2428,10 @@ def _build_screen_page() -> str:
   var scView    = 'list';
   var SC_PERIOD = '1M';
   var SC_MA     = [];
+  var SC_PAGE   = 0;
+  var SC_PER    = 50;
+  var allScData       = null;
+  var lastScCodeOrder = [];
 
   function scCalcMA(closes, period) {{
     return closes.map(function(_, i) {{
@@ -2367,14 +2494,32 @@ def _build_screen_page() -> str:
     return filtered.slice(0, limit||200).map(function(s){{return s.code;}});
   }}
 
+  function scUpdatePagination(totalPages, total) {{
+    var info = document.getElementById('sc-pg-info');
+    var prev = document.getElementById('sc-pg-prev');
+    var next = document.getElementById('sc-pg-next');
+    var note = document.getElementById('sc-chart-note');
+    if (info) info.textContent = totalPages > 1 ? (SC_PAGE+1)+' / '+totalPages : '';
+    if (prev) prev.disabled = (SC_PAGE === 0);
+    if (next) next.disabled = (SC_PAGE >= totalPages - 1);
+    if (note) note.textContent = '全'+total+'件';
+  }}
+
   function scBuildGrid(data, codeOrder) {{
+    allScData = data;
+    lastScCodeOrder = codeOrder;
     var grid = document.getElementById('sc-cg-grid');
     if (!data || !data.length) {{
-      grid.innerHTML='<div style="color:#8b949e;padding:20px">データなし</div>'; return;
+      grid.innerHTML='<div style="color:#8b949e;padding:20px">データなし</div>';
+      scUpdatePagination(1, 0); return;
     }}
-    data.sort(function(a,b){{return codeOrder.indexOf(a.code)-codeOrder.indexOf(b.code);}});
+    var sorted = data.slice().sort(function(a,b){{return codeOrder.indexOf(a.code)-codeOrder.indexOf(b.code);}});
+    var totalPages = Math.max(1, Math.ceil(sorted.length / SC_PER));
+    SC_PAGE = Math.min(SC_PAGE, totalPages - 1);
+    var page = sorted.slice(SC_PAGE * SC_PER, (SC_PAGE+1) * SC_PER);
+    scUpdatePagination(totalPages, sorted.length);
     grid.innerHTML='';
-    data.forEach(function(item) {{
+    page.forEach(function(item) {{
       var prices = item.prices;
       if (!prices || !prices.length) return;
       var shown = scFilterPrices(prices);
@@ -2408,15 +2553,19 @@ def _build_screen_page() -> str:
     }});
   }}
 
+  function refreshScGrid() {{
+    if (allScData) scBuildGrid(allScData, lastScCodeOrder);
+  }}
+
   function loadScChart() {{
+    SC_PAGE = 0;
     var codes = scGetFilteredCodes(200);
-    var note = document.getElementById('sc-chart-note');
     if (!codes.length) {{
+      allScData = []; lastScCodeOrder = [];
       document.getElementById('sc-cg-grid').innerHTML='<div style="color:#8b949e;padding:20px">条件に一致する銘柄がありません</div>';
-      if(note) note.textContent='';
+      scUpdatePagination(1, 0);
       return;
     }}
-    if(note) note.textContent='上位'+codes.length+'件を表示';
     document.getElementById('sc-cg-grid').innerHTML='<div style="color:#8b949e;padding:30px;text-align:center">チャートを読み込み中...</div>';
     fetch('/api/chart_grid?codes='+codes.join(','))
       .then(function(r){{return r.json();}})
@@ -2448,7 +2597,7 @@ def _build_screen_page() -> str:
       document.querySelectorAll('.sc-period-btn').forEach(function(b){{b.classList.remove('active');}});
       btn.classList.add('active');
       SC_PERIOD=btn.dataset.period;
-      if(scView==='chart') loadScChart();
+      if(scView==='chart') refreshScGrid();
     }});
   }});
 
@@ -2458,8 +2607,23 @@ def _build_screen_page() -> str:
       var idx=SC_MA.indexOf(period);
       if(idx>=0){{SC_MA.splice(idx,1);btn.classList.remove('active');}}
       else{{SC_MA.push(period);btn.classList.add('active');}}
-      if(scView==='chart') loadScChart();
+      if(scView==='chart') refreshScGrid();
     }});
+  }});
+
+  var scPerSel = document.getElementById('sc-per-sel');
+  if(scPerSel) scPerSel.addEventListener('change', function(){{
+    SC_PER = parseInt(this.value) || 50;
+    SC_PAGE = 0;
+    refreshScGrid();
+  }});
+  var scPgPrev = document.getElementById('sc-pg-prev');
+  if(scPgPrev) scPgPrev.addEventListener('click', function(){{
+    if(SC_PAGE > 0){{ SC_PAGE--; refreshScGrid(); }}
+  }});
+  var scPgNext = document.getElementById('sc-pg-next');
+  if(scPgNext) scPgNext.addEventListener('click', function(){{
+    SC_PAGE++; refreshScGrid();
   }});
 }})();
 </script>
