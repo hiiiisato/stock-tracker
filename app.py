@@ -2971,6 +2971,27 @@ def _build_stock_page(code: str) -> str:
         except Exception:
             return None
 
+    # financialsテーブルから BPS/PBR/ROE/ROA を自前計算（Yahoo Finance より正確）
+    # インデックス: [0]period_end [1]type [2]rev [3]op [4]ord [5]net [6]ta [7]te [8]cf
+    if fin_annual_rows:
+        _lat  = fin_annual_rows[-1]
+        _prev = fin_annual_rows[-2] if len(fin_annual_rows) >= 2 else None
+        _lat_net = float(_lat[5]) if _lat[5] is not None else None
+        _lat_ta  = float(_lat[6]) if _lat[6] is not None else None
+        _lat_te  = float(_lat[7]) if _lat[7] is not None else None
+        _prev_te = float(_prev[7]) if _prev and _prev[7] is not None else _lat_te
+        _prev_ta = float(_prev[6]) if _prev and _prev[6] is not None else _lat_ta
+        # BPS = 自己資本 ÷ 発行済株式数、PBR = 株価 ÷ BPS
+        if _lat_te and shares:
+            bps_val = round(_lat_te / float(shares), 2)
+            pbr     = round(float(cur_price) / bps_val, 2) if cur_price and bps_val > 0 else pbr
+        # ROE = 純利益 ÷ 平均自己資本 × 100
+        if _lat_net is not None and _lat_te:
+            roe = _safe_pct(_lat_net, (_lat_te + _prev_te) / 2)
+        # ROA = 純利益 ÷ 平均総資産 × 100
+        if _lat_net is not None and _lat_ta:
+            roa = _safe_pct(_lat_net, (_lat_ta + _prev_ta) / 2)
+
     # 配当を年別に集計 (ex_date の年で集計)
     _div_by_year: dict = _col.defaultdict(float)
     for _ex_date, _amount in div_all_rows:
