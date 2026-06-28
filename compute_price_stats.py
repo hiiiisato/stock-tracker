@@ -72,19 +72,6 @@ def _ensure_table():
             rsi14         DECIMAL(6,2)
         )
     """)
-    # 既存テーブルへのカラム追加（初回マイグレーション: エラーは無視）
-    for col, typedef in [
-        ("chg126d",     "DECIMAL(8,2)"),
-        ("ma50",        "DECIMAL(14,4)"),
-        ("ma200",       "DECIMAL(14,4)"),
-        ("ma200_slope", "DECIMAL(8,4)"),
-        ("vol20_ratio", "DECIMAL(8,2)"),
-        ("rsi14",       "DECIMAL(6,2)"),
-    ]:
-        try:
-            cur.execute(f"ALTER TABLE price_stats ADD COLUMN {col} {typedef}")
-        except Exception:
-            pass
     conn.commit()
     cur.close()
     conn.close()
