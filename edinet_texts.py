@@ -157,11 +157,17 @@ def _save_blocks(code: str, edinet_code: str, blocks: list[dict],
     now  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     saved = 0
+    MAX_BYTES = 63000  # TiDB フリープランの実効上限（65535バイト）に余裕を持たせる
+
     for b in blocks:
         section = b.get("section", "")
         text    = b.get("text", "")
         if not section or not text:
             continue
+        # バイト超過時は文字境界で切り詰め
+        encoded = text.encode("utf-8")
+        if len(encoded) > MAX_BYTES:
+            text = encoded[:MAX_BYTES].decode("utf-8", errors="ignore")
         cur.execute("""
             INSERT INTO edinet_text_blocks
                 (code, section, edinet_code, fiscal_year, report_date, text, fetched_at)
@@ -184,6 +190,9 @@ def _save_blocks(code: str, edinet_code: str, blocks: list[dict],
     # '事業の内容' を business_description にも反映
     biz = next((b["text"] for b in blocks if b.get("section") == "事業の内容"), None)
     if biz:
+        biz_enc = biz.encode("utf-8")
+        if len(biz_enc) > MAX_BYTES:
+            biz = biz_enc[:MAX_BYTES].decode("utf-8", errors="ignore")
         cur.execute(
             "UPDATE stocks SET business_description = %s, biz_updated_at = %s WHERE code = %s",
             (biz, now, code)
