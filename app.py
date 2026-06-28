@@ -611,12 +611,12 @@ def _build_index_section() -> str:
   <div style="display:flex;gap:8px;padding:4px 0 6px;flex-wrap:wrap;align-items:center">
     <div style="display:flex;gap:3px">
       <button class="cg-period-btn idx-period-btn" data-period="1M">1M</button>
-      <button class="cg-period-btn idx-period-btn active" data-period="3M">3M</button>
-      <button class="cg-period-btn idx-period-btn" data-period="6M">6M</button>
+      <button class="cg-period-btn idx-period-btn" data-period="3M">3M</button>
+      <button class="cg-period-btn idx-period-btn active" data-period="6M">6M</button>
       <button class="cg-period-btn idx-period-btn" data-period="1Y">1Y</button>
     </div>
     <div style="display:flex;gap:3px">
-      <button class="cg-ma-btn idx-ma-btn" data-ma="25">MA25</button>
+      <button class="cg-ma-btn idx-ma-btn active" data-ma="25">MA25</button>
       <button class="cg-ma-btn idx-ma-btn" data-ma="75">MA75</button>
     </div>
   </div>
@@ -626,8 +626,8 @@ def _build_index_section() -> str:
 <script>
 (function() {{
   var TRACES = {traces_data};
-  var IDX_PERIOD = '3M';
-  var IDX_MA = [];
+  var IDX_PERIOD = '6M';
+  var IDX_MA = [25];
   var IDX_CURRENT = 0;
 
   var layout = {{
@@ -1473,13 +1473,13 @@ def _chart_grid_toolbar(codes_js: str, show_added_sort: bool = False) -> str:
   </div>
   <div id="cg-chart-opts" style="display:none;flex-wrap:wrap;gap:6px;align-items:center">
     <div style="display:flex;gap:3px">
-      <button class="cg-period-btn active" data-period="1M">1M</button>
+      <button class="cg-period-btn" data-period="1M">1M</button>
       <button class="cg-period-btn" data-period="3M">3M</button>
-      <button class="cg-period-btn" data-period="6M">6M</button>
+      <button class="cg-period-btn active" data-period="6M">6M</button>
       <button class="cg-period-btn" data-period="1Y">1Y</button>
     </div>
     <div style="display:flex;gap:3px">
-      <button class="cg-ma-btn" data-ma="25">MA25</button>
+      <button class="cg-ma-btn active" data-ma="25">MA25</button>
       <button class="cg-ma-btn" data-ma="75">MA75</button>
     </div>
     <select class="cg-sort-select" id="cg-sort">
@@ -1508,8 +1508,8 @@ def _chart_grid_script() -> str:
     return """<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <script>
 (function(){
-  var PERIOD    = '1M';
-  var ACTIVE_MA = [];
+  var PERIOD    = '6M';
+  var ACTIVE_MA = [25];
   var allData   = null;
   var loaded    = false;
   var CG_PAGE   = 0;
@@ -2292,13 +2292,13 @@ def _build_screen_page() -> str:
   <div id="sc-chart-wrap" style="display:none">
     <div style="display:flex;gap:6px;padding:8px 0;flex-wrap:wrap;align-items:center">
       <div style="display:flex;gap:3px">
-        <button class="cg-period-btn sc-period-btn active" data-period="1M">1M</button>
+        <button class="cg-period-btn sc-period-btn" data-period="1M">1M</button>
         <button class="cg-period-btn sc-period-btn" data-period="3M">3M</button>
-        <button class="cg-period-btn sc-period-btn" data-period="6M">6M</button>
+        <button class="cg-period-btn sc-period-btn active" data-period="6M">6M</button>
         <button class="cg-period-btn sc-period-btn" data-period="1Y">1Y</button>
       </div>
       <div style="display:flex;gap:3px">
-        <button class="cg-ma-btn sc-ma-btn" data-ma="25">MA25</button>
+        <button class="cg-ma-btn sc-ma-btn active" data-ma="25">MA25</button>
         <button class="cg-ma-btn sc-ma-btn" data-ma="75">MA75</button>
       </div>
       <span id="sc-chart-note" style="font-size:12px;color:#484f58"></span>
@@ -2512,8 +2512,8 @@ def _build_screen_page() -> str:
 
   // ── チャートビュー ──────────────────────────────────────────────────────────
   var scView    = 'list';
-  var SC_PERIOD = '1M';
-  var SC_MA     = [];
+  var SC_PERIOD = '6M';
+  var SC_MA     = [25];
   var SC_PAGE   = 0;
   var SC_PER    = 50;
   var allScData       = null;
@@ -3137,15 +3137,15 @@ def _build_stock_page(code: str) -> str:
 <div class="chart-controls">
   <div class="period-btns">
     <button class="period-btn" data-period="1M">1M</button>
-    <button class="period-btn active" data-period="3M">3M</button>
-    <button class="period-btn" data-period="6M">6M</button>
+    <button class="period-btn" data-period="3M">3M</button>
+    <button class="period-btn active" data-period="6M">6M</button>
     <button class="period-btn" data-period="1Y">1Y</button>
     <button class="period-btn" data-period="3Y">3Y</button>
   </div>
   <div class="ma-btns">
     <span class="ma-label">MA</span>
     <button class="ma-btn" data-ma="5" style="--ma-color:#ffa657">5</button>
-    <button class="ma-btn" data-ma="25" style="--ma-color:#58a6ff">25</button>
+    <button class="ma-btn active" data-ma="25" style="--ma-color:#58a6ff">25</button>
     <button class="ma-btn" data-ma="75" style="--ma-color:#a371f7">75</button>
   </div>
 </div>
@@ -3154,8 +3154,8 @@ def _build_stock_page(code: str) -> str:
 <script>
 (function(){{
   var allPrices={prices_json};
-  var activePeriod='3M';
-  var activeMAs=new Set();
+  var activePeriod='6M';
+  var activeMAs=new Set([25]);
   var MA_COLORS={{5:'#ffa657',25:'#58a6ff',75:'#a371f7'}};
   function filterPrices(period){{
     if(!allPrices.length) return allPrices;
