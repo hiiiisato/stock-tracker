@@ -32,7 +32,7 @@ BASE    = "https://edinetdb.jp/v1"
 KEY     = os.environ.get("EDINETDB_API_KEY", "")
 HEADERS = {"X-API-Key": KEY, "Accept": "application/json"}
 DELAY   = 0.5    # API間隔（秒）
-LIMIT   = 80     # 1日あたりの処理上限（公称100件/日の安全マージン確保）
+LIMIT   = 10     # 月300件上限のため1日10件に抑える（300÷30日）
 
 
 # ─── テーブル作成 ────────────────────────────────────────────────────────────
