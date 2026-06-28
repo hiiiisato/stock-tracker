@@ -2947,7 +2947,7 @@ def _build_stock_page(code: str) -> str:
     for _ex_date, _amount in div_all_rows:
         _div_by_year[str(_ex_date)[:4]] += float(_amount or 0)
 
-    def _build_fin_rows(rows, fc_rows=None):
+    def _build_fin_rows(rows, fc_rows=None, shares_cnt=None):
         result = []
         for r in rows:
             period_end, period_type = str(r[0]), r[1]
@@ -2960,32 +2960,64 @@ def _build_stock_page(code: str) -> str:
             cf   = _to_oku(r[7])
             yr   = period_end[:4]
             dps  = round(_div_by_year[yr], 1) if yr in _div_by_year else None
+            # ROE = 当期純利益 / 自己資本 × 100
+            roe_val = _safe_pct(r[4], r[6])
+            # EPS = 当期純利益(円) / 発行済株式数
+            eps_val = None
+            if shares_cnt and r[4] is not None:
+                try:
+                    eps_val = round(float(r[4]) / float(shares_cnt), 1)
+                except Exception:
+                    pass
+            # 配当性向 = DPS / EPS × 100
+            payout_val = None
+            if dps is not None and eps_val is not None and eps_val > 0:
+                payout_val = round(dps / eps_val * 100, 1)
             result.append({
                 "label": lbl, "period_end": period_end,
                 "revenue": rev, "op": op, "net": net,
                 "total_assets": ta, "total_equity": te, "cf_op": cf,
                 "op_mgn": _safe_pct(r[3], r[2]),
                 "net_mgn": _safe_pct(r[4], r[2]),
-                "dps": dps, "payout": None, "roe": None, "eps": None,
+                "dps": dps, "payout": payout_val, "roe": roe_val, "eps": eps_val,
                 "is_forecast": False,
             })
         if fc_rows:
             for r in fc_rows:
                 fend = str(r[0])
-                lbl  = fend[:7].replace("-", "/")
+                lbl  = fend[:7].replace("-", "/") + "(P)"
                 rev  = _to_oku(r[1])
                 op   = _to_oku(r[2])
                 net  = _to_oku(r[3])
                 dps  = float(r[4]) if r[4] is not None else None
+                fc_eps = None
+                if shares_cnt and r[3] is not None:
+                    try:
+                        fc_eps = round(float(r[3]) / float(shares_cnt), 1)
+                    except Exception:
+                        pass
+                fc_payout = None
+                if dps is not None and fc_eps is not None and fc_eps > 0:
+                    fc_payout = round(dps / fc_eps * 100, 1)
                 result.append({
                     "label": lbl, "period_end": fend,
                     "revenue": rev, "op": op, "net": net,
                     "total_assets": None, "total_equity": None, "cf_op": None,
                     "op_mgn": _safe_pct(r[2], r[1]),
                     "net_mgn": _safe_pct(r[3], r[1]),
-                    "dps": dps, "payout": None, "roe": None, "eps": None,
+                    "dps": dps, "payout": fc_payout, "roe": None, "eps": fc_eps,
                     "is_forecast": True,
                 })
+        # 前年比（売上高成長率）を計算
+        for i, row in enumerate(result):
+            if i > 0:
+                prev = result[i - 1]
+                if prev.get("revenue") and row.get("revenue") and prev["revenue"] != 0:
+                    row["yoy_rev"] = round((row["revenue"] - prev["revenue"]) / abs(prev["revenue"]) * 100, 1)
+                else:
+                    row["yoy_rev"] = None
+            else:
+                row["yoy_rev"] = None
         # 重複period_end排除（実績と予想が被る場合は実績優先）
         seen: set = set()
         deduped = []
@@ -2995,8 +3027,8 @@ def _build_stock_page(code: str) -> str:
                 deduped.append(row)
         return deduped
 
-    fin_annual_data    = _build_fin_rows(fin_annual_rows, forecast_rows)
-    fin_quarterly_data = _build_fin_rows(fin_quarterly_rows)
+    fin_annual_data    = _build_fin_rows(fin_annual_rows, fc_rows=forecast_rows, shares_cnt=shares)
+    fin_quarterly_data = _build_fin_rows(fin_quarterly_rows, shares_cnt=shares)
 
     fin_annual_json    = _json.dumps(fin_annual_data,    ensure_ascii=False)
     fin_quarterly_json = _json.dumps(fin_quarterly_data, ensure_ascii=False)
@@ -3430,7 +3462,8 @@ function yoy(data,key){
 
 function renderRevChart(d){
   var t=mkBar(d,'revenue','#58a6ff','%{y:.1f}億');
-  t.push(mkLine(d,'op_mgn','#ffa657','%'));
+  var hasYoy=d.some(function(x){return x.yoy_rev!=null;});
+  if(hasYoy){t.push(mkLine(d,'yoy_rev','#ffa657','%'));}
   var L=mkLayout({y1:{ticksuffix:'億'},y2:{tickcolor:'#ffa657',tickfont:{color:'#ffa657',size:10},ticksuffix:'%'},shapes:fcShapes(d)});
   Plotly.react('fin-rev-chart',t,L,{responsive:true,displayModeBar:false});
 }
@@ -3519,7 +3552,7 @@ function renderFinTable(d){
       if(v==null)return'<td><span style="color:#484f58">—</span></td>';
       return'<td>'+parseFloat(v.toFixed(1)).toLocaleString('ja-JP')+'</td>';
     }).join('');
-    return'<tr'+cls+'><td>'+r.label+(r.is_forecast?' <small style="color:#484f58">予</small>':'')+'</td>'+cells+'</tr>';
+    return'<tr'+cls+'><td>'+r.label+(r.is_forecast?' <small style="color:#ffa657;font-weight:700">P</small>':'')+'</td>'+cells+'</tr>';
   }).join('')+'</tbody>';
   document.getElementById('fin-table').innerHTML=thead+tbody;
 }
@@ -3610,7 +3643,7 @@ function renderFinTable(d){
 <div class="fin-charts-grid">
   <div class="fin-chart-box">
     <div class="fin-chart-hd">
-      <span class="fin-chart-title">売上高 &amp; 営業利益率</span>
+      <span class="fin-chart-title">売上高 &amp; 前年比</span>
       <span class="fin-chart-unit">億円 ／ %</span>
     </div>
     <div id="fin-rev-chart" style="height:230px"></div>
