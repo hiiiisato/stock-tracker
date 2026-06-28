@@ -2099,26 +2099,55 @@ _STOCK_CSS = """
 
 
 _SCREEN_CSS = """
-.sc-wrap { max-width: 1100px; margin: 0 auto; }
-.sc-page-title {
-  font-size: 20px; font-weight: 700; color: #e6edf3; margin-bottom: 16px;
+.sc-wrap { max-width: 1200px; margin: 0 auto; }
+.sc-page-title { font-size: 20px; font-weight: 700; color: #e6edf3; margin-bottom: 14px; }
+
+/* ── 戦略タブ ── */
+.sc-tabs-outer {
+  overflow-x: auto; margin-bottom: 14px; padding-bottom: 4px;
+  scrollbar-width: thin; scrollbar-color: #30363d transparent;
 }
-/* プリセット */
-.sc-presets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
-.sc-preset {
+.sc-tabs-outer::-webkit-scrollbar { height: 4px; }
+.sc-tabs-outer::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+.sc-tabs { display: flex; gap: 6px; width: max-content; }
+.sc-tab {
   background: #21262d; border: 1px solid #30363d; border-radius: 20px;
-  color: #8b949e; font-size: 13px; padding: 5px 14px; cursor: pointer;
-  transition: all 0.15s;
+  color: #8b949e; font-size: 12px; padding: 5px 12px; cursor: pointer;
+  white-space: nowrap; transition: all 0.15s;
 }
-.sc-preset:hover  { border-color: #58a6ff; color: #58a6ff; }
-.sc-preset.active { background: #1f3451; border-color: #58a6ff; color: #58a6ff; }
-/* フィルターパネル */
-.sc-filters {
+.sc-tab:hover  { border-color: #58a6ff; color: #58a6ff; }
+.sc-tab.active { background: #1f3451; border-color: #58a6ff; color: #58a6ff; font-weight: 600; }
+
+/* ── 戦略情報パネル ── */
+.sc-strat-panel {
   background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-  padding: 16px 20px; margin-bottom: 16px;
+  padding: 12px 16px; margin-bottom: 12px;
+}
+.sc-strat-desc { font-size: 12px; color: #8b949e; margin-bottom: 8px; line-height: 1.6; }
+.sc-strat-conds { display: flex; flex-wrap: wrap; gap: 6px; }
+.sc-cond-chip {
+  font-size: 11px; padding: 3px 10px; border-radius: 12px; white-space: nowrap;
+  background: #1f3451; border: 1px solid #2f4a6e; color: #79c0ff;
+}
+
+/* ── カスタムフィルター ── */
+.sc-adv { margin-bottom: 12px; }
+.sc-adv > summary {
+  cursor: pointer; font-size: 13px; color: #8b949e; padding: 8px 14px;
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  user-select: none; list-style: none;
+}
+.sc-adv > summary:hover { color: #c9d1d9; }
+.sc-adv[open] > summary { border-radius: 8px 8px 0 0; }
+.sc-filters {
+  background: #161b22; border: 1px solid #30363d; border-top: none;
+  border-radius: 0 0 8px 8px; padding: 16px 20px;
   display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px 24px;
 }
-.sc-filter-label { font-size: 11px; color: #8b949e; margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.sc-filter-label {
+  font-size: 11px; color: #8b949e; margin-bottom: 6px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+}
 .sc-range { display: flex; align-items: center; gap: 6px; }
 .sc-range input[type="number"] {
   width: 80px; background: #0d1117; border: 1px solid #30363d; border-radius: 5px;
@@ -2129,28 +2158,28 @@ _SCREEN_CSS = """
 .sc-market-checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .sc-chk { display: flex; align-items: center; gap: 5px; font-size: 13px; color: #c9d1d9; cursor: pointer; }
 .sc-chk input { accent-color: #58a6ff; width: 14px; height: 14px; }
-/* 結果ヘッダー */
+
+/* ── 結果ヘッダー ── */
 .sc-result-header {
-  display: flex; justify-content: space-between; align-items: center;
-  margin-bottom: 10px;
+  display: flex; align-items: center; margin-bottom: 10px;
+  flex-wrap: wrap; gap: 8px;
 }
 .sc-count { font-size: 13px; color: #8b949e; }
 .sc-sort {
   background: #21262d; border: 1px solid #30363d; border-radius: 5px;
-  color: #c9d1d9; font-size: 13px; padding: 4px 8px; cursor: pointer;
+  color: #c9d1d9; font-size: 13px; padding: 4px 8px; cursor: pointer; margin-left: auto;
 }
-/* 結果テーブル */
+
+/* ── テーブル ── */
 .sc-table-wrap { overflow-x: auto; }
-.sc-table {
-  width: 100%; border-collapse: collapse; font-size: 13px;
-}
+.sc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .sc-table th {
   background: #161b22; color: #8b949e; font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.4px;
   padding: 8px 10px; border-bottom: 1px solid #30363d; white-space: nowrap;
   cursor: pointer; user-select: none;
 }
-.sc-table th:hover { color: #c9d1d9; }
+.sc-table th:hover  { color: #c9d1d9; }
 .sc-table th.sort-asc::after  { content: ' ↑'; color: #58a6ff; }
 .sc-table th.sort-desc::after { content: ' ↓'; color: #58a6ff; }
 .sc-table td { padding: 8px 10px; border-bottom: 1px solid #1c2128; white-space: nowrap; }
@@ -2161,10 +2190,21 @@ _SCREEN_CSS = """
 .sc-table .num { text-align: right; }
 .sc-table .up  { color: #E84040; }
 .sc-table .dn  { color: #3A9FE0; }
+.sc-flag-on  { color: #3fb950; }
+.sc-flag-off { color: #484f58; }
 .sc-empty { text-align: center; padding: 48px; color: #484f58; }
 .sc-loading { text-align: center; padding: 48px; color: #8b949e; }
-@media (max-width: 640px) {
+
+@media (max-width: 768px) {
+  .sc-wrap { padding: 8px; }
+  .sc-tabs-outer { margin-bottom: 8px; }
+  .sc-tab { padding: 5px 10px; font-size: 12px; }
+  .sc-result-header { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .sc-sort { width: 100%; }
+  .sc-table { font-size: 12px; }
+  .sc-table th, .sc-table td { padding: 6px 6px; }
   .sc-filters { grid-template-columns: 1fr; }
+  .cg-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 }
 """
 
@@ -2420,118 +2460,136 @@ def _build_screen_page() -> str:
 <div class="sc-wrap">
   <div class="sc-page-title">スクリーニング</div>
 
-  <div class="sc-presets" id="presets">
-    <button class="sc-preset" data-preset="high-div">高配当 3%+</button>
-    <button class="sc-preset" data-preset="low-pbr">低PBR &lt;1倍</button>
-    <button class="sc-preset" data-preset="high-roe">高ROE 15%+</button>
-    <button class="sc-preset" data-preset="value">バリュー株</button>
-    <button class="sc-preset" data-preset="growth">グロース株</button>
-    <button class="sc-preset" data-preset="momentum">急騰 25日+15%</button>
-    <button class="sc-preset" data-preset="oversold">急落 25日-15%</button>
-    <button class="sc-preset" data-preset="ma-cross-up">MA25上抜け</button>
-    <button class="sc-preset" data-preset="reset" style="margin-left:auto">リセット</button>
+  <div class="sc-tabs-outer">
+    <div class="sc-tabs" id="scTabs">
+      <button class="sc-tab active" data-strat="-1">すべて</button>
+      <button class="sc-tab" data-strat="0">① トレンド初動</button>
+      <button class="sc-tab" data-strat="1">② ブレイクアウト</button>
+      <button class="sc-tab" data-strat="2">③ 好決算モメンタム</button>
+      <button class="sc-tab" data-strat="3">④ V字反転</button>
+      <button class="sc-tab" data-strat="4">⑤ 業績急成長</button>
+      <button class="sc-tab" data-strat="5">⑥ 小型株爆発</button>
+      <button class="sc-tab" data-strat="6">⑦ 高配当バリュー</button>
+      <button class="sc-tab" data-strat="7">⑧ 低PBR発掘</button>
+      <button class="sc-tab" data-strat="8">⑨ 高ROEグロース</button>
+      <button class="sc-tab" data-strat="9">⑩ 機関投資家注目</button>
+      <button class="sc-tab" data-strat="10">⑪ ボックス上抜け</button>
+      <button class="sc-tab" data-strat="11">⑫ 押し目買い</button>
+      <button class="sc-tab" data-strat="12">⑬ MACD-GC</button>
+      <button class="sc-tab" data-strat="13">⑭ 増配・高配当</button>
+      <button class="sc-tab" data-strat="14">⑮ 業績+チャート複合</button>
+      <button class="sc-tab" data-strat="99">カスタム</button>
+    </div>
   </div>
 
-  <div class="sc-filters">
-    <div>
-      <div class="sc-filter-label">PER（倍）</div>
-      <div class="sc-range">
-        <input type="number" id="per-min" placeholder="下限" min="0" max="9999" step="0.1">
-        <span class="sc-range-sep">〜</span>
-        <input type="number" id="per-max" placeholder="上限" min="0" max="9999" step="0.1">
-      </div>
-    </div>
-    <div>
-      <div class="sc-filter-label">PBR（倍）</div>
-      <div class="sc-range">
-        <input type="number" id="pbr-min" placeholder="下限" min="0" max="999" step="0.1">
-        <span class="sc-range-sep">〜</span>
-        <input type="number" id="pbr-max" placeholder="上限" min="0" max="999" step="0.1">
-      </div>
-    </div>
-    <div>
-      <div class="sc-filter-label">ROE（%）</div>
-      <div class="sc-range">
-        <input type="number" id="roe-min" placeholder="下限" min="-9999" max="9999" step="0.1">
-        <span class="sc-range-sep">〜</span>
-        <input type="number" id="roe-max" placeholder="上限" min="-9999" max="9999" step="0.1">
-      </div>
-    </div>
-    <div>
-      <div class="sc-filter-label">配当利回り（%）</div>
-      <div class="sc-range">
-        <input type="number" id="div-min" placeholder="下限" min="0" max="99" step="0.1">
-        <span class="sc-range-sep">〜</span>
-        <input type="number" id="div-max" placeholder="上限" min="0" max="99" step="0.1">
-      </div>
-    </div>
-    <div>
-      <div class="sc-filter-label">市場</div>
-      <div class="sc-market-checks">
-        <label class="sc-chk"><input type="checkbox" value="プライム" checked> プライム</label>
-        <label class="sc-chk"><input type="checkbox" value="スタンダード" checked> スタンダード</label>
-        <label class="sc-chk"><input type="checkbox" value="グロース" checked> グロース</label>
-        <label class="sc-chk"><input type="checkbox" value="other" checked> その他</label>
-      </div>
-    </div>
-    <div>
-      <div class="sc-filter-label">25日間騰落率（%）</div>
-      <div class="sc-range">
-        <input type="number" id="chg25-min" placeholder="下限" min="-99" max="999" step="1">
-        <span class="sc-range-sep">〜</span>
-        <input type="number" id="chg25-max" placeholder="上限" min="-99" max="999" step="1">
-      </div>
-    </div>
-    <div>
-      <div class="sc-filter-label">75日間騰落率（%）</div>
-      <div class="sc-range">
-        <input type="number" id="chg75-min" placeholder="下限" min="-99" max="999" step="1">
-        <span class="sc-range-sep">〜</span>
-        <input type="number" id="chg75-max" placeholder="上限" min="-99" max="999" step="1">
-      </div>
-    </div>
-    <div>
-      <div class="sc-filter-label">25日線乖離率（%）</div>
-      <div class="sc-range">
-        <input type="number" id="devma25-min" placeholder="下限" min="-99" max="999" step="1">
-        <span class="sc-range-sep">〜</span>
-        <input type="number" id="devma25-max" placeholder="上限" min="-99" max="999" step="1">
-      </div>
-    </div>
-    <div>
-      <div class="sc-filter-label">52週高値からの乖離率（%）</div>
-      <div class="sc-range">
-        <input type="number" id="dev52h-min" placeholder="下限" min="-99" max="0" step="1">
-        <span class="sc-range-sep">〜</span>
-        <input type="number" id="dev52h-max" placeholder="上限" min="-99" max="0" step="1">
-      </div>
-    </div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;padding:6px 2px">
+    <label class="sc-chk"><input class="sc-mkt-chk" type="checkbox" value="プライム" checked> プライム</label>
+    <label class="sc-chk"><input class="sc-mkt-chk" type="checkbox" value="スタンダード" checked> スタンダード</label>
+    <label class="sc-chk"><input class="sc-mkt-chk" type="checkbox" value="グロース" checked> グロース</label>
+    <label class="sc-chk"><input class="sc-mkt-chk" type="checkbox" value="other" checked> その他</label>
   </div>
+
+  <div class="sc-strat-panel" id="scStratPanel" style="display:none">
+    <div class="sc-strat-desc" id="scStratDesc"></div>
+    <div class="sc-strat-conds" id="scStratConds"></div>
+  </div>
+
+  <details class="sc-adv" id="scAdv" style="display:none">
+    <summary>▼ 詳細フィルター</summary>
+    <div class="sc-filters">
+      <div>
+        <div class="sc-filter-label">PER（倍）</div>
+        <div class="sc-range">
+          <input type="number" id="per-min" placeholder="下限" min="0" step="0.1">
+          <span class="sc-range-sep">〜</span>
+          <input type="number" id="per-max" placeholder="上限" min="0" step="0.1">
+        </div>
+      </div>
+      <div>
+        <div class="sc-filter-label">PBR（倍）</div>
+        <div class="sc-range">
+          <input type="number" id="pbr-min" placeholder="下限" min="0" step="0.1">
+          <span class="sc-range-sep">〜</span>
+          <input type="number" id="pbr-max" placeholder="上限" min="0" step="0.1">
+        </div>
+      </div>
+      <div>
+        <div class="sc-filter-label">ROE（%）</div>
+        <div class="sc-range">
+          <input type="number" id="roe-min" placeholder="下限" step="1">
+          <span class="sc-range-sep">〜</span>
+          <input type="number" id="roe-max" placeholder="上限" step="1">
+        </div>
+      </div>
+      <div>
+        <div class="sc-filter-label">配当利回り（%）</div>
+        <div class="sc-range">
+          <input type="number" id="div-min" placeholder="下限" min="0" step="0.1">
+          <span class="sc-range-sep">〜</span>
+          <input type="number" id="div-max" placeholder="上限" min="0" step="0.1">
+        </div>
+      </div>
+      <div>
+        <div class="sc-filter-label">売上成長率（%）</div>
+        <div class="sc-range">
+          <input type="number" id="rev-min" placeholder="下限" step="1">
+          <span class="sc-range-sep">〜</span>
+          <input type="number" id="rev-max" placeholder="上限" step="1">
+        </div>
+      </div>
+      <div>
+        <div class="sc-filter-label">RSI（14日）</div>
+        <div class="sc-range">
+          <input type="number" id="rsi-min" placeholder="下限" min="0" max="100" step="1">
+          <span class="sc-range-sep">〜</span>
+          <input type="number" id="rsi-max" placeholder="上限" min="0" max="100" step="1">
+        </div>
+      </div>
+      <div>
+        <div class="sc-filter-label">25日MA乖離率（%）</div>
+        <div class="sc-range">
+          <input type="number" id="devma25-min" placeholder="下限" step="1">
+          <span class="sc-range-sep">〜</span>
+          <input type="number" id="devma25-max" placeholder="上限" step="1">
+        </div>
+      </div>
+      <div>
+        <div class="sc-filter-label">52週高値乖離（%）</div>
+        <div class="sc-range">
+          <input type="number" id="dev52h-min" placeholder="下限" step="1">
+          <span class="sc-range-sep">〜</span>
+          <input type="number" id="dev52h-max" placeholder="上限" step="1">
+        </div>
+      </div>
+    </div>
+  </details>
 
   <div class="sc-result-header">
     <span class="sc-count" id="sc-count">読み込み中...</span>
-    <div style="display:flex;gap:4px;margin:0 8px">
+    <div style="display:flex;gap:4px;margin:0 6px">
       <button class="cg-view-btn active" id="sc-btn-list">☰ リスト</button>
       <button class="cg-view-btn" id="sc-btn-chart">⊞ チャート</button>
     </div>
     <select class="sc-sort" id="sc-sort">
       <option value="market_cap-desc">時価総額 大きい順</option>
       <option value="market_cap-asc">時価総額 小さい順</option>
-      <option value="chg25d-desc">25日騰落率 高い順</option>
-      <option value="chg25d-asc">25日騰落率 低い順</option>
-      <option value="chg75d-desc">75日騰落率 高い順</option>
-      <option value="chg75d-asc">75日騰落率 低い順</option>
-      <option value="dev_ma25-desc">MA25乖離率 高い順</option>
-      <option value="dev_ma25-asc">MA25乖離率 低い順</option>
-      <option value="per-asc">PER 小さい順</option>
-      <option value="per-desc">PER 大きい順</option>
-      <option value="pbr-asc">PBR 小さい順</option>
-      <option value="pbr-desc">PBR 大きい順</option>
+      <option value="chg25d-desc">25日騰落 高い順</option>
+      <option value="chg25d-asc">25日騰落 低い順</option>
+      <option value="chg75d-desc">75日騰落 高い順</option>
+      <option value="vol20_ratio-desc">出来高比 高い順</option>
+      <option value="turnover_20d-desc">売買代金 高い順</option>
+      <option value="rsi14-asc">RSI 低い順</option>
+      <option value="rsi14-desc">RSI 高い順</option>
+      <option value="dev_ma25-asc">MA25乖離 低い順</option>
+      <option value="rev_growth-desc">売上成長 高い順</option>
+      <option value="op_growth-desc">営業益成長 高い順</option>
+      <option value="eps_growth-desc">EPS成長 高い順</option>
       <option value="roe-desc">ROE 高い順</option>
-      <option value="roe-asc">ROE 低い順</option>
+      <option value="roic-desc">ROIC 高い順</option>
       <option value="div_yield-desc">配当利回り 高い順</option>
-      <option value="change_pct-desc">前日上昇率 高い順</option>
-      <option value="change_pct-asc">前日下落率 高い順</option>
+      <option value="per-asc">PER 小さい順</option>
+      <option value="pbr-asc">PBR 小さい順</option>
+      <option value="change_pct-desc">前日上昇 高い順</option>
     </select>
   </div>
 
@@ -2564,398 +2622,387 @@ def _build_screen_page() -> str:
 
   <div class="sc-table-wrap">
     <table class="sc-table" id="sc-table">
-      <thead><tr>
-        <th>コード</th>
-        <th>銘柄名</th>
-        <th>市場</th>
-        <th class="num" data-col="close">株価</th>
-        <th class="num" data-col="change_pct">前日比</th>
-        <th class="num" data-col="chg25d">25日騰落</th>
-        <th class="num" data-col="chg75d">75日騰落</th>
-        <th class="num" data-col="dev_ma25">MA25乖離</th>
-        <th class="num" data-col="market_cap">時価総額</th>
-        <th class="num" data-col="per">PER</th>
-        <th class="num" data-col="pbr">PBR</th>
-        <th class="num" data-col="roe">ROE</th>
-        <th class="num" data-col="div_yield">配当利回り</th>
-      </tr></thead>
-      <tbody id="sc-tbody"><tr><td colspan="13" class="sc-loading">データ読み込み中...</td></tr></tbody>
+      <thead id="sc-thead"><tr></tr></thead>
+      <tbody id="sc-tbody"><tr><td class="sc-loading">データ読み込み中...</td></tr></tbody>
     </table>
   </div>
 </div>
 
 <script>
 (function(){{
-  var stocks=[], sortCol='market_cap', sortDir=-1;
-  var PRESETS={{
-    'high-div':    {{divMin:3}},
-    'low-pbr':     {{pbrMax:1, perMin:0}},
-    'high-roe':    {{roeMin:15}},
-    'value':       {{pbrMax:1.5, perMin:0, perMax:20}},
-    'growth':      {{roeMin:20, perMin:0}},
-    'momentum':    {{chg25Min:15}},
-    'oversold':    {{chg25Max:-15}},
-    'ma-cross-up': {{devma25Min:3, devma25Max:15}},
-    'reset':       {{}},
-  }};
+  var STRATS=[
+    {{name:'① トレンド初動',desc:'上昇トレンドの初動局面。MA25>MA75・52週高値圏・出来高増加が揃ったとき。',
+      conds:[{{f:'vs_ma25',op:'>=',val:0,lbl:'株価>MA25'}},{{f:'ma25_vs_ma75',op:'>=',val:0,lbl:'MA25>MA75'}},
+             {{f:'dev_high52w',op:'>=',val:-10,lbl:'52週高値-10%内'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}},
+             {{f:'turnover_20d',op:'>=',val:10,lbl:'売買代金10億+'}}],
+      cols:['code','name','market','close','change_pct','chg25d','dev_ma25','dev_high52w','vol20_ratio','turnover_20d','market_cap'],sort:'chg25d-desc'}},
+    {{name:'② ブレイクアウト',desc:'20日高値更新・出来高急増・RSI55〜80・MACD-GC。上昇加速の初動サイン。',
+      conds:[{{f:'break_20d',op:'=',val:1,lbl:'20日高値更新'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}},
+             {{f:'rsi14',op:'>=',val:55,lbl:'RSI≥55'}},{{f:'rsi14',op:'<=',val:80,lbl:'RSI≤80'}},{{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC'}}],
+      cols:['code','name','market','close','change_pct','chg25d','rsi14','vol20_ratio','turnover_day','break_20d','macd_gc'],sort:'vol20_ratio-desc'}},
+    {{name:'③ 好決算モメンタム',desc:'売上+15%・営業利益+20%の高成長。決算跨ぎで急伸しやすい銘柄群。',
+      conds:[{{f:'rev_growth',op:'>=',val:15,lbl:'売上+15%'}},{{f:'op_growth',op:'>=',val:20,lbl:'営業利益+20%'}},
+             {{f:'vol20_ratio',op:'>=',val:1.2,lbl:'出来高1.2倍+'}}],
+      cols:['code','name','market','close','change_pct','chg25d','rev_growth','op_growth','eps_growth','roe','rsi14'],sort:'op_growth-desc'}},
+    {{name:'④ V字反転',desc:'急落後の反発局面。RSI30〜55・MACDゴールデンクロス・出来高回復が揃う。',
+      conds:[{{f:'rsi14',op:'>=',val:30,lbl:'RSI≥30'}},{{f:'rsi14',op:'<=',val:55,lbl:'RSI≤55'}},
+             {{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC'}},{{f:'chg25d',op:'<=',val:-5,lbl:'25日-5%以下'}},
+             {{f:'vol20_ratio',op:'>=',val:1.2,lbl:'出来高1.2倍+'}}],
+      cols:['code','name','market','close','change_pct','chg25d','chg75d','rsi14','dev_ma25','macd_gc','vol20_ratio'],sort:'chg25d-asc'}},
+    {{name:'⑤ 業績急成長',desc:'売上+20%・EPS+25%・ROE15%・営業利益率10%以上が揃った成長株。',
+      conds:[{{f:'rev_growth',op:'>=',val:20,lbl:'売上+20%'}},{{f:'eps_growth',op:'>=',val:25,lbl:'EPS+25%'}},
+             {{f:'roe',op:'>=',val:15,lbl:'ROE≥15%'}},{{f:'op_margin',op:'>=',val:10,lbl:'営業利益率≥10%'}},
+             {{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}}],
+      cols:['code','name','market','close','change_pct','per','pbr','roe','rev_growth','eps_growth','op_margin','roic'],sort:'eps_growth-desc'}},
+    {{name:'⑥ 小型株爆発',desc:'時価総額50〜500億の小型株で20日高値更新・出来高急増のもの。',
+      conds:[{{f:'market_cap',op:'>=',val:50e8,lbl:'時価総額50億+'}},{{f:'market_cap',op:'<=',val:500e8,lbl:'時価総額500億以下'}},
+             {{f:'break_20d',op:'=',val:1,lbl:'20日高値更新'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}}],
+      cols:['code','name','market','close','change_pct','chg25d','rsi14','vol20_ratio','turnover_day','break_20d','market_cap'],sort:'vol20_ratio-desc'}},
+    {{name:'⑦ 高配当バリュー',desc:'配当利回り3%以上・PBR1.5倍以下・ROE10%以上・営業CF黒字の持続可能高配当株。',
+      conds:[{{f:'div_yield',op:'>=',val:3,lbl:'配当3%+'}},{{f:'pbr',op:'<=',val:1.5,lbl:'PBR≤1.5倍'}},
+             {{f:'roe',op:'>=',val:10,lbl:'ROE≥10%'}},{{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}}],
+      cols:['code','name','market','close','change_pct','div_yield','pbr','per','roe','roic','cf_positive'],sort:'div_yield-desc'}},
+    {{name:'⑧ 低PBR発掘',desc:'PBR0.8倍以下でROE黒字・CF安定。解散価値以下で放置された超割安株。',
+      conds:[{{f:'pbr',op:'<=',val:0.8,lbl:'PBR≤0.8倍'}},{{f:'roe',op:'>=',val:5,lbl:'ROE≥5%'}},
+             {{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}}],
+      cols:['code','name','market','close','change_pct','pbr','per','roe','div_yield','market_cap','chg25d'],sort:'pbr-asc'}},
+    {{name:'⑨ 高ROEグロース',desc:'ROE20%以上・ROIC10%以上・CF黒字・営業利益率15%以上の高資本効率優良成長株。',
+      conds:[{{f:'roe',op:'>=',val:20,lbl:'ROE≥20%'}},{{f:'roic',op:'>=',val:10,lbl:'ROIC≥10%'}},
+             {{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}},{{f:'op_margin',op:'>=',val:15,lbl:'営業利益率≥15%'}}],
+      cols:['code','name','market','close','change_pct','per','pbr','roe','roic','op_margin','rev_growth','eps_growth'],sort:'roe-desc'}},
+    {{name:'⑩ 機関投資家注目',desc:'時価総額500億以上・売買代金20億以上・ROE15%・営業利益率15%以上の大型優良株。',
+      conds:[{{f:'market_cap',op:'>=',val:500e8,lbl:'時価総額500億+'}},{{f:'turnover_20d',op:'>=',val:20,lbl:'売買代金20億+'}},
+             {{f:'roe',op:'>=',val:15,lbl:'ROE≥15%'}},{{f:'op_margin',op:'>=',val:15,lbl:'営業利益率≥15%'}}],
+      cols:['code','name','market','close','change_pct','market_cap','turnover_20d','per','pbr','roe','op_margin','div_yield'],sort:'market_cap-desc'}},
+    {{name:'⑪ ボックス上抜け',desc:'65日高値更新（3ヶ月レンジ上抜け）・出来高急増・MACD-GCで力強い上放れ。',
+      conds:[{{f:'break_65d',op:'=',val:1,lbl:'65日高値更新'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}},
+             {{f:'rsi14',op:'>=',val:55,lbl:'RSI≥55'}},{{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC'}}],
+      cols:['code','name','market','close','change_pct','chg75d','rsi14','vol20_ratio','turnover_day','break_65d','macd_gc'],sort:'chg75d-desc'}},
+    {{name:'⑫ 押し目買い',desc:'MA25付近に押してきた（乖離-5〜+2%）・MA75上・RSI40〜65の理想的エントリーゾーン。',
+      conds:[{{f:'dev_ma25',op:'>=',val:-5,lbl:'MA25乖離-5%以上'}},{{f:'dev_ma25',op:'<=',val:2,lbl:'MA25乖離+2%以下'}},
+             {{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}},{{f:'rsi14',op:'>=',val:40,lbl:'RSI≥40'}},{{f:'rsi14',op:'<=',val:65,lbl:'RSI≤65'}}],
+      cols:['code','name','market','close','change_pct','dev_ma25','dev_ma75','rsi14','vol20_ratio','chg75d','market_cap'],sort:'dev_ma25-asc'}},
+    {{name:'⑬ MACD-GC',desc:'直近5本以内にMACDがシグナルを上抜け。株価>MA25・RSI50以上で強度確認。',
+      conds:[{{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC発生'}},{{f:'vs_ma25',op:'>=',val:0,lbl:'株価>MA25'}},
+             {{f:'rsi14',op:'>=',val:50,lbl:'RSI≥50'}}],
+      cols:['code','name','market','close','change_pct','rsi14','macd','macd_signal','dev_ma25','vol20_ratio','chg25d'],sort:'chg25d-desc'}},
+    {{name:'⑭ 増配・高配当',desc:'配当利回り2%以上・配当性向50%以下・ROE10%以上・CF黒字で持続可能な配当株。',
+      conds:[{{f:'div_yield',op:'>=',val:2,lbl:'配当2%+'}},{{f:'payout_ratio',op:'<=',val:50,lbl:'配当性向50%以下'}},
+             {{f:'roe',op:'>=',val:10,lbl:'ROE≥10%'}},{{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}}],
+      cols:['code','name','market','close','change_pct','div_yield','payout_ratio','pbr','roe','rev_growth','market_cap'],sort:'div_yield-desc'}},
+    {{name:'⑮ 業績+チャート複合',desc:'売上+15%・EPS+15%・ROE15%+・MA75上・出来高増加が揃った総合戦略。',
+      conds:[{{f:'rev_growth',op:'>=',val:15,lbl:'売上+15%'}},{{f:'eps_growth',op:'>=',val:15,lbl:'EPS+15%'}},
+             {{f:'roe',op:'>=',val:15,lbl:'ROE≥15%'}},{{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}},
+             {{f:'vol20_ratio',op:'>=',val:1.3,lbl:'出来高1.3倍+'}}],
+      cols:['code','name','market','close','change_pct','rev_growth','eps_growth','roe','roic','chg25d','rsi14','vol20_ratio'],sort:'rev_growth-desc'}},
+  ];
 
-  function fmt(v, dec, sfx) {{
-    if(v===null||v===undefined) return '<span style="color:#484f58">—</span>';
-    return v.toFixed(dec)+sfx;
+  var COL={{
+    code:{{h:'コード',cls:'sc-code'}},name:{{h:'銘柄名',cls:'sc-name'}},market:{{h:'市場',cls:''}},
+    close:{{h:'株価',cls:'num'}},change_pct:{{h:'前日比',cls:'num'}},
+    chg5d:{{h:'5日',cls:'num'}},chg25d:{{h:'25日',cls:'num'}},chg75d:{{h:'75日',cls:'num'}},
+    dev_ma25:{{h:'MA25乖離',cls:'num'}},dev_ma75:{{h:'MA75乖離',cls:'num'}},
+    dev_high52w:{{h:'52週高値乖離',cls:'num'}},rsi14:{{h:'RSI',cls:'num'}},
+    macd:{{h:'MACD',cls:'num'}},macd_signal:{{h:'Signal',cls:'num'}},macd_gc:{{h:'GC',cls:'num'}},
+    vol20_ratio:{{h:'出来高比',cls:'num'}},turnover_day:{{h:'売買代金',cls:'num'}},
+    turnover_20d:{{h:'20日売買代金',cls:'num'}},break_20d:{{h:'20日更新',cls:'num'}},
+    break_65d:{{h:'65日更新',cls:'num'}},market_cap:{{h:'時価総額',cls:'num'}},
+    per:{{h:'PER',cls:'num'}},pbr:{{h:'PBR',cls:'num'}},roe:{{h:'ROE%',cls:'num'}},
+    op_margin:{{h:'営業利益率%',cls:'num'}},roic:{{h:'ROIC%',cls:'num'}},
+    div_yield:{{h:'配当利回り',cls:'num'}},payout_ratio:{{h:'配当性向%',cls:'num'}},
+    cf_positive:{{h:'CF',cls:'num'}},rev_growth:{{h:'売上成長%',cls:'num'}},
+    op_growth:{{h:'営業益成長%',cls:'num'}},eps_growth:{{h:'EPS成長%',cls:'num'}},
+  }};
+  var DEFAULT_COLS=['code','name','market','close','change_pct','chg25d','chg75d','dev_ma25','market_cap','per','pbr','roe','div_yield'];
+
+  var stocks=[],sortCol='market_cap',sortDir=-1,curStrat=-1;
+  var scView='list',SC_PERIOD='6M',SC_MA=[25],SC_PAGE=0,SC_PER=50;
+  var allScData=null,lastScCodeOrder=[];
+
+  var dash='<span style="color:#484f58">—</span>';
+  function escHtml(s){{return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}}
+  function fmtPct(v){{
+    if(v===null||v===undefined)return dash;
+    var cls=v>0?'up':(v<0?'dn':'');
+    return'<span class="'+cls+'">'+(v>0?'+':'')+v.toFixed(2)+'%</span>';
   }}
-  function fmtCap(v) {{
-    if(!v) return '<span style="color:#484f58">—</span>';
-    if(v>=1e12) return (v/1e12).toFixed(1)+'兆';
+  function fmtGrowth(v){{
+    if(v===null||v===undefined)return dash;
+    return'<span class="'+(v>=0?'up':'dn')+'">'+(v>0?'+':'')+v.toFixed(1)+'%</span>';
+  }}
+  function fmtNum(v,dec,sfx){{return(v===null||v===undefined)?dash:v.toFixed(dec)+(sfx||'');}}
+  function fmtCap(v){{
+    if(!v)return dash;
+    if(v>=1e12)return(v/1e12).toFixed(1)+'兆';
     return Math.round(v/1e8)+'億';
   }}
-  function _v(id) {{ return parseFloat(document.getElementById(id).value)||null; }}
-  function getFilters() {{
-    return {{
-      perMin:    _v('per-min'),   perMax:    _v('per-max'),
-      pbrMin:    _v('pbr-min'),   pbrMax:    _v('pbr-max'),
-      roeMin:    _v('roe-min'),   roeMax:    _v('roe-max'),
-      divMin:    _v('div-min'),   divMax:    _v('div-max'),
-      chg25Min:  _v('chg25-min'), chg25Max:  _v('chg25-max'),
-      chg75Min:  _v('chg75-min'), chg75Max:  _v('chg75-max'),
-      devma25Min:_v('devma25-min'),devma25Max:_v('devma25-max'),
-      dev52hMin: _v('dev52h-min'),dev52hMax: _v('dev52h-max'),
-      markets: Array.from(document.querySelectorAll('.sc-market-checks input:checked')).map(function(e){{return e.value;}}),
-    }};
+  function fmtFlag(v){{return v?'<span class="sc-flag-on">✓</span>':'<span class="sc-flag-off">—</span>';}}
+  function fmtCell(s,col){{
+    var v=s[col];
+    if(col==='code')return'<a href="/stock/'+s.code+'" style="font-family:monospace;color:#8b949e;font-size:12px;text-decoration:none">'+s.code+'</a>';
+    if(col==='name')return'<a href="/stock/'+s.code+'" style="color:#79c0ff">'+escHtml(s.name)+'</a>';
+    if(col==='market')return'<span style="font-size:11px;color:#8b949e">'+escHtml(s.market)+'</span>';
+    if(col==='close')return v?v.toLocaleString('ja-JP',{{maximumFractionDigits:0}}):dash;
+    if(['change_pct','chg5d','chg25d','chg75d','dev_ma25','dev_ma75','dev_high52w'].indexOf(col)>=0)return fmtPct(v);
+    if(['roe','op_margin','roic','rev_growth','op_growth','eps_growth'].indexOf(col)>=0)return fmtGrowth(v);
+    if(col==='rsi14')return fmtNum(v,1,'');
+    if(col==='macd'||col==='macd_signal')return fmtNum(v,2,'');
+    if(['macd_gc','break_20d','break_65d','cf_positive'].indexOf(col)>=0)return fmtFlag(v);
+    if(col==='vol20_ratio')return fmtNum(v,2,'x');
+    if(col==='turnover_day'||col==='turnover_20d')return fmtNum(v,1,'億');
+    if(col==='market_cap')return fmtCap(v);
+    if(col==='per')return fmtNum(v,1,'倍');
+    if(col==='pbr')return fmtNum(v,2,'倍');
+    if(col==='div_yield')return fmtNum(v,2,'%');
+    if(col==='payout_ratio')return fmtNum(v,1,'%');
+    return v!==null&&v!==undefined?String(v):dash;
   }}
-  function passFilter(s, f) {{
-    if(f.perMin!==null    && (s.per===null||s.per<f.perMin))       return false;
-    if(f.perMax!==null    && (s.per===null||s.per>f.perMax))       return false;
-    if(f.pbrMin!==null    && (s.pbr===null||s.pbr<f.pbrMin))       return false;
-    if(f.pbrMax!==null    && (s.pbr===null||s.pbr>f.pbrMax))       return false;
-    if(f.roeMin!==null    && (s.roe===null||s.roe<f.roeMin))       return false;
-    if(f.roeMax!==null    && (s.roe===null||s.roe>f.roeMax))       return false;
-    if(f.divMin!==null    && (s.div_yield===null||s.div_yield<f.divMin)) return false;
-    if(f.divMax!==null    && (s.div_yield===null||s.div_yield>f.divMax)) return false;
-    if(f.chg25Min!==null  && (s.chg25d===null||s.chg25d<f.chg25Min))   return false;
-    if(f.chg25Max!==null  && (s.chg25d===null||s.chg25d>f.chg25Max))   return false;
-    if(f.chg75Min!==null  && (s.chg75d===null||s.chg75d<f.chg75Min))   return false;
-    if(f.chg75Max!==null  && (s.chg75d===null||s.chg75d>f.chg75Max))   return false;
-    if(f.devma25Min!==null && (s.dev_ma25===null||s.dev_ma25<f.devma25Min)) return false;
-    if(f.devma25Max!==null && (s.dev_ma25===null||s.dev_ma25>f.devma25Max)) return false;
-    if(f.dev52hMin!==null  && (s.dev_high52w===null||s.dev_high52w<f.dev52hMin)) return false;
-    if(f.dev52hMax!==null  && (s.dev_high52w===null||s.dev_high52w>f.dev52hMax)) return false;
-    var m=s.market||'';
-    var matchMarket=false;
-    f.markets.forEach(function(mk){{
-      if(mk==='other'){{ if(!['プライム','スタンダード','グロース'].some(function(x){{return m.includes(x);}})) matchMarket=true; }}
-      else if(m.includes(mk)) matchMarket=true;
-    }});
-    if(!matchMarket) return false;
+
+  function evalCond(s,c){{
+    var v=s[c.f];
+    if(v===null||v===undefined)return false;
+    if(c.op==='>=')return v>=c.val; if(c.op==='<=')return v<=c.val;
+    if(c.op==='=')return v==c.val; if(c.op==='>') return v>c.val; if(c.op==='<')return v<c.val;
     return true;
   }}
-  function render() {{
-    var f=getFilters();
-    var filtered=stocks.filter(function(s){{return passFilter(s,f);}});
+  function _v(id){{var el=document.getElementById(id);return el&&el.value!==''?parseFloat(el.value):null;}}
+
+  function passMarket(s){{
+    var mkts=Array.from(document.querySelectorAll('.sc-mkt-chk:checked')).map(function(e){{return e.value;}});
+    if(!mkts.length)return true;
+    var m=s.market||'',ok=false;
+    mkts.forEach(function(mk){{
+      if(mk==='other'){{if(!['プライム','スタンダード','グロース'].some(function(x){{return m.includes(x);}}))ok=true;}}
+      else if(m.includes(mk))ok=true;
+    }});
+    return ok;
+  }}
+
+  function passFilter(s){{
+    if(!passMarket(s))return false;
+    if(curStrat>=0&&curStrat<=14){{
+      var conds=STRATS[curStrat].conds;
+      for(var i=0;i<conds.length;i++){{if(!evalCond(s,conds[i]))return false;}}
+      return true;
+    }}
+    if(curStrat===99){{
+      var perMin=_v('per-min'),perMax=_v('per-max'),pbrMin=_v('pbr-min'),pbrMax=_v('pbr-max');
+      var roeMin=_v('roe-min'),roeMax=_v('roe-max'),divMin=_v('div-min'),divMax=_v('div-max');
+      var revMin=_v('rev-min'),revMax=_v('rev-max'),rsiMin=_v('rsi-min'),rsiMax=_v('rsi-max');
+      var dm25Min=_v('devma25-min'),dm25Max=_v('devma25-max'),d52Min=_v('dev52h-min'),d52Max=_v('dev52h-max');
+      if(perMin!==null&&(s.per===null||s.per<perMin))return false;
+      if(perMax!==null&&(s.per===null||s.per>perMax))return false;
+      if(pbrMin!==null&&(s.pbr===null||s.pbr<pbrMin))return false;
+      if(pbrMax!==null&&(s.pbr===null||s.pbr>pbrMax))return false;
+      if(roeMin!==null&&(s.roe===null||s.roe<roeMin))return false;
+      if(roeMax!==null&&(s.roe===null||s.roe>roeMax))return false;
+      if(divMin!==null&&(s.div_yield===null||s.div_yield<divMin))return false;
+      if(divMax!==null&&(s.div_yield===null||s.div_yield>divMax))return false;
+      if(revMin!==null&&(s.rev_growth===null||s.rev_growth<revMin))return false;
+      if(revMax!==null&&(s.rev_growth===null||s.rev_growth>revMax))return false;
+      if(rsiMin!==null&&(s.rsi14===null||s.rsi14<rsiMin))return false;
+      if(rsiMax!==null&&(s.rsi14===null||s.rsi14>rsiMax))return false;
+      if(dm25Min!==null&&(s.dev_ma25===null||s.dev_ma25<dm25Min))return false;
+      if(dm25Max!==null&&(s.dev_ma25===null||s.dev_ma25>dm25Max))return false;
+      if(d52Min!==null&&(s.dev_high52w===null||s.dev_high52w<d52Min))return false;
+      if(d52Max!==null&&(s.dev_high52w===null||s.dev_high52w>d52Max))return false;
+    }}
+    return true;
+  }}
+
+  function getCols(){{return(curStrat>=0&&curStrat<=14)?STRATS[curStrat].cols:DEFAULT_COLS;}}
+
+  function buildHeader(cols){{
+    return cols.map(function(col){{
+      var cd=COL[col]||{{h:col,cls:'num'}};
+      var sc=(sortCol===col)?(sortDir===-1?' sort-desc':' sort-asc'):'';
+      return'<th class="'+(cd.cls||'num')+sc+'" data-col="'+col+'">'+cd.h+'</th>';
+    }}).join('');
+  }}
+
+  function render(){{
+    var cols=getCols();
+    var filtered=stocks.filter(passFilter);
     filtered.sort(function(a,b){{
-      var av=a[sortCol], bv=b[sortCol];
-      if(av===null&&bv===null) return 0;
-      if(av===null) return 1;
-      if(bv===null) return -1;
-      return (av-bv)*sortDir;
+      var av=a[sortCol],bv=b[sortCol];
+      if(av===null&&bv===null)return 0;if(av===null)return 1;if(bv===null)return -1;
+      return(av-bv)*sortDir;
     }});
     document.getElementById('sc-count').textContent=filtered.length+'銘柄ヒット';
-    var rows='';
-    var MAX=500;
+    document.getElementById('sc-thead').innerHTML='<tr>'+buildHeader(cols)+'</tr>';
+    document.querySelectorAll('#sc-thead th[data-col]').forEach(function(th){{
+      th.addEventListener('click',function(){{
+        var col=th.dataset.col;
+        if(sortCol===col)sortDir*=-1; else{{sortCol=col;sortDir=-1;}}
+        document.getElementById('sc-sort').value=sortCol+(sortDir===-1?'-desc':'-asc');
+        render();
+      }});
+    }});
+    var MAX=500,rows='';
     filtered.slice(0,MAX).forEach(function(s){{
-      var chg=s.change_pct;
-      var chgCls=chg>0?'up':(chg<0?'dn':'');
-      var chgStr=chg!==null?(chg>0?'+':'')+chg.toFixed(2)+'%':'—';
-      function fmtChg(v) {{
-        if(v===null||v===undefined) return '<span style="color:#484f58">—</span>';
-        var cls=v>0?'up':(v<0?'dn':'');
-        return '<span class="'+cls+'">'+(v>0?'+':'')+v.toFixed(2)+'%</span>';
-      }}
       rows+='<tr>';
-      rows+='<td class="sc-code">'+s.code+'</td>';
-      rows+='<td class="sc-name"><a href="/stock/'+s.code+'">'+s.name+'</a></td>';
-      rows+='<td style="font-size:11px;color:#8b949e">'+s.market+'</td>';
-      rows+='<td class="num">'+(s.close?s.close.toLocaleString('ja-JP',{{maximumFractionDigits:0}}):'—')+'</td>';
-      rows+='<td class="num '+chgCls+'">'+chgStr+'</td>';
-      rows+='<td class="num">'+fmtChg(s.chg25d)+'</td>';
-      rows+='<td class="num">'+fmtChg(s.chg75d)+'</td>';
-      rows+='<td class="num">'+fmtChg(s.dev_ma25)+'</td>';
-      rows+='<td class="num">'+fmtCap(s.market_cap)+'</td>';
-      rows+='<td class="num">'+fmt(s.per,1,'倍')+'</td>';
-      rows+='<td class="num">'+fmt(s.pbr,2,'倍')+'</td>';
-      rows+='<td class="num">'+(s.roe!==null?fmt(s.roe,1,'%'):'<span style="color:#484f58">—</span>')+'</td>';
-      rows+='<td class="num">'+(s.div_yield!==null?fmt(s.div_yield,2,'%'):'<span style="color:#484f58">—</span>')+'</td>';
+      cols.forEach(function(col){{rows+='<td class="'+(COL[col]&&COL[col].cls||'')+'">'+fmtCell(s,col)+'</td>';  }});
       rows+='</tr>';
     }});
-    if(!filtered.length) rows='<tr><td colspan="13" class="sc-empty">条件に一致する銘柄がありません</td></tr>';
-    else if(filtered.length>MAX) rows+='<tr><td colspan="13" style="text-align:center;padding:10px;color:#484f58;font-size:12px">'+filtered.length+'件中 上位'+MAX+'件を表示</td></tr>';
+    if(!filtered.length)rows='<tr><td colspan="'+cols.length+'" class="sc-empty">条件に一致する銘柄がありません</td></tr>';
+    else if(filtered.length>MAX)rows+='<tr><td colspan="'+cols.length+'" style="text-align:center;padding:10px;color:#484f58;font-size:12px">'+filtered.length+'件中 上位'+MAX+'件を表示</td></tr>';
     document.getElementById('sc-tbody').innerHTML=rows;
   }}
 
-  // Sort by column header click
-  document.querySelectorAll('.sc-table th[data-col]').forEach(function(th){{
-    th.addEventListener('click',function(){{
-      var col=th.dataset.col;
-      if(sortCol===col){{ sortDir*=-1; }}
-      else {{ sortCol=col; sortDir=-1; }}
-      document.querySelectorAll('.sc-table th').forEach(function(t){{t.className=t.className.replace(/\\bsort-(asc|desc)\\b/g,'').trim();}});
-      th.classList.add(sortDir===-1?'sort-desc':'sort-asc');
-      var sel=document.getElementById('sc-sort');
-      sel.value=sortCol+(sortDir===-1?'-desc':'-asc');
-      render();
-    }});
-  }});
-
-  // Sort select change
-  document.getElementById('sc-sort').addEventListener('change',function(){{
-    var v=this.value.split('-');
-    sortCol=v[0]; sortDir=v[1]==='desc'?-1:1;
-    render();
-  }});
-
-  // Filter inputs
-  document.querySelectorAll('.sc-filters input').forEach(function(el){{
-    el.addEventListener('input', render);
-  }});
-  document.querySelectorAll('.sc-market-checks input').forEach(function(el){{
-    el.addEventListener('change', render);
-  }});
-
-  // Preset buttons
-  document.querySelectorAll('.sc-preset').forEach(function(btn){{
-    btn.addEventListener('click',function(){{
-      var p=PRESETS[btn.dataset.preset]||{{}};
-      // clear all
-      ['per-min','per-max','pbr-min','pbr-max','roe-min','roe-max','div-min','div-max',
-       'chg25-min','chg25-max','chg75-min','chg75-max',
-       'devma25-min','devma25-max','dev52h-min','dev52h-max'].forEach(function(id){{
-        document.getElementById(id).value='';
-      }});
-      if(p.perMin!==undefined)    document.getElementById('per-min').value=p.perMin;
-      if(p.perMax!==undefined)    document.getElementById('per-max').value=p.perMax;
-      if(p.pbrMin!==undefined)    document.getElementById('pbr-min').value=p.pbrMin;
-      if(p.pbrMax!==undefined)    document.getElementById('pbr-max').value=p.pbrMax;
-      if(p.roeMin!==undefined)    document.getElementById('roe-min').value=p.roeMin;
-      if(p.roeMax!==undefined)    document.getElementById('roe-max').value=p.roeMax;
-      if(p.divMin!==undefined)    document.getElementById('div-min').value=p.divMin;
-      if(p.divMax!==undefined)    document.getElementById('div-max').value=p.divMax;
-      if(p.chg25Min!==undefined)  document.getElementById('chg25-min').value=p.chg25Min;
-      if(p.chg25Max!==undefined)  document.getElementById('chg25-max').value=p.chg25Max;
-      if(p.devma25Min!==undefined)document.getElementById('devma25-min').value=p.devma25Min;
-      if(p.devma25Max!==undefined)document.getElementById('devma25-max').value=p.devma25Max;
-      document.querySelectorAll('.sc-preset').forEach(function(b){{b.classList.remove('active');}});
-      if(btn.dataset.preset!=='reset') btn.classList.add('active');
-      render();
-    }});
-  }});
-
-  // Load data
-  fetch('/api/screen').then(function(r){{return r.json();}}).then(function(data){{
-    stocks=data;
-    render();
-  }}).catch(function(){{
-    document.getElementById('sc-count').textContent='読み込み失敗';
-  }});
-
-  // ── チャートビュー ──────────────────────────────────────────────────────────
-  var scView    = 'list';
-  var SC_PERIOD = '6M';
-  var SC_MA     = [25];
-  var SC_PAGE   = 0;
-  var SC_PER    = 50;
-  var allScData       = null;
-  var lastScCodeOrder = [];
-
-  function scCalcMA(closes, period) {{
-    return closes.map(function(_, i) {{
-      if (i < period - 1) return null;
-      var s = 0;
-      for (var j = i - period + 1; j <= i; j++) s += closes[j];
-      return s / period;
-    }});
+  function applyStrat(idx){{
+    curStrat=idx;
+    document.querySelectorAll('.sc-tab').forEach(function(b){{b.classList.remove('active');}});
+    document.querySelector('.sc-tab[data-strat="'+idx+'"]').classList.add('active');
+    var panel=document.getElementById('scStratPanel'),adv=document.getElementById('scAdv');
+    if(idx===-1){{panel.style.display='none';adv.style.display='none';sortCol='market_cap';sortDir=-1;}}
+    else if(idx===99){{panel.style.display='none';adv.style.display='';sortCol='market_cap';sortDir=-1;}}
+    else{{
+      var st=STRATS[idx];
+      panel.style.display='';adv.style.display='none';
+      document.getElementById('scStratDesc').textContent=st.desc;
+      document.getElementById('scStratConds').innerHTML=st.conds.map(function(c){{
+        return'<span class="sc-cond-chip">'+c.lbl+'</span>';
+      }}).join('');
+      var dashIdx=st.sort.lastIndexOf('-');sortCol=st.sort.slice(0,dashIdx);sortDir=st.sort.slice(dashIdx+1)==='desc'?-1:1;
+      document.getElementById('sc-sort').value=st.sort;
+    }}
+    if(scView==='chart')loadScChart(); else render();
   }}
 
-  function scDrawChart(id, prices, fullPrices) {{
-    if (!prices || !prices.length || typeof Plotly === 'undefined') return;
-    var minDate = prices[0].date;
-    var traces = [{{
-      type:'candlestick',
-      x:prices.map(function(p){{return p.date;}}),
-      open:prices.map(function(p){{return p.open;}}),
-      high:prices.map(function(p){{return p.high;}}),
-      low:prices.map(function(p){{return p.low;}}),
+  document.querySelectorAll('.sc-tab').forEach(function(btn){{
+    btn.addEventListener('click',function(){{applyStrat(parseInt(btn.dataset.strat));}});
+  }});
+  document.getElementById('sc-sort').addEventListener('change',function(){{
+    var dashIdx=this.value.lastIndexOf('-');
+    sortCol=this.value.slice(0,dashIdx);sortDir=this.value.slice(dashIdx+1)==='desc'?-1:1;render();
+  }});
+  document.querySelectorAll('.sc-filters input,.sc-mkt-chk').forEach(function(el){{
+    el.addEventListener('input',render);el.addEventListener('change',render);
+  }});
+
+  function scCalcMA(closes,period){{
+    return closes.map(function(_,i){{
+      if(i<period-1)return null;
+      var s=0;for(var j=i-period+1;j<=i;j++)s+=closes[j];return s/period;
+    }});
+  }}
+  function scDrawChart(id,prices,fullPrices){{
+    if(!prices||!prices.length||typeof Plotly==='undefined')return;
+    var minDate=prices[0].date;
+    var traces=[{{type:'candlestick',
+      x:prices.map(function(p){{return p.date;}}),open:prices.map(function(p){{return p.open;}}),
+      high:prices.map(function(p){{return p.high;}}),low:prices.map(function(p){{return p.low;}}),
       close:prices.map(function(p){{return p.close;}}),
       increasing:{{line:{{color:'#E84040'}},fillcolor:'rgba(232,64,64,0.5)'}},
-      decreasing:{{line:{{color:'#3A9FE0'}},fillcolor:'rgba(58,159,224,0.5)'}},
-      showlegend:false,
-    }}];
-    var maColors = {{'25':'#f0b429','75':'#a371f7'}};
-    var src = fullPrices && fullPrices.length ? fullPrices : prices;
-    SC_MA.forEach(function(period) {{
-      var maVals = scCalcMA(src.map(function(p){{return p.close;}}), period);
-      var maDates=[], maData=[];
-      src.forEach(function(p,i){{if(p.date>=minDate){{maDates.push(p.date);maData.push(maVals[i]);}}  }});
-      traces.push({{type:'scatter',mode:'lines',x:maDates,y:maData,
-        line:{{color:maColors[String(period)]||'#fff',width:1}},showlegend:false,hoverinfo:'skip'}});
+      decreasing:{{line:{{color:'#3A9FE0'}},fillcolor:'rgba(58,159,224,0.5)'}},showlegend:false}}];
+    var src=fullPrices&&fullPrices.length?fullPrices:prices;
+    SC_MA.forEach(function(period){{
+      var mv=scCalcMA(src.map(function(p){{return p.close;}}),period),md=[],mdat=[];
+      src.forEach(function(p,i){{if(p.date>=minDate){{md.push(p.date);mdat.push(mv[i]);}}  }});
+      traces.push({{type:'scatter',mode:'lines',x:md,y:mdat,
+        line:{{color:period===25?'#f0b429':'#a371f7',width:1}},showlegend:false,hoverinfo:'skip'}});
     }});
-    Plotly.react(id, traces, {{
-      paper_bgcolor:'#161b22', plot_bgcolor:'#161b22',
-      height:150, margin:{{l:2,r:65,t:4,b:20}},
+    Plotly.react(id,traces,{{
+      paper_bgcolor:'#161b22',plot_bgcolor:'#161b22',height:150,margin:{{l:2,r:65,t:4,b:20}},showlegend:false,
       xaxis:{{type:'category',nticks:4,tickfont:{{size:9}},color:'#6e7681',showgrid:false,rangeslider:{{visible:false}}}},
       yaxis:{{tickfont:{{size:9}},color:'#6e7681',gridcolor:'#21262d',side:'right',automargin:true}},
-      showlegend:false,
-    }}, {{responsive:true,displayModeBar:false}});
+    }},{{responsive:true,displayModeBar:false}});
   }}
-
-  function scFilterPrices(prices) {{
-    var days = {{'1M':31,'3M':92,'6M':183,'1Y':366}};
-    var n = days[SC_PERIOD] || 31;
-    var from = new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
-    return prices.filter(function(p){{return p.date >= from;}});
+  function scFilterPrices(prices){{
+    var days={{'1M':31,'3M':92,'6M':183,'1Y':366}};
+    var from=new Date(Date.now()-(days[SC_PERIOD]||183)*864e5).toISOString().slice(0,10);
+    return prices.filter(function(p){{return p.date>=from;}});
   }}
-
-  function scGetFilteredCodes(limit) {{
-    var f = getFilters();
-    var filtered = stocks.filter(function(s){{return passFilter(s,f);}});
+  function scGetFilteredCodes(limit){{
+    var filtered=stocks.filter(passFilter);
     filtered.sort(function(a,b){{
       var av=a[sortCol],bv=b[sortCol];
-      if(av===null&&bv===null)return 0;
-      if(av===null)return 1;
-      if(bv===null)return -1;
-      return (av-bv)*sortDir;
+      if(av===null&&bv===null)return 0;if(av===null)return 1;if(bv===null)return -1;
+      return(av-bv)*sortDir;
     }});
-    return filtered.slice(0, limit||200).map(function(s){{return s.code;}});
+    return filtered.slice(0,limit||200).map(function(s){{return s.code;}});
   }}
-
-  function scUpdatePagination(totalPages, total) {{
-    var info = document.getElementById('sc-pg-info');
-    var prev = document.getElementById('sc-pg-prev');
-    var next = document.getElementById('sc-pg-next');
-    var note = document.getElementById('sc-chart-note');
-    if (info) info.textContent = totalPages > 1 ? (SC_PAGE+1)+' / '+totalPages : '';
-    if (prev) prev.disabled = (SC_PAGE === 0);
-    if (next) next.disabled = (SC_PAGE >= totalPages - 1);
-    if (note) note.textContent = '全'+total+'件';
+  function scUpdatePagination(tp,total){{
+    var info=document.getElementById('sc-pg-info'),prev=document.getElementById('sc-pg-prev'),next=document.getElementById('sc-pg-next'),note=document.getElementById('sc-chart-note');
+    if(info)info.textContent=tp>1?(SC_PAGE+1)+' / '+tp:'';
+    if(prev)prev.disabled=(SC_PAGE===0);if(next)next.disabled=(SC_PAGE>=tp-1);
+    if(note)note.textContent='全'+total+'件';
   }}
-
-  function scBuildGrid(data, codeOrder) {{
-    allScData = data;
-    lastScCodeOrder = codeOrder;
-    var grid = document.getElementById('sc-cg-grid');
-    if (!data || !data.length) {{
-      grid.innerHTML='<div style="color:#8b949e;padding:20px">データなし</div>';
-      scUpdatePagination(1, 0); return;
-    }}
-    var sorted = data.slice().sort(function(a,b){{return codeOrder.indexOf(a.code)-codeOrder.indexOf(b.code);}});
-    var totalPages = Math.max(1, Math.ceil(sorted.length / SC_PER));
-    SC_PAGE = Math.min(SC_PAGE, totalPages - 1);
-    var page = sorted.slice(SC_PAGE * SC_PER, (SC_PAGE+1) * SC_PER);
-    scUpdatePagination(totalPages, sorted.length);
+  function scBuildGrid(data,codeOrder){{
+    allScData=data;lastScCodeOrder=codeOrder;
+    var grid=document.getElementById('sc-cg-grid');
+    if(!data||!data.length){{grid.innerHTML='<div style="color:#8b949e;padding:20px">データなし</div>';scUpdatePagination(1,0);return;}}
+    var sorted=data.slice().sort(function(a,b){{return codeOrder.indexOf(a.code)-codeOrder.indexOf(b.code);}});
+    var tp=Math.max(1,Math.ceil(sorted.length/SC_PER));SC_PAGE=Math.min(SC_PAGE,tp-1);
+    var page=sorted.slice(SC_PAGE*SC_PER,(SC_PAGE+1)*SC_PER);scUpdatePagination(tp,sorted.length);
     grid.innerHTML='';
-    page.forEach(function(item) {{
-      var prices = item.prices;
-      if (!prices || !prices.length) return;
-      var shown = scFilterPrices(prices);
-      if (!shown.length) shown = prices.slice(-30);
-      var n = prices.length;
-      var chg = n>=2?(prices[n-1].close/prices[n-2].close-1)*100:null;
+    page.forEach(function(item){{
+      var prices=item.prices;if(!prices||!prices.length)return;
+      var shown=scFilterPrices(prices);if(!shown.length)shown=prices.slice(-30);
+      var n=prices.length,chg=n>=2?(prices[n-1].close/prices[n-2].close-1)*100:null;
       var chgStr=chg!==null?(chg>=0?'+':'')+chg.toFixed(2)+'%':'—';
-      var chgCol=chg>0?'#E84040':chg<0?'#3A9FE0':'#8b949e';
-      var cl=prices[n-1].close;
-      var fmtPer=item.per?item.per.toFixed(1)+'x':'—';
-      var fmtPbr=item.pbr?item.pbr.toFixed(2)+'x':'—';
-      var fmtYld=item.div_yield?item.div_yield.toFixed(2)+'%':'—';
-      var cid='sc-cgc-'+item.code;
-      var card=document.createElement('div');
-      card.className='cg-card';
-      card.innerHTML=
-        '<div class="cg-card-hd">'+
-          '<div><div class="cg-name">'+item.name+'</div><div class="cg-code-label">'+item.code+'</div></div>'+
-          '<div><div class="cg-price">'+(cl?cl.toLocaleString('ja-JP',{{maximumFractionDigits:0}}):'—')+'</div>'+
-          '<div class="cg-chg" style="color:'+chgCol+'">'+chgStr+'</div></div>'+
-        '</div>'+
+      var cl=prices[n-1].close,cid='sc-cgc-'+item.code;
+      var card=document.createElement('div');card.className='cg-card';
+      card.innerHTML='<div class="cg-card-hd">'+
+        '<div><div class="cg-name">'+escHtml(item.name)+'</div><div class="cg-code-label">'+item.code+'</div></div>'+
+        '<div><div class="cg-price">'+(cl?cl.toLocaleString('ja-JP',{{maximumFractionDigits:0}}):'—')+'</div>'+
+        '<div class="cg-chg" style="color:'+(chg>0?'#E84040':chg<0?'#3A9FE0':'#8b949e')+'">'+chgStr+'</div></div></div>'+
         '<div id="'+cid+'" class="cg-plot"><div class="cg-loading">読み込み中...</div></div>'+
         '<div class="cg-metrics">'+
-          '<div class="cg-metric"><span class="cg-metric-lbl">PER</span><span class="cg-metric-val">'+fmtPer+'</span></div>'+
-          '<div class="cg-metric"><span class="cg-metric-lbl">PBR</span><span class="cg-metric-val">'+fmtPbr+'</span></div>'+
-          '<div class="cg-metric"><span class="cg-metric-lbl">配当</span><span class="cg-metric-val">'+fmtYld+'</span></div>'+
+          '<div class="cg-metric"><span class="cg-metric-lbl">PER</span><span class="cg-metric-val">'+(item.per?item.per.toFixed(1)+'x':'—')+'</span></div>'+
+          '<div class="cg-metric"><span class="cg-metric-lbl">PBR</span><span class="cg-metric-val">'+(item.pbr?item.pbr.toFixed(2)+'x':'—')+'</span></div>'+
+          '<div class="cg-metric"><span class="cg-metric-lbl">配当</span><span class="cg-metric-val">'+(item.div_yield?item.div_yield.toFixed(2)+'%':'—')+'</span></div>'+
         '</div>';
       card.querySelector('.cg-card-hd').addEventListener('click',function(){{window.location.href='/stock/'+item.code;}});
-      grid.appendChild(card);
-      scDrawChart(cid, shown, prices);
+      grid.appendChild(card);scDrawChart(cid,shown,prices);
     }});
   }}
-
-  function refreshScGrid() {{
-    if (allScData) scBuildGrid(allScData, lastScCodeOrder);
-  }}
-
-  function loadScChart() {{
-    SC_PAGE = 0;
-    var codes = scGetFilteredCodes(200);
-    if (!codes.length) {{
-      allScData = []; lastScCodeOrder = [];
+  function refreshScGrid(){{if(allScData)scBuildGrid(allScData,lastScCodeOrder);}}
+  function loadScChart(){{
+    SC_PAGE=0;var codes=scGetFilteredCodes(200);
+    if(!codes.length){{allScData=[];lastScCodeOrder=[];
       document.getElementById('sc-cg-grid').innerHTML='<div style="color:#8b949e;padding:20px">条件に一致する銘柄がありません</div>';
-      scUpdatePagination(1, 0);
-      return;
+      scUpdatePagination(1,0);return;
     }}
     document.getElementById('sc-cg-grid').innerHTML='<div style="color:#8b949e;padding:30px;text-align:center">チャートを読み込み中...</div>';
     fetch('/api/chart_grid?codes='+codes.join(','))
-      .then(function(r){{return r.json();}})
-      .then(function(data){{scBuildGrid(data, codes);}})
+      .then(function(r){{return r.json();}}).then(function(data){{scBuildGrid(data,codes);}})
       .catch(function(){{document.getElementById('sc-cg-grid').innerHTML='<div style="color:#e84040;padding:20px">読み込み失敗</div>';}});
   }}
-
-  function setScView(v) {{
+  function setScView(v){{
     scView=v;
-    var tableWrap=document.querySelector('.sc-table-wrap');
-    var chartWrap=document.getElementById('sc-chart-wrap');
-    var btnList=document.getElementById('sc-btn-list');
-    var btnChart=document.getElementById('sc-btn-chart');
-    if (v==='chart') {{
-      tableWrap.style.display='none'; chartWrap.style.display='';
-      btnList.classList.remove('active'); btnChart.classList.add('active');
-      loadScChart();
-    }} else {{
-      tableWrap.style.display=''; chartWrap.style.display='none';
-      btnList.classList.add('active'); btnChart.classList.remove('active');
-    }}
+    var tw=document.querySelector('.sc-table-wrap'),cw=document.getElementById('sc-chart-wrap');
+    var bl=document.getElementById('sc-btn-list'),bc=document.getElementById('sc-btn-chart');
+    if(v==='chart'){{tw.style.display='none';cw.style.display='';bl.classList.remove('active');bc.classList.add('active');loadScChart();}}
+    else{{tw.style.display='';cw.style.display='none';bl.classList.add('active');bc.classList.remove('active');}}
   }}
-
   document.getElementById('sc-btn-list').addEventListener('click',function(){{setScView('list');}});
   document.getElementById('sc-btn-chart').addEventListener('click',function(){{setScView('chart');}});
-
   document.querySelectorAll('.sc-period-btn').forEach(function(btn){{
     btn.addEventListener('click',function(){{
       document.querySelectorAll('.sc-period-btn').forEach(function(b){{b.classList.remove('active');}});
-      btn.classList.add('active');
-      SC_PERIOD=btn.dataset.period;
-      if(scView==='chart') refreshScGrid();
+      btn.classList.add('active');SC_PERIOD=btn.dataset.period;if(scView==='chart')refreshScGrid();
     }});
   }});
-
   document.querySelectorAll('.sc-ma-btn').forEach(function(btn){{
     btn.addEventListener('click',function(){{
-      var period=parseInt(btn.dataset.ma);
-      var idx=SC_MA.indexOf(period);
-      if(idx>=0){{SC_MA.splice(idx,1);btn.classList.remove('active');}}
-      else{{SC_MA.push(period);btn.classList.add('active');}}
-      if(scView==='chart') refreshScGrid();
+      var p=parseInt(btn.dataset.ma),idx=SC_MA.indexOf(p);
+      if(idx>=0){{SC_MA.splice(idx,1);btn.classList.remove('active');}}else{{SC_MA.push(p);btn.classList.add('active');}}
+      if(scView==='chart')refreshScGrid();
     }});
   }});
+  var scPerSel=document.getElementById('sc-per-sel');
+  if(scPerSel)scPerSel.addEventListener('change',function(){{SC_PER=parseInt(this.value)||50;SC_PAGE=0;refreshScGrid();}});
+  var scPgPrev=document.getElementById('sc-pg-prev');
+  if(scPgPrev)scPgPrev.addEventListener('click',function(){{if(SC_PAGE>0){{SC_PAGE--;refreshScGrid();}}}});
+  var scPgNext=document.getElementById('sc-pg-next');
+  if(scPgNext)scPgNext.addEventListener('click',function(){{SC_PAGE++;refreshScGrid();}});
 
-  var scPerSel = document.getElementById('sc-per-sel');
-  if(scPerSel) scPerSel.addEventListener('change', function(){{
-    SC_PER = parseInt(this.value) || 50;
-    SC_PAGE = 0;
-    refreshScGrid();
-  }});
-  var scPgPrev = document.getElementById('sc-pg-prev');
-  if(scPgPrev) scPgPrev.addEventListener('click', function(){{
-    if(SC_PAGE > 0){{ SC_PAGE--; refreshScGrid(); }}
-  }});
-  var scPgNext = document.getElementById('sc-pg-next');
-  if(scPgNext) scPgNext.addEventListener('click', function(){{
-    SC_PAGE++; refreshScGrid();
+  fetch('/api/screen').then(function(r){{return r.json();}}).then(function(data){{
+    stocks=data;render();
+  }}).catch(function(){{
+    document.getElementById('sc-count').textContent='読み込み失敗';
+    document.getElementById('sc-tbody').innerHTML='<tr><td colspan="20" style="text-align:center;padding:20px;color:#e84040">データの読み込みに失敗しました。ページをリロードしてください。</td></tr>';
   }});
 }})();
 </script>
@@ -4054,14 +4101,26 @@ function renderFinTable(d){
 
 @app.route("/api/screen")
 def api_screen():
+    key = "api_screen_data"
+    cached = _get(key)
+    if cached:
+        return cached, 200, {"Content-Type": "application/json"}
     conn = get_conn()
     cur  = conn.cursor()
     cur.execute("""
         SELECT s.code, s.name, m.name AS market,
                f.per, f.pbr, f.roe, f.div_yield, f.market_cap,
+               f.operating_margin, f.payout_ratio,
                lp.close, lp.change_pct,
                ps.chg5d, ps.chg25d, ps.chg75d,
-               ps.dev_ma25, ps.dev_ma75, ps.dev_high52w
+               ps.ma25, ps.ma75,
+               ps.dev_ma25, ps.dev_ma75, ps.dev_high52w,
+               ps.vol20_ratio, ps.rsi14,
+               ps.macd, ps.macd_signal, ps.macd_gc,
+               ps.turnover_day, ps.turnover_20d,
+               ps.break_20d, ps.break_65d,
+               ps.rev_growth, ps.op_growth, ps.eps_growth,
+               ps.roic, ps.cf_positive
         FROM stocks s
         LEFT JOIN markets m ON s.market_id = m.id
         LEFT JOIN stock_fundamentals f ON s.code = f.code
@@ -4080,27 +4139,59 @@ def api_screen():
     """)
     rows = cur.fetchall()
     cur.close(); conn.close()
+
+    def _f(v): return float(v) if v is not None else None
+    def _i(v): return int(v)   if v is not None else 0
+
     results = []
     for r in rows:
+        close = _f(r[10])
+        ma25  = _f(r[15])
+        ma75  = _f(r[16])
         results.append({
-            "code":       r[0],
-            "name":       r[1] or "",
-            "market":     r[2] or "",
-            "per":        float(r[3])  if r[3]  is not None else None,
-            "pbr":        float(r[4])  if r[4]  is not None else None,
-            "roe":        float(r[5]) * 100 if r[5] is not None else None,
-            "div_yield":  float(r[6])  if r[6]  is not None else None,
-            "market_cap": int(r[7])    if r[7]  else None,
-            "close":      float(r[8])  if r[8]  else None,
-            "change_pct": float(r[9])  if r[9]  is not None else None,
-            "chg5d":      float(r[10]) if r[10] is not None else None,
-            "chg25d":     float(r[11]) if r[11] is not None else None,
-            "chg75d":     float(r[12]) if r[12] is not None else None,
-            "dev_ma25":   float(r[13]) if r[13] is not None else None,
-            "dev_ma75":   float(r[14]) if r[14] is not None else None,
-            "dev_high52w":float(r[15]) if r[15] is not None else None,
+            "code":         r[0],
+            "name":         r[1] or "",
+            "market":       r[2] or "",
+            "per":          _f(r[3]),
+            "pbr":          _f(r[4]),
+            "roe":          float(r[5]) * 100 if r[5] is not None else None,
+            "div_yield":    _f(r[6]),
+            "market_cap":   int(r[7]) if r[7] else None,
+            "op_margin":    float(r[8]) * 100 if r[8] is not None else None,
+            "payout_ratio": float(r[9]) * 100 if r[9] is not None else None,
+            "close":        close,
+            "change_pct":   _f(r[11]),
+            "chg5d":        _f(r[12]),
+            "chg25d":       _f(r[13]),
+            "chg75d":       _f(r[14]),
+            "ma25":         ma25,
+            "ma75":         ma75,
+            "dev_ma25":     _f(r[17]),
+            "dev_ma75":     _f(r[18]),
+            "dev_high52w":  _f(r[19]),
+            "vol20_ratio":  _f(r[20]),
+            "rsi14":        _f(r[21]),
+            "macd":         _f(r[22]),
+            "macd_signal":  _f(r[23]),
+            "macd_gc":      _i(r[24]),
+            "turnover_day": _f(r[25]),
+            "turnover_20d": _f(r[26]),
+            "break_20d":    _i(r[27]),
+            "break_65d":    _i(r[28]),
+            "rev_growth":   _f(r[29]),
+            "op_growth":    _f(r[30]),
+            "eps_growth":   _f(r[31]),
+            "roic":         _f(r[32]),
+            "cf_positive":  _i(r[33]),
+            # クライアント側計算用（MA比較）
+            "vs_ma25":      (close - ma25) if (close is not None and ma25 is not None) else None,
+            "vs_ma75":      (close - ma75) if (close is not None and ma75 is not None) else None,
+            "ma25_vs_ma75": (ma25 - ma75)  if (ma25 is not None and ma75 is not None)  else None,
         })
-    return jsonify(results)
+    import json as _json
+    payload = _json.dumps(results, ensure_ascii=False)
+    _set(key, payload)
+    return payload, 200, {"Content-Type": "application/json"}
 
 
 @app.route("/screen")
