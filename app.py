@@ -2809,7 +2809,7 @@ def _build_stock_page(code: str) -> str:
     try:
         cur.execute("""
             SELECT period_end, period_type,
-                   revenue, operating_income, net_income,
+                   revenue, operating_income, ordinary_income, net_income,
                    total_assets, total_equity, cf_operating
             FROM financials
             WHERE code = %s AND period_type = 'A'
@@ -2819,7 +2819,7 @@ def _build_stock_page(code: str) -> str:
 
         cur.execute("""
             SELECT period_end, period_type,
-                   revenue, operating_income, net_income,
+                   revenue, operating_income, ordinary_income, net_income,
                    total_assets, total_equity, cf_operating
             FROM financials
             WHERE code = %s AND period_type = 'Q'
@@ -2833,7 +2833,7 @@ def _build_stock_page(code: str) -> str:
     forecast_rows: list = []
     try:
         cur.execute("""
-            SELECT fiscal_year_end, revenue, operating_income, net_income, div_per_share
+            SELECT fiscal_year_end, revenue, operating_income, ordinary_income, net_income, div_per_share
             FROM financials_forecast
             WHERE code = %s AND period_type = 'A'
               AND announced_at = (
@@ -2948,25 +2948,31 @@ def _build_stock_page(code: str) -> str:
         _div_by_year[str(_ex_date)[:4]] += float(_amount or 0)
 
     def _build_fin_rows(rows, fc_rows=None, shares_cnt=None):
+        # r indices (financials): [0]period_end [1]period_type [2]revenue
+        #   [3]operating_income [4]ordinary_income [5]net_income
+        #   [6]total_assets [7]total_equity [8]cf_operating
+        # r indices (forecast):   [0]fiscal_year_end [1]revenue
+        #   [2]operating_income [3]ordinary_income [4]net_income [5]div_per_share
         result = []
         for r in rows:
             period_end, period_type = str(r[0]), r[1]
             lbl = period_end[:7].replace("-", "/")
             rev  = _to_oku(r[2])
             op   = _to_oku(r[3])
-            net  = _to_oku(r[4])
-            ta   = _to_oku(r[5])
-            te   = _to_oku(r[6])
-            cf   = _to_oku(r[7])
+            ord_ = _to_oku(r[4])
+            net  = _to_oku(r[5])
+            ta   = _to_oku(r[6])
+            te   = _to_oku(r[7])
+            cf   = _to_oku(r[8])
             yr   = period_end[:4]
             dps  = round(_div_by_year[yr], 1) if yr in _div_by_year else None
             # ROE = 当期純利益 / 自己資本 × 100
-            roe_val = _safe_pct(r[4], r[6])
+            roe_val = _safe_pct(r[5], r[7])
             # EPS = 当期純利益(円) / 発行済株式数
             eps_val = None
-            if shares_cnt and r[4] is not None:
+            if shares_cnt and r[5] is not None:
                 try:
-                    eps_val = round(float(r[4]) / float(shares_cnt), 1)
+                    eps_val = round(float(r[5]) / float(shares_cnt), 1)
                 except Exception:
                     pass
             # 配当性向 = DPS / EPS × 100
@@ -2975,10 +2981,11 @@ def _build_stock_page(code: str) -> str:
                 payout_val = round(dps / eps_val * 100, 1)
             result.append({
                 "label": lbl, "period_end": period_end,
-                "revenue": rev, "op": op, "net": net,
+                "revenue": rev, "op": op, "ord": ord_, "net": net,
                 "total_assets": ta, "total_equity": te, "cf_op": cf,
-                "op_mgn": _safe_pct(r[3], r[2]),
-                "net_mgn": _safe_pct(r[4], r[2]),
+                "op_mgn":  _safe_pct(r[3], r[2]),
+                "ord_mgn": _safe_pct(r[4], r[2]),
+                "net_mgn": _safe_pct(r[5], r[2]),
                 "dps": dps, "payout": payout_val, "roe": roe_val, "eps": eps_val,
                 "is_forecast": False,
             })
@@ -2988,12 +2995,13 @@ def _build_stock_page(code: str) -> str:
                 lbl  = fend[:7].replace("-", "/") + "(P)"
                 rev  = _to_oku(r[1])
                 op   = _to_oku(r[2])
-                net  = _to_oku(r[3])
-                dps  = float(r[4]) if r[4] is not None else None
+                ord_ = _to_oku(r[3])
+                net  = _to_oku(r[4])
+                dps  = float(r[5]) if r[5] is not None else None
                 fc_eps = None
-                if shares_cnt and r[3] is not None:
+                if shares_cnt and r[4] is not None:
                     try:
-                        fc_eps = round(float(r[3]) / float(shares_cnt), 1)
+                        fc_eps = round(float(r[4]) / float(shares_cnt), 1)
                     except Exception:
                         pass
                 fc_payout = None
@@ -3001,10 +3009,11 @@ def _build_stock_page(code: str) -> str:
                     fc_payout = round(dps / fc_eps * 100, 1)
                 result.append({
                     "label": lbl, "period_end": fend,
-                    "revenue": rev, "op": op, "net": net,
+                    "revenue": rev, "op": op, "ord": ord_, "net": net,
                     "total_assets": None, "total_equity": None, "cf_op": None,
-                    "op_mgn": _safe_pct(r[2], r[1]),
-                    "net_mgn": _safe_pct(r[3], r[1]),
+                    "op_mgn":  _safe_pct(r[2], r[1]),
+                    "ord_mgn": _safe_pct(r[3], r[1]),
+                    "net_mgn": _safe_pct(r[4], r[1]),
                     "dps": dps, "payout": fc_payout, "roe": None, "eps": fc_eps,
                     "is_forecast": True,
                 })
@@ -3469,9 +3478,23 @@ function renderRevChart(d){
 }
 
 function renderOpChart(d){
-  var t=mkBar(d,'op','#ffa657');
-  t.push(mkLine(d,'op_mgn','#58a6ff','%'));
-  var L=mkLayout({y1:{ticksuffix:'億'},y2:{tickcolor:'#58a6ff',tickfont:{color:'#58a6ff',size:10},ticksuffix:'%'},shapes:fcShapes(d)});
+  var acts=d.filter(function(x){return!x.is_forecast;});
+  var fcs =d.filter(function(x){return x.is_forecast;});
+  var t=[
+    {type:'bar',name:'営業利益',x:acts.map(function(x){return x.label;}),y:acts.map(function(x){return x.op;}),
+     marker:{color:'#ffa657',opacity:0.85},showlegend:true,hovertemplate:'営業利益 %{y:.1f}億<extra></extra>'},
+    {type:'bar',name:'経常利益',x:acts.map(function(x){return x.label;}),y:acts.map(function(x){return x.ord;}),
+     marker:{color:'#58a6ff',opacity:0.65},showlegend:true,hovertemplate:'経常利益 %{y:.1f}億<extra></extra>'},
+  ];
+  if(fcs.length){
+    t.push({type:'bar',name:'営業利益(P)',x:fcs.map(function(x){return x.label;}),y:fcs.map(function(x){return x.op;}),
+      marker:{color:'#ffa657',opacity:0.35},showlegend:false});
+    t.push({type:'bar',name:'経常利益(P)',x:fcs.map(function(x){return x.label;}),y:fcs.map(function(x){return x.ord;}),
+      marker:{color:'#58a6ff',opacity:0.25},showlegend:false});
+  }
+  t.push(mkLine(d,'op_mgn','#E84040','%'));
+  var L=mkLayout({barmode:'group',y1:{ticksuffix:'億'},y2:{tickcolor:'#E84040',tickfont:{color:'#E84040',size:10},ticksuffix:'%'},shapes:fcShapes(d),
+    legend:{x:0,y:1.08,orientation:'h',font:{size:11,color:'#c9d1d9'},bgcolor:'rgba(0,0,0,0)'}});
   Plotly.react('fin-op-chart',t,L,{responsive:true,displayModeBar:false});
 }
 
@@ -3527,22 +3550,24 @@ function renderDivChart(d){
 function renderFinTable(d){
   var isA=currentFinType==='A';
   var cols=isA?[
-    {k:'revenue', l:'売上高',    s:'億'},
-    {k:'op',      l:'営業利益',  s:'億'},
-    {k:'op_mgn',  l:'営業利益率',s:'%'},
-    {k:'net',     l:'純利益',    s:'億'},
-    {k:'net_mgn', l:'純利益率',  s:'%'},
-    {k:'eps',     l:'EPS',       s:'円'},
-    {k:'dps',     l:'DPS',       s:'円'},
-    {k:'roe',     l:'ROE',       s:'%'},
-    {k:'cf_op',   l:'営業CF',    s:'億'},
+    {k:'revenue',  l:'売上高',    s:'億'},
+    {k:'op',       l:'営業利益',  s:'億'},
+    {k:'op_mgn',   l:'営業利益率',s:'%'},
+    {k:'ord',      l:'経常利益',  s:'億'},
+    {k:'net',      l:'純利益',    s:'億'},
+    {k:'net_mgn',  l:'純利益率',  s:'%'},
+    {k:'eps',      l:'EPS',       s:'円'},
+    {k:'dps',      l:'DPS',       s:'円'},
+    {k:'roe',      l:'ROE',       s:'%'},
+    {k:'cf_op',    l:'営業CF',    s:'億'},
   ]:[
-    {k:'revenue', l:'売上高',    s:'億'},
-    {k:'op',      l:'営業利益',  s:'億'},
-    {k:'op_mgn',  l:'営業利益率',s:'%'},
-    {k:'net',     l:'純利益',    s:'億'},
-    {k:'net_mgn', l:'純利益率',  s:'%'},
-    {k:'eps',     l:'EPS',       s:'円'},
+    {k:'revenue',  l:'売上高',    s:'億'},
+    {k:'op',       l:'営業利益',  s:'億'},
+    {k:'op_mgn',   l:'営業利益率',s:'%'},
+    {k:'ord',      l:'経常利益',  s:'億'},
+    {k:'net',      l:'純利益',    s:'億'},
+    {k:'net_mgn',  l:'純利益率',  s:'%'},
+    {k:'eps',      l:'EPS',       s:'円'},
   ];
   var thead='<thead><tr><th>決算期</th>'+cols.map(function(c){return'<th>'+c.l+'（'+c.s+'）</th>';}).join('')+'</tr></thead>';
   var tbody='<tbody>'+d.map(function(r){
@@ -3552,7 +3577,7 @@ function renderFinTable(d){
       if(v==null)return'<td><span style="color:#484f58">—</span></td>';
       return'<td>'+parseFloat(v.toFixed(1)).toLocaleString('ja-JP')+'</td>';
     }).join('');
-    return'<tr'+cls+'><td>'+r.label+(r.is_forecast?' <small style="color:#ffa657;font-weight:700">P</small>':'')+'</td>'+cells+'</tr>';
+    return'<tr'+cls+'><td>'+r.label+'</td>'+cells+'</tr>';
   }).join('')+'</tbody>';
   document.getElementById('fin-table').innerHTML=thead+tbody;
 }
@@ -3650,7 +3675,7 @@ function renderFinTable(d){
   </div>
   <div class="fin-chart-box">
     <div class="fin-chart-hd">
-      <span class="fin-chart-title">営業利益 &amp; 営業利益率</span>
+      <span class="fin-chart-title">営業利益・経常利益 &amp; 営業利益率</span>
       <span class="fin-chart-unit">億円 ／ %</span>
     </div>
     <div id="fin-op-chart" style="height:230px"></div>
