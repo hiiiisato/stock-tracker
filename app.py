@@ -1970,6 +1970,92 @@ _STOCK_CSS = """
   .km-value { font-size: 18px; }
   .chart-metrics-row { grid-template-columns: 1fr; }
 }
+
+/* ─ ページタブ ─ */
+.pg-tabs {
+  display: flex; border-bottom: 2px solid #30363d; margin-bottom: 24px;
+}
+.pg-tab {
+  padding: 10px 24px; font-size: 14px; font-weight: 600;
+  color: #8b949e; background: none; border: none;
+  border-bottom: 2px solid transparent; margin-bottom: -2px;
+  cursor: pointer; transition: color 0.15s; white-space: nowrap;
+}
+.pg-tab:hover { color: #e6edf3; }
+.pg-tab.active { color: #e6edf3; border-bottom-color: #58a6ff; }
+.pg-panel { display: none; }
+.pg-panel.active { display: block; }
+
+/* ─ 会社概要（改善版） ─ */
+.co-facts-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px;
+}
+.co-fact {
+  background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 10px 14px;
+}
+.co-fact-lbl { font-size: 10px; color: #484f58; text-transform: uppercase; letter-spacing: 0.4px; display: block; margin-bottom: 3px; }
+.co-fact-val { font-size: 13px; font-weight: 600; color: #c9d1d9; }
+.co-biz-divider { border: none; border-top: 1px solid #21262d; margin: 14px 0; }
+.co-biz-summary { font-size: 13px; color: #c9d1d9; line-height: 1.75; }
+.co-biz-toggle { margin-top: 10px; }
+.co-biz-toggle summary {
+  font-size: 12px; color: #388bfd; cursor: pointer; user-select: none;
+  list-style: none; display: inline-flex; align-items: center; gap: 4px;
+}
+.co-biz-toggle summary::-webkit-details-marker { display: none; }
+.co-biz-toggle summary::before { content: "▶"; font-size: 9px; transition: transform 0.2s; }
+.co-biz-toggle[open] summary::before { transform: rotate(90deg); }
+.co-biz-full {
+  font-size: 13px; color: #8b949e; line-height: 1.75; margin-top: 10px;
+  border-left: 2px solid #30363d; padding-left: 14px;
+}
+
+/* ─ 業績タブ ─ */
+.fin-ctrl-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 18px; flex-wrap: wrap; gap: 8px;
+}
+.fin-type-btns { display: flex; gap: 4px; }
+.fin-type-btn {
+  background: #21262d; border: 1px solid #30363d; border-radius: 6px;
+  color: #8b949e; font-size: 13px; padding: 5px 18px; cursor: pointer; transition: all 0.15s;
+}
+.fin-type-btn.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.fin-charts-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;
+}
+.fin-chart-box {
+  background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+  padding: 10px 10px 6px; overflow: hidden;
+}
+.fin-chart-box.full { grid-column: 1 / -1; }
+.fin-chart-hd {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; padding: 0 2px;
+}
+.fin-chart-title { font-size: 11px; font-weight: 700; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+.fin-chart-unit { font-size: 10px; color: #484f58; }
+.fin-table-wrap {
+  background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+  overflow-x: auto; margin-bottom: 24px;
+}
+.fin-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 580px; }
+.fin-table th {
+  background: #21262d; color: #8b949e; font-weight: 700; font-size: 11px;
+  padding: 9px 14px; text-align: right; border-bottom: 1px solid #30363d;
+  white-space: nowrap; text-transform: uppercase; letter-spacing: 0.4px;
+}
+.fin-table th:first-child { text-align: left; }
+.fin-table td {
+  padding: 9px 14px; border-bottom: 1px solid #1c2128;
+  text-align: right; color: #c9d1d9; white-space: nowrap;
+}
+.fin-table td:first-child { text-align: left; color: #8b949e; font-size: 12px; }
+.fin-table tr:last-child td { border-bottom: none; }
+.fin-table tr:hover td { background: #1c2128; }
+.fin-forecast-row td { color: #ffa657 !important; }
+
+@media (max-width: 900px) { .fin-charts-grid { grid-template-columns: 1fr; } .fin-chart-box.full { grid-column: auto; } }
+@media (max-width: 768px) { .co-facts-grid { grid-template-columns: repeat(2, 1fr); } }
 """
 
 
@@ -2717,6 +2803,61 @@ def _build_stock_page(code: str) -> str:
     memo_cols = ["id","content","created_at"]
     memos = [dict(zip(memo_cols, r)) for r in cur.fetchall()]
 
+    # ─ 業績実績（通期 + 四半期、最新12件ずつ） ─
+    fin_annual_rows: list = []
+    fin_quarterly_rows: list = []
+    try:
+        cur.execute("""
+            SELECT period_end, period_type,
+                   revenue, operating_income, net_income,
+                   total_assets, total_equity, cf_operating
+            FROM financials
+            WHERE code = %s AND period_type = 'A'
+            ORDER BY period_end DESC LIMIT 10
+        """, (code,))
+        fin_annual_rows = list(reversed(cur.fetchall()))
+
+        cur.execute("""
+            SELECT period_end, period_type,
+                   revenue, operating_income, net_income,
+                   total_assets, total_equity, cf_operating
+            FROM financials
+            WHERE code = %s AND period_type = 'Q'
+            ORDER BY period_end DESC LIMIT 8
+        """, (code,))
+        fin_quarterly_rows = list(reversed(cur.fetchall()))
+    except Exception as e:
+        print(f"[app] financials取得失敗: {code} / {e}")
+
+    # ─ 業績予想（最新announced_atの通期のみ） ─
+    forecast_rows: list = []
+    try:
+        cur.execute("""
+            SELECT fiscal_year_end, revenue, operating_income, net_income, div_per_share
+            FROM financials_forecast
+            WHERE code = %s AND period_type = 'A'
+              AND announced_at = (
+                  SELECT MAX(announced_at) FROM financials_forecast
+                  WHERE code = %s AND period_type = 'A'
+              )
+            ORDER BY fiscal_year_end
+            LIMIT 3
+        """, (code, code))
+        forecast_rows = cur.fetchall()
+    except Exception as e:
+        print(f"[app] financials_forecast取得失敗: {code} / {e}")
+
+    # ─ 配当全履歴（グラフ用） ─
+    div_all_rows: list = []
+    try:
+        cur.execute("""
+            SELECT ex_date, amount FROM dividends
+            WHERE code = %s ORDER BY ex_date
+        """, (code,))
+        div_all_rows = cur.fetchall()
+    except Exception as e:
+        print(f"[app] dividends全件取得失敗: {code} / {e}")
+
     cur.close()
     conn.close()
 
@@ -2788,6 +2929,77 @@ def _build_stock_page(code: str) -> str:
     div_yld = (dps_use / cur_price * 100) if dps_use and cur_price else _fv("div_yield")
 
     fund_updated = str(fund.get("updated_at", ""))[:10] or "—"
+
+    # ─ 業績データ JSON 生成 ─
+    import collections as _col
+
+    def _to_oku(v):
+        return round(float(v) / 1e8, 1) if v is not None else None
+
+    def _safe_pct(a, b):
+        try:
+            return round(float(a) / float(b) * 100, 1) if a is not None and b and float(b) != 0 else None
+        except Exception:
+            return None
+
+    # 配当を年別に集計 (ex_date の年で集計)
+    _div_by_year: dict = _col.defaultdict(float)
+    for _ex_date, _amount in div_all_rows:
+        _div_by_year[str(_ex_date)[:4]] += float(_amount or 0)
+
+    def _build_fin_rows(rows, fc_rows=None):
+        result = []
+        for r in rows:
+            period_end, period_type = str(r[0]), r[1]
+            lbl = period_end[:7].replace("-", "/")
+            rev  = _to_oku(r[2])
+            op   = _to_oku(r[3])
+            net  = _to_oku(r[4])
+            ta   = _to_oku(r[5])
+            te   = _to_oku(r[6])
+            cf   = _to_oku(r[7])
+            yr   = period_end[:4]
+            dps  = round(_div_by_year[yr], 1) if yr in _div_by_year else None
+            result.append({
+                "label": lbl, "period_end": period_end,
+                "revenue": rev, "op": op, "net": net,
+                "total_assets": ta, "total_equity": te, "cf_op": cf,
+                "op_mgn": _safe_pct(r[3], r[2]),
+                "net_mgn": _safe_pct(r[4], r[2]),
+                "dps": dps, "payout": None, "roe": None, "eps": None,
+                "is_forecast": False,
+            })
+        if fc_rows:
+            for r in fc_rows:
+                fend = str(r[0])
+                lbl  = fend[:7].replace("-", "/")
+                rev  = _to_oku(r[1])
+                op   = _to_oku(r[2])
+                net  = _to_oku(r[3])
+                dps  = float(r[4]) if r[4] is not None else None
+                result.append({
+                    "label": lbl, "period_end": fend,
+                    "revenue": rev, "op": op, "net": net,
+                    "total_assets": None, "total_equity": None, "cf_op": None,
+                    "op_mgn": _safe_pct(r[2], r[1]),
+                    "net_mgn": _safe_pct(r[3], r[1]),
+                    "dps": dps, "payout": None, "roe": None, "eps": None,
+                    "is_forecast": True,
+                })
+        # 重複period_end排除（実績と予想が被る場合は実績優先）
+        seen: set = set()
+        deduped = []
+        for row in result:
+            if row["period_end"] not in seen:
+                seen.add(row["period_end"])
+                deduped.append(row)
+        return deduped
+
+    fin_annual_data    = _build_fin_rows(fin_annual_rows, forecast_rows)
+    fin_quarterly_data = _build_fin_rows(fin_quarterly_rows)
+
+    fin_annual_json    = _json.dumps(fin_annual_data,    ensure_ascii=False)
+    fin_quarterly_json = _json.dumps(fin_quarterly_data, ensure_ascii=False)
 
     # ─ 表示ヘルパー ─
     def _fmtv(v, fmt="{:.1f}", sfx=""):
@@ -2998,42 +3210,56 @@ def _build_stock_page(code: str) -> str:
             f'</tr>'
         )
 
-    # ─ 会社概要 ─
-    co_items = []
-    if market:  co_items.append(f'<div class="co-kv">上場市場 <span>{market}</span></div>')
-    if sector:  co_items.append(f'<div class="co-kv">セクター <span>{sector}</span></div>')
-    if shares:  co_items.append(f'<div class="co-kv">発行済株式数 <span>{int(shares/1e4):,}万株</span></div>')
-    if mktcap:  co_items.append(f'<div class="co-kv">時価総額 <span>{_mktcap(mktcap)}</span></div>')
+    # ─ 会社概要（改善版） ─
+    # ファクトグリッド（構造化情報）
+    co_facts = []
+    if market:  co_facts.append(("上場市場",   market))
+    if sector:  co_facts.append(("セクター",   sector))
+    if mktcap:  co_facts.append(("時価総額",   _mktcap(mktcap)))
+    if shares:  co_facts.append(("発行済株式", f"{int(shares/1e4):,}万株"))
 
     # 事業内容: EDINETバッチ取得済みならDBから表示、未取得ならkabutan fallback
     biz = s_biz_desc or ""
-    biz_src = ""
+    biz_src_note = ""
     if biz:
         biz_updated_str = str(s_biz_updated)[:10] if s_biz_updated else ""
-        biz_src = f'<span style="font-size:10px;color:#484f58;margin-left:8px">有価証券報告書 {biz_updated_str}</span>'
+        biz_src_note = f'（有価証券報告書 {biz_updated_str}）' if biz_updated_str else ""
     else:
-        # DBに未登録の場合だけ kabutan からリアルタイム取得（フォールバック）
         co_info = _fetch_company_info(s_code)
         biz = co_info.get("business", "")
-        for kab_key, label in [("設立","設立"), ("上場","上場"), ("資本金","資本金"), ("従業員","従業員"), ("決算","決算")]:
+        for kab_key, label in [("設立","設立"), ("資本金","資本金"), ("従業員","従業員"), ("決算","決算月")]:
             v = co_info.get(kab_key, "")
             if v:
-                co_items.append(f'<div class="co-kv">{label} <span>{v}</span></div>')
+                co_facts.append((label, v))
 
-    # 事業内容テキストを段落に分割して表示
+    # ファクトグリッドHTML
+    facts_html = "".join(
+        f'<div class="co-fact"><span class="co-fact-lbl">{lbl}</span>'
+        f'<span class="co-fact-val">{val}</span></div>'
+        for lbl, val in co_facts
+    ) if co_facts else ""
+
+    # 事業内容: 最初の段落を要約として表示 + 残りを全文トグル
+    biz_summary_html = ""
+    biz_full_html    = ""
     if biz:
-        biz_escaped = biz.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        biz_html = "".join(
-            f'<p style="margin:0 0 8px">{p.strip()}</p>'
-            for p in biz_escaped.split("\n\n") if p.strip()
-        ) or f'<p style="margin:0">{biz_escaped[:500]}</p>'
-    else:
-        biz_html = ""
+        import html as _html_mod
+        biz_esc = _html_mod.escape(biz)
+        paragraphs = [p.strip() for p in biz_esc.split("\n\n") if p.strip()]
+        if not paragraphs:
+            paragraphs = [biz_esc[:500]]
+        biz_summary_html = f'<p>{paragraphs[0]}</p>'
+        if len(paragraphs) > 1:
+            rest = "".join(f'<p style="margin-top:8px">{p}</p>' for p in paragraphs[1:])
+            biz_full_html = f"""<details class="co-biz-toggle">
+  <summary>全文を表示{biz_src_note}</summary>
+  <div class="co-biz-full">{rest}</div>
+</details>"""
 
     co_html = f"""<div class="co-box">
-  <div class="co-title">会社概要{biz_src}</div>
-  {f'<div class="co-desc">{biz_html}</div>' if biz_html else ""}
-  <div class="co-meta">{"".join(co_items)}</div>
+  <div class="co-section-title">会社概要</div>
+  {f'<div class="co-facts-grid">{facts_html}</div>' if facts_html else ""}
+  {f'<hr class="co-biz-divider"><div class="co-biz-summary">{biz_summary_html}</div>{biz_full_html}' if biz_summary_html else ""}
 </div>"""
 
     # チャート＋指標の配置（指標なしなら1列）
@@ -3096,11 +3322,218 @@ def _build_stock_page(code: str) -> str:
   <button type="submit" class="btn-sm">追加</button>
 </form>"""
 
+    # ─ 業績タブ JS（データ埋め込み部分はf-string、ロジック部分は生文字列） ─
+    _fin_data_script = f"""<script>
+var FIN_ANNUAL    = {fin_annual_json};
+var FIN_QUARTERLY = {fin_quarterly_json};
+</script>"""
+
+    _fin_logic_script = """<script>
+(function(){
+var currentFinType='A';
+var finRendered=false;
+var isMob=window.innerWidth<768;
+var CH=isMob?170:230;
+
+document.querySelectorAll('.pg-tab').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    document.querySelectorAll('.pg-tab').forEach(function(b){b.classList.remove('active');});
+    document.querySelectorAll('.pg-panel').forEach(function(p){p.classList.remove('active');});
+    btn.classList.add('active');
+    document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
+    if(btn.dataset.tab==='financials'&&!finRendered){
+      setTimeout(function(){renderFinAll();finRendered=true;},0);
+    }
+  });
+});
+
+document.querySelectorAll('.fin-type-btn').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    document.querySelectorAll('.fin-type-btn').forEach(function(b){b.classList.remove('active');});
+    btn.classList.add('active');
+    currentFinType=btn.dataset.finType;
+    renderFinAll();
+  });
+});
+
+function getData(){return currentFinType==='A'?FIN_ANNUAL:FIN_QUARTERLY;}
+
+function renderFinAll(){
+  var d=getData();
+  if(!d.length){
+    ['fin-rev-chart','fin-op-chart','fin-net-chart','fin-eps-chart','fin-div-chart'].forEach(function(id){
+      var el=document.getElementById(id);
+      if(el)el.innerHTML='<div style="padding:40px;text-align:center;color:#484f58;font-size:13px">データなし</div>';
+    });
+    document.getElementById('fin-table').innerHTML='<tbody><tr><td colspan="9" style="text-align:center;color:#484f58;padding:20px">業績データなし</td></tr></tbody>';
+    return;
+  }
+  renderRevChart(d);
+  renderOpChart(d);
+  renderNetChart(d);
+  renderEpsChart(d);
+  renderDivChart(d);
+  renderFinTable(d);
+}
+
+var DLAYOUT={paper_bgcolor:'#161b22',plot_bgcolor:'#161b22',
+  font:{color:'#c9d1d9',size:11},showlegend:false,hovermode:'x unified'};
+
+function mkLayout(extra){
+  var L=JSON.parse(JSON.stringify(DLAYOUT));
+  L.height=extra.height||CH;
+  L.margin={l:52,r:52,t:8,b:36};
+  L.xaxis={color:'#8b949e',gridcolor:'#21262d',tickfont:{size:10}};
+  L.yaxis=Object.assign({color:'#8b949e',gridcolor:'#21262d',tickfont:{size:10},side:'left'},extra.y1||{});
+  L.yaxis2=Object.assign({color:'#888',overlaying:'y',side:'right',showgrid:false,zeroline:false,tickfont:{size:10}},extra.y2||{});
+  if(extra.shapes)L.shapes=extra.shapes;
+  return L;
+}
+
+function fcShapes(data){
+  var idx=data.findIndex(function(d){return d.is_forecast;});
+  if(idx<0)return[];
+  return [{type:'line',xref:'x',yref:'paper',x0:data[idx].label,x1:data[idx].label,y0:0,y1:1,
+    line:{color:'#484f58',width:1,dash:'dot'}}];
+}
+
+function mkBar(data,key,color,ttmpl){
+  var acts=data.filter(function(d){return!d.is_forecast;});
+  var fcs =data.filter(function(d){return d.is_forecast;});
+  var traces=[{
+    type:'bar',x:acts.map(function(d){return d.label;}),y:acts.map(function(d){return d[key];}),
+    marker:{color:color,opacity:0.85},showlegend:false,
+    hovertemplate:(ttmpl||'%{y:.1f}億')+'<extra></extra>',
+  }];
+  if(fcs.length){
+    traces.push({type:'bar',x:fcs.map(function(d){return d.label;}),y:fcs.map(function(d){return d[key];}),
+      marker:{color:color,opacity:0.35},showlegend:false,
+      hovertemplate:(ttmpl||'%{y:.1f}億（予）')+'<extra></extra>',
+    });
+  }
+  return traces;
+}
+
+function mkLine(data,key,color,sfx){
+  return{type:'scatter',mode:'lines+markers',
+    x:data.map(function(d){return d.label;}),y:data.map(function(d){return d[key];}),
+    line:{color:color,width:2},marker:{size:5,color:color},yaxis:'y2',showlegend:false,
+    hovertemplate:'%{y:.1f}'+(sfx||'%')+'<extra></extra>'};
+}
+
+function yoy(data,key){
+  return data.map(function(d,i){
+    if(i===0||data[i-1][key]==null||d[key]==null||data[i-1][key]===0)return null;
+    return Math.round((d[key]-data[i-1][key])/Math.abs(data[i-1][key])*1000)/10;
+  });
+}
+
+function renderRevChart(d){
+  var t=mkBar(d,'revenue','#58a6ff','%{y:.1f}億');
+  t.push(mkLine(d,'op_mgn','#ffa657','%'));
+  var L=mkLayout({y1:{ticksuffix:'億'},y2:{tickcolor:'#ffa657',tickfont:{color:'#ffa657',size:10},ticksuffix:'%'},shapes:fcShapes(d)});
+  Plotly.react('fin-rev-chart',t,L,{responsive:true,displayModeBar:false});
+}
+
+function renderOpChart(d){
+  var t=mkBar(d,'op','#ffa657');
+  t.push(mkLine(d,'op_mgn','#58a6ff','%'));
+  var L=mkLayout({y1:{ticksuffix:'億'},y2:{tickcolor:'#58a6ff',tickfont:{color:'#58a6ff',size:10},ticksuffix:'%'},shapes:fcShapes(d)});
+  Plotly.react('fin-op-chart',t,L,{responsive:true,displayModeBar:false});
+}
+
+function renderNetChart(d){
+  var t=mkBar(d,'net','#3fb950');
+  t.push(mkLine(d,'net_mgn','#a371f7','%'));
+  var L=mkLayout({y1:{ticksuffix:'億'},y2:{tickcolor:'#a371f7',tickfont:{color:'#a371f7',size:10},ticksuffix:'%'},shapes:fcShapes(d)});
+  Plotly.react('fin-net-chart',t,L,{responsive:true,displayModeBar:false});
+}
+
+function renderEpsChart(d){
+  var acts=d.filter(function(x){return!x.is_forecast;});
+  var fcs =d.filter(function(x){return x.is_forecast;});
+  var traces=[{
+    type:'bar',x:acts.map(function(x){return x.label;}),y:acts.map(function(x){return x.eps;}),
+    marker:{color:'#58a6ff',opacity:0.85},showlegend:false,
+    hovertemplate:'%{y:.0f}円<extra></extra>',
+  }];
+  if(fcs.length){traces.push({type:'bar',x:fcs.map(function(x){return x.label;}),y:fcs.map(function(x){return x.eps;}),
+    marker:{color:'#58a6ff',opacity:0.35},showlegend:false});}
+  var roeVals=d.map(function(x){return x.roe;});
+  if(roeVals.some(function(v){return v!=null;})){
+    traces.push({type:'scatter',mode:'lines+markers',x:d.map(function(x){return x.label;}),y:roeVals,
+      line:{color:'#E84040',width:2},marker:{size:5,color:'#E84040'},yaxis:'y2',showlegend:false,
+      hovertemplate:'ROE %{y:.1f}%<extra></extra>'});
+  }
+  var L=mkLayout({y1:{ticksuffix:'円'},y2:{tickcolor:'#E84040',tickfont:{color:'#E84040',size:10},ticksuffix:'%',range:[0,40]},shapes:fcShapes(d)});
+  Plotly.react('fin-eps-chart',traces,L,{responsive:true,displayModeBar:false});
+}
+
+function renderDivChart(d){
+  var hasDps=d.some(function(x){return x.dps!=null;});
+  if(!hasDps){
+    document.getElementById('fin-div-chart').innerHTML='<div style="padding:40px;text-align:center;color:#484f58;font-size:13px">配当データなし</div>';return;
+  }
+  var withDps=d.filter(function(x){return x.dps!=null;});
+  var acts=withDps.filter(function(x){return!x.is_forecast;});
+  var fcs =withDps.filter(function(x){return x.is_forecast;});
+  var traces=[{type:'bar',x:acts.map(function(x){return x.label;}),y:acts.map(function(x){return x.dps;}),
+    marker:{color:'#a371f7',opacity:0.85},showlegend:false,hovertemplate:'%{y}円<extra>DPS</extra>'}];
+  if(fcs.length){traces.push({type:'bar',x:fcs.map(function(x){return x.label;}),y:fcs.map(function(x){return x.dps;}),
+    marker:{color:'#a371f7',opacity:0.35},showlegend:false});}
+  var payVals=withDps.map(function(x){return x.payout;});
+  if(payVals.some(function(v){return v!=null;})){
+    traces.push({type:'scatter',mode:'lines+markers',x:withDps.map(function(x){return x.label;}),y:payVals,
+      line:{color:'#ffa657',width:2},marker:{size:5,color:'#ffa657'},yaxis:'y2',showlegend:false,
+      hovertemplate:'配当性向 %{y:.1f}%<extra></extra>'});
+  }
+  var L=mkLayout({height:200,y1:{ticksuffix:'円'},y2:{tickcolor:'#ffa657',tickfont:{color:'#ffa657',size:10},ticksuffix:'%'},shapes:fcShapes(withDps)});
+  Plotly.react('fin-div-chart',traces,L,{responsive:true,displayModeBar:false});
+}
+
+function renderFinTable(d){
+  var isA=currentFinType==='A';
+  var cols=isA?[
+    {k:'revenue', l:'売上高',    s:'億'},
+    {k:'op',      l:'営業利益',  s:'億'},
+    {k:'op_mgn',  l:'営業利益率',s:'%'},
+    {k:'net',     l:'純利益',    s:'億'},
+    {k:'net_mgn', l:'純利益率',  s:'%'},
+    {k:'eps',     l:'EPS',       s:'円'},
+    {k:'dps',     l:'DPS',       s:'円'},
+    {k:'roe',     l:'ROE',       s:'%'},
+    {k:'cf_op',   l:'営業CF',    s:'億'},
+  ]:[
+    {k:'revenue', l:'売上高',    s:'億'},
+    {k:'op',      l:'営業利益',  s:'億'},
+    {k:'op_mgn',  l:'営業利益率',s:'%'},
+    {k:'net',     l:'純利益',    s:'億'},
+    {k:'net_mgn', l:'純利益率',  s:'%'},
+    {k:'eps',     l:'EPS',       s:'円'},
+  ];
+  var thead='<thead><tr><th>決算期</th>'+cols.map(function(c){return'<th>'+c.l+'（'+c.s+'）</th>';}).join('')+'</tr></thead>';
+  var tbody='<tbody>'+d.map(function(r){
+    var cls=r.is_forecast?' class="fin-forecast-row"':'';
+    var cells=cols.map(function(c){
+      var v=r[c.k];
+      if(v==null)return'<td><span style="color:#484f58">—</span></td>';
+      return'<td>'+parseFloat(v.toFixed(1)).toLocaleString('ja-JP')+'</td>';
+    }).join('');
+    return'<tr'+cls+'><td>'+r.label+(r.is_forecast?' <small style="color:#484f58">予</small>':'')+'</td>'+cells+'</tr>';
+  }).join('')+'</tbody>';
+  document.getElementById('fin-table').innerHTML=thead+tbody;
+}
+
+})();
+</script>"""
+
+    s_name_esc = s_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     body = f"""\
 <style>{_STOCK_CSS}</style>
 
 <div class="s-header">
-  <div class="s-name">{s_name}</div>
+  <div class="s-name">{s_name_esc}</div>
   <div class="s-meta">
     {s_code}
     {f"&nbsp;｜&nbsp;{market}" if market else ""}
@@ -3131,6 +3564,13 @@ def _build_stock_page(code: str) -> str:
 
 {key_metrics_html}
 
+<div class="pg-tabs">
+  <button class="pg-tab active" data-tab="overview">概要</button>
+  <button class="pg-tab" data-tab="financials">業績・財務</button>
+</div>
+
+<div id="tab-overview" class="pg-panel active">
+
 {co_html}
 
 {chart_section}
@@ -3153,9 +3593,69 @@ def _build_stock_page(code: str) -> str:
 
 {events_html}
 
-{memos_html}"""
+{memos_html}
 
-    return _page_html(f"{s_name}（{s_code}）", body, active="")
+</div><!-- /tab-overview -->
+
+<div id="tab-financials" class="pg-panel">
+
+<div class="fin-ctrl-bar">
+  <div class="fin-type-btns">
+    <button class="fin-type-btn active" data-fin-type="A">通期</button>
+    <button class="fin-type-btn" data-fin-type="Q">四半期</button>
+  </div>
+  <span style="font-size:11px;color:#484f58">薄色 = 予想値</span>
+</div>
+
+<div class="fin-charts-grid">
+  <div class="fin-chart-box">
+    <div class="fin-chart-hd">
+      <span class="fin-chart-title">売上高 &amp; 営業利益率</span>
+      <span class="fin-chart-unit">億円 ／ %</span>
+    </div>
+    <div id="fin-rev-chart" style="height:230px"></div>
+  </div>
+  <div class="fin-chart-box">
+    <div class="fin-chart-hd">
+      <span class="fin-chart-title">営業利益 &amp; 営業利益率</span>
+      <span class="fin-chart-unit">億円 ／ %</span>
+    </div>
+    <div id="fin-op-chart" style="height:230px"></div>
+  </div>
+  <div class="fin-chart-box">
+    <div class="fin-chart-hd">
+      <span class="fin-chart-title">純利益 &amp; 純利益率</span>
+      <span class="fin-chart-unit">億円 ／ %</span>
+    </div>
+    <div id="fin-net-chart" style="height:230px"></div>
+  </div>
+  <div class="fin-chart-box">
+    <div class="fin-chart-hd">
+      <span class="fin-chart-title">EPS &amp; ROE</span>
+      <span class="fin-chart-unit">円 ／ %</span>
+    </div>
+    <div id="fin-eps-chart" style="height:230px"></div>
+  </div>
+  <div class="fin-chart-box full">
+    <div class="fin-chart-hd">
+      <span class="fin-chart-title">配当金（DPS）&amp; 配当性向</span>
+      <span class="fin-chart-unit">円 ／ %</span>
+    </div>
+    <div id="fin-div-chart" style="height:200px"></div>
+  </div>
+</div>
+
+<p class="price-section-header" style="margin-top:8px">財務データ</p>
+<div class="fin-table-wrap">
+  <table class="fin-table" id="fin-table"></table>
+</div>
+
+{_fin_data_script}
+{_fin_logic_script}
+
+</div><!-- /tab-financials -->"""
+
+    return _page_html(f"{s_name_esc}（{s_code}）", body, active="")
 
 
 # ════════════════════════════════════════════════════════════════════════
