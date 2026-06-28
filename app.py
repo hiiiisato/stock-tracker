@@ -404,6 +404,44 @@ tr:hover { background: #1c2128; }
   .nav-links::-webkit-scrollbar { display: none; }
   .nav-link { height: 36px; font-size: 12px; padding: 0 10px; }
 }
+
+/* ─ スイングスコアページ ─ */
+.sw-stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+.sw-stat { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px 18px; text-align: center; flex: 1; min-width: 90px; }
+.sw-stat-val { font-size: 22px; font-weight: 700; color: #e6edf3; line-height: 1.2; }
+.sw-stat-val.gold  { color: #f0b429; }
+.sw-stat-val.green { color: #3fb950; }
+.sw-stat-lbl { font-size: 11px; color: #8b949e; margin-top: 3px; }
+.sw-legend { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 10px 16px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; }
+.sw-legend-item { font-size: 12px; color: #8b949e; display: flex; align-items: center; gap: 5px; }
+.sw-legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.sw-section-title { font-size: 13px; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.sw-section-title::after { content: ""; flex: 1; height: 1px; background: #21262d; }
+.sw-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 28px; }
+.sw-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; overflow: hidden; transition: border-color 0.15s, box-shadow 0.15s; display: flex; flex-direction: column; }
+.sw-card:hover { border-color: #388bfd; box-shadow: 0 4px 16px rgba(31,111,235,0.15); }
+.sw-card-top { display: flex; justify-content: space-between; align-items: center; padding: 14px 14px 10px; }
+.sw-card-info { flex: 1; min-width: 0; overflow: hidden; }
+.sw-card-name { font-size: 13px; font-weight: 600; color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sw-card-code { font-size: 11px; color: #58a6ff; margin-top: 2px; }
+.sw-card-price { font-size: 17px; font-weight: 700; color: #e6edf3; margin-top: 6px; }
+.sw-card-chg { font-size: 12px; font-weight: 600; margin-left: 6px; }
+.sw-ring-wrap { flex-shrink: 0; margin-left: 12px; }
+.sw-ring { width: 58px; height: 58px; overflow: visible; }
+.sw-badges { padding: 0 14px 10px; display: flex; flex-wrap: wrap; gap: 4px; }
+.sw-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; white-space: nowrap; letter-spacing: 0.2px; }
+.sw-ok  { background: #0d2d0d; color: #3fb950; border: 1px solid #1a4d1a; }
+.sw-ng  { background: #161b22; color: #484f58; border: 1px solid #21262d; }
+.sw-hot { background: #2d0a0a; color: #f85149; border: 1px solid #4d1a1a; }
+.sw-card-targets { border-top: 1px solid #21262d; padding: 8px 14px; display: flex; justify-content: space-between; font-size: 11px; margin-top: auto; }
+.sw-target { color: #3fb950; font-weight: 600; }
+.sw-stop   { color: #f85149; font-weight: 600; }
+.sw-score-90 { color: #f0b429; }
+.sw-score-80 { color: #3fb950; }
+.sw-score-70 { color: #ffa657; }
+.sw-score-other { color: #8b949e; }
+@media (max-width: 900px) { .sw-cards { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .sw-cards { grid-template-columns: 1fr; } }
 """
 
 
@@ -413,6 +451,7 @@ def _nav(active: str = "") -> str:
         ("screen",    "/screen",     "スクリーニング"),
         ("rankings",  "/rankings",   "ランキング"),
         ("events",    "/events",     "イベント"),
+        ("swing",     "/swing",      "スイング"),
         ("watchlist", "/watchlist",  "ウォッチリスト"),
     ]
     items = []
@@ -2166,6 +2205,213 @@ def _fetch_company_info(code: str) -> dict:
 
     _co_cache[code] = {"ts": time.time(), "data": data}
     return data
+
+
+def _build_swing_page() -> str:
+    conn = get_conn()
+    cur  = conn.cursor()
+
+    # 最新スコア日を取得
+    cur.execute("SELECT MAX(scored_at) FROM swing_scores WHERE 1=1")
+    row = cur.fetchone()
+    scored_at = row[0] if row and row[0] else None
+
+    if scored_at is None:
+        cur.close(); conn.close()
+        # 初回: 即時計算して保存
+        from swing_scorer import score_all, save_scores
+        save_scores(score_all(min_score=0))
+        return _build_swing_page()
+
+    # 全スコア（score>=0）+ 銘柄名 + 前日比
+    cur.execute("""
+        SELECT ss.code, s.name, ss.score, ss.close,
+               ss.rs_ratio, ss.vol20_ratio, ss.rsi14, ss.dev_high52w,
+               ss.f_stage2, ss.f_rs, ss.f_volume, ss.f_rsi, ss.f_near_high,
+               ps.chg5d
+        FROM swing_scores ss
+        JOIN stocks s ON s.code = ss.code
+        LEFT JOIN price_stats ps ON ps.code = ss.code
+        WHERE ss.scored_at = %s AND ss.score >= 0
+        ORDER BY ss.score DESC, ss.code
+    """, (scored_at,))
+    all_rows = cur.fetchall()
+
+    # 日経 6M リターン
+    cur.execute(
+        "SELECT close FROM market_index_prices WHERE symbol=%s ORDER BY date DESC LIMIT 1",
+        ("^N225",)
+    )
+    r = cur.fetchone()
+    nk_now = float(r[0]) if r else None
+    nk_6m_ret = None
+    if nk_now:
+        cur.execute("""
+            SELECT close FROM market_index_prices
+            WHERE symbol=%s AND date <= DATE_SUB(CURDATE(), INTERVAL 180 DAY)
+            ORDER BY date DESC LIMIT 1
+        """, ("^N225",))
+        r2 = cur.fetchone()
+        if r2:
+            nk_6m_ret = (nk_now / float(r2[0]) - 1) * 100
+
+    cur.close()
+    conn.close()
+
+    score_date = scored_at.strftime("%Y/%m/%d") if hasattr(scored_at, "strftime") else str(scored_at)
+    rows_70  = [r for r in all_rows if r[2] >= 70]
+    rows_80  = [r for r in all_rows if r[2] >= 80]
+    total_cnt = len(rows_70)
+    top_score = all_rows[0][2] if all_rows else 0
+
+    # ヘルパー: スコアリングの色クラス
+    def score_cls(sc):
+        if sc >= 90: return "sw-score-90"
+        if sc >= 80: return "sw-score-80"
+        if sc >= 70: return "sw-score-70"
+        return "sw-score-other"
+
+    # スコアリング円グラフ SVG
+    def score_ring(sc):
+        circ = 138.2
+        off  = circ * (1 - sc / 100)
+        col  = "#f0b429" if sc >= 90 else "#3fb950" if sc >= 80 else "#ffa657"
+        return (
+            f'<svg class="sw-ring" viewBox="0 0 56 56">'
+            f'<circle cx="28" cy="28" r="22" fill="none" stroke="#21262d" stroke-width="5"/>'
+            f'<circle cx="28" cy="28" r="22" fill="none" stroke="{col}" stroke-width="5"'
+            f' stroke-dasharray="{circ:.1f}" stroke-dashoffset="{off:.1f}"'
+            f' transform="rotate(-90 28 28)"/>'
+            f'<text x="28" y="28" text-anchor="middle" dominant-baseline="central"'
+            f' fill="{col}" font-size="15" font-weight="700">{sc}</text>'
+            f'</svg>'
+        )
+
+    # 指標バッジ
+    def badges_html(rs, vol, rsi_v, dev_h, rs_val, vol_val, rsi_num, f_rsi):
+        def b(ok, lbl):
+            return f'<span class="sw-badge {"sw-ok" if ok else "sw-ng"}">{lbl}</span>'
+        rs_disp  = f"RS {rs_val:.2f}" if rs_val else "RS —"
+        vol_disp = f"出来高 {vol_val:.1f}x" if vol_val else "出来高 —"
+        rsi_disp = f"RSI {rsi_num:.0f}" if rsi_num else "RSI —"
+        high_disp = f"高値 {dev_h:.1f}%" if dev_h is not None else "高値 —"
+        rsi_cls  = "sw-ok" if f_rsi == "good" else "sw-hot" if f_rsi == "hot" else "sw-ng"
+        return (
+            b(rs, "Stage2") +
+            f'<span class="sw-badge {"sw-ok" if rs else "sw-ng"}">{rs_disp}</span>' +
+            f'<span class="sw-badge {"sw-ok" if vol else "sw-ng"}">{vol_disp}</span>' +
+            f'<span class="sw-badge {rsi_cls}">{rsi_disp}</span>' +
+            b(dev_h is not None and dev_h >= -5, high_disp)
+        )
+
+    # ─ カードグリッド（score >= 80）─
+    card_rows = rows_80[:12]
+    cards_html = ""
+    for code, name, score, close, rs_v, vol_v, rsi_v, dev_h, f_st2, f_rs, f_vol, f_rsi, f_nh, chg5d in card_rows:
+        cls_chg = "up" if (chg5d or 0) > 0 else "dn" if (chg5d or 0) < 0 else ""
+        chg_str = (f'+{chg5d:.1f}%' if chg5d and chg5d > 0 else f'{chg5d:.1f}%' if chg5d else "—")
+        close_f  = float(close or 0)
+        target   = int(close_f * 1.06) if close_f else 0
+        stop_    = int(close_f * 0.96) if close_f else 0
+        bdg = badges_html(f_st2, f_vol, rsi_v, dev_h, rs_v, vol_v, rsi_v, f_rsi)
+        cards_html += f"""
+<a class="sw-card" href="/stock/{code}" style="text-decoration:none;color:inherit">
+  <div class="sw-card-top">
+    <div class="sw-card-info">
+      <div class="sw-card-name">{name or code}</div>
+      <div class="sw-card-code">{code}</div>
+      <div style="display:flex;align-items:baseline">
+        <span class="sw-card-price">¥{close_f:,.0f}</span>
+        <span class="sw-card-chg {cls_chg}">{chg_str}</span>
+      </div>
+    </div>
+    <div class="sw-ring-wrap">{score_ring(score)}</div>
+  </div>
+  <div class="sw-badges">{bdg}</div>
+  <div class="sw-card-targets">
+    <span class="sw-target">目標 ¥{target:,} (+6%)</span>
+    <span class="sw-stop">損切 ¥{stop_:,} (-4%)</span>
+  </div>
+</a>"""
+
+    # ─ 全候補テーブル（score >= 70）─
+    tbl_rows = ""
+    for code, name, score, close, rs_v, vol_v, rsi_v, dev_h, f_st2, f_rs, f_vol, f_rsi, f_nh, chg5d in rows_70:
+        close_f = float(close or 0)
+        target  = int(close_f * 1.06) if close_f else 0
+        stop_   = int(close_f * 0.96) if close_f else 0
+        def b_mini(ok, lbl):
+            return f'<span class="sw-badge {"sw-ok" if ok else "sw-ng"}" style="font-size:9px;padding:1px 5px">{lbl}</span>'
+        rsi_cls  = "sw-ok" if f_rsi == "good" else "sw-hot" if f_rsi == "hot" else "sw-ng"
+        rsi_lbl  = f"RSI {float(rsi_v):.0f}" if rsi_v else "RSI —"
+        tbl_rows += f"""<tr>
+  <td class="left"><a class="tbl-link" href="/stock/{code}">{name or code}</a></td>
+  <td class="muted" style="font-size:11px">{code}</td>
+  <td><span class="{score_cls(score)}" style="font-weight:700;font-size:14px">{score}</span></td>
+  <td>¥{close_f:,.0f}</td>
+  <td>{b_mini(f_st2, "Stage2")}</td>
+  <td>{b_mini(f_rs, f"RS {float(rs_v):.2f}" if rs_v else "RS —")}</td>
+  <td>{b_mini(f_vol, f"{float(vol_v):.1f}x" if vol_v else "—")}</td>
+  <td><span class="sw-badge {rsi_cls}" style="font-size:9px;padding:1px 5px">{rsi_lbl}</span></td>
+  <td>{b_mini(dev_h is not None and float(dev_h) >= -5, f"{float(dev_h):.1f}%" if dev_h is not None else "—")}</td>
+  <td class="sw-target" style="font-size:12px">¥{target:,}</td>
+  <td class="sw-stop" style="font-size:12px">¥{stop_:,}</td>
+</tr>"""
+
+    nk_str = f"{nk_6m_ret:+.1f}%" if nk_6m_ret is not None else "—"
+    top_score_cls = "gold" if top_score >= 90 else "green" if top_score >= 80 else ""
+
+    body = f"""
+<div class="page-header">
+  <div class="page-title">スイング候補スクリーニング</div>
+  <div class="page-subtitle">更新: {score_date} ／ スコア70以上: {total_cnt}銘柄</div>
+</div>
+
+<div class="sw-stats">
+  <div class="sw-stat">
+    <div class="sw-stat-val {top_score_cls}">{top_score}</div>
+    <div class="sw-stat-lbl">最高スコア</div>
+  </div>
+  <div class="sw-stat">
+    <div class="sw-stat-val green">{len(rows_80)}</div>
+    <div class="sw-stat-lbl">スコア80+</div>
+  </div>
+  <div class="sw-stat">
+    <div class="sw-stat-val">{total_cnt}</div>
+    <div class="sw-stat-lbl">スコア70+</div>
+  </div>
+  <div class="sw-stat">
+    <div class="sw-stat-val" style="font-size:16px;{'color:#3fb950' if nk_6m_ret and nk_6m_ret>0 else 'color:#f85149'}">{nk_str}</div>
+    <div class="sw-stat-lbl">日経225 6ヶ月</div>
+  </div>
+</div>
+
+<div class="sw-legend">
+  <div class="sw-legend-item"><div class="sw-legend-dot" style="background:#f0b429"></div>スコア90+ 最強候補</div>
+  <div class="sw-legend-item"><div class="sw-legend-dot" style="background:#3fb950"></div>スコア80+ 有望</div>
+  <div class="sw-legend-item"><div class="sw-legend-dot" style="background:#ffa657"></div>スコア70+ 監視</div>
+  <div class="sw-legend-item" style="margin-left:auto;color:#484f58;font-size:11px">Stage2+30 / RS比+25 / 出来高+20 / RSI+15 / 高値圏+10 / RSI過熱-10</div>
+</div>
+
+<div class="sw-section-title">トップ候補（スコア80以上）</div>
+<div class="sw-cards">{cards_html if card_rows else '<p class="muted">該当なし</p>'}</div>
+
+<div class="sw-section-title">全候補一覧（スコア70以上）</div>
+<div class="card">
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th class="left">銘柄名</th><th class="left">コード</th>
+        <th>スコア</th><th>株価</th>
+        <th>Stage2</th><th>RS比</th><th>出来高</th><th>RSI</th><th>高値圏</th>
+        <th>目標(+6%)</th><th>損切(-4%)</th>
+      </tr></thead>
+      <tbody>{tbl_rows if tbl_rows else '<tr><td colspan="11" class="muted" style="text-align:center;padding:24px">候補なし</td></tr>'}</tbody>
+    </table>
+  </div>
+</div>"""
+
+    return _page_html("スイング候補", body, active="swing")
 
 
 def _build_screen_page() -> str:
@@ -3952,6 +4198,17 @@ def rankings():
     if not html:
         print("[app] ランキング生成")
         html = _build_rankings_page()
+        _set(key, html)
+    return html
+
+
+@app.route("/swing")
+def swing():
+    key  = f"swing_{date.today()}"
+    html = _get(key)
+    if not html:
+        print("[app] スイング候補ページ生成")
+        html = _build_swing_page()
         _set(key, html)
     return html
 

@@ -15,7 +15,7 @@ MIN_SCORE = 55 以上を候補と判定
 """
 
 from datetime import date, timedelta
-from config import get_conn
+from config import get_conn, bulk_upsert
 
 MIN_SCORE        = 70
 RS_THRESHOLD     = 1.3
@@ -162,6 +162,61 @@ def score_all(min_score: int = MIN_SCORE) -> list[dict]:
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return results
+
+
+def save_scores(results: list[dict], scored_at: str | None = None) -> int:
+    """score_all() の結果を swing_scores テーブルに永続化する。"""
+    if not results:
+        return 0
+    if scored_at is None:
+        scored_at = str(date.today())
+
+    conn = get_conn()
+    cur  = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS swing_scores (
+            code        VARCHAR(10)  NOT NULL,
+            scored_at   DATE         NOT NULL,
+            score       SMALLINT,
+            close       DECIMAL(14,2),
+            rs_ratio    DECIMAL(6,3),
+            vol20_ratio DECIMAL(6,2),
+            rsi14       DECIMAL(5,2),
+            dev_high52w DECIMAL(6,2),
+            f_stage2    TINYINT(1)   DEFAULT 0,
+            f_rs        TINYINT(1)   DEFAULT 0,
+            f_volume    TINYINT(1)   DEFAULT 0,
+            f_rsi       VARCHAR(10),
+            f_near_high TINYINT(1)   DEFAULT 0,
+            PRIMARY KEY (code, scored_at),
+            INDEX idx_ss_date_score (scored_at, score)
+        )
+    """)
+    rows = [
+        (
+            s["code"], scored_at, s["score"],
+            s.get("close"), round(s["rs"], 3) if s.get("rs") else None,
+            round(s["vol20_ratio"], 2) if s.get("vol20_ratio") else None,
+            round(s["rsi14"], 2) if s.get("rsi14") else None,
+            round(s["dev_high52w"], 2) if s.get("dev_high52w") else None,
+            1 if s["flags"].get("stage2") else 0,
+            1 if s["flags"].get("rs") else 0,
+            1 if s["flags"].get("volume") else 0,
+            s["flags"].get("rsi") or "low",
+            1 if s["flags"].get("near_high") else 0,
+        )
+        for s in results
+    ]
+    bulk_upsert(cur, "swing_scores",
+        ["code", "scored_at", "score", "close", "rs_ratio", "vol20_ratio",
+         "rsi14", "dev_high52w", "f_stage2", "f_rs", "f_volume", "f_rsi", "f_near_high"],
+        rows,
+        update_cols=["score", "close", "rs_ratio", "vol20_ratio",
+                     "rsi14", "dev_high52w", "f_stage2", "f_rs", "f_volume", "f_rsi", "f_near_high"])
+    conn.commit()
+    cur.close()
+    conn.close()
+    return len(rows)
 
 
 if __name__ == "__main__":
