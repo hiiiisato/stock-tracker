@@ -27,3 +27,30 @@ services:
       - key: EDINETDB_API_KEY
         sync: false        # Render ダッシュボードで手動設定（https://edinetdb.jp/developers で取得）
       # TIDB_SSL_CA は未設定のまま → certifi を自動使用（Linux 対応済み）
+
+  - type: cron
+    name: daily-stock-update
+    env: python
+    # 平日 17:00 JST（UTC 8:00）に実行。市場終了（15:30）後に価格・業績・変動要因を一括更新。
+    schedule: "0 8 * * 1-5"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python daily_run.py
+    envVars:
+      - key: TIDB_HOST
+        sync: false
+      - key: TIDB_PORT
+        value: "4000"
+      - key: TIDB_DATABASE
+        value: stock_tracker
+      - key: TIDB_USER
+        sync: false
+      - key: TIDB_PASSWORD
+        sync: false
+      - key: JQUANTS_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: EDINET_API_KEY
+        sync: false
+      - key: EDINETDB_API_KEY
+        sync: false
