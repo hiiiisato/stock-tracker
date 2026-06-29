@@ -198,8 +198,10 @@ td {
 td.left { text-align: left; }
 tr:last-child td { border-bottom: none; }
 tr:hover { background: #1c2128; }
-.tbl-link { color: #c9d1d9; }
+.tbl-link { color: #c9d1d9; text-decoration: none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tbl-link:hover { color: #79c0ff; text-decoration: underline; }
+.td-name { max-width: 160px; min-width: 100px; white-space: normal; text-align: left; }
+.td-sub  { font-family: monospace; font-size: 10px; color: #6e7681; margin-top: 1px; }
 
 /* ─ Colors ─ */
 .up  { color: #E84040; font-weight: 600; }
@@ -809,7 +811,7 @@ def _build_home() -> str:
     """)
     themes = cur.fetchall()  # (id, name, code, heat, avg_change_pct, breadth_ratio)
 
-    # 本日の値上がりTOP5（日次銘柄から直接取得）
+    # 本日の値上がりTOP5（株式分割等の異常値を除外）
     cur.execute("""
         SELECT dp.code, s.name, dp.close, dp.change_pct
         FROM daily_prices dp
@@ -817,13 +819,14 @@ def _build_home() -> str:
         WHERE dp.date = %s
           AND dp.close IS NOT NULL
           AND dp.change_pct IS NOT NULL
+          AND ABS(dp.change_pct) <= 50
           AND s.is_active = TRUE
         ORDER BY dp.change_pct DESC
         LIMIT 5
     """, (latest_date,))
     gainers = cur.fetchall()
 
-    # 本日の値下がりTOP5
+    # 本日の値下がりTOP5（株式分割等の異常値を除外）
     cur.execute("""
         SELECT dp.code, s.name, dp.close, dp.change_pct
         FROM daily_prices dp
@@ -831,6 +834,7 @@ def _build_home() -> str:
         WHERE dp.date = %s
           AND dp.close IS NOT NULL
           AND dp.change_pct IS NOT NULL
+          AND ABS(dp.change_pct) <= 50
           AND s.is_active = TRUE
         ORDER BY dp.change_pct ASC
         LIMIT 5
@@ -1044,35 +1048,37 @@ def _build_rankings_page() -> str:
     cur.execute("SELECT MAX(date) FROM daily_prices WHERE close IS NOT NULL")
     latest_date: date = cur.fetchone()[0]
 
-    # 本日の値上がり TOP20
+    # 本日の値上がり TOP20（値幅制限を超える異常値=株式分割等を除外）
     cur.execute("""
         SELECT dp.code, s.name, dp.close, dp.change_pct,
                COALESCE(dp.turnover, dp.volume * dp.close) AS tval
         FROM daily_prices dp
         JOIN stocks s ON dp.code = s.code
         WHERE dp.date = %s AND dp.close IS NOT NULL AND dp.change_pct IS NOT NULL
+          AND ABS(dp.change_pct) <= 50
           AND s.is_active = TRUE
         ORDER BY dp.change_pct DESC
         LIMIT 20
     """, (latest_date,))
     gainers = cur.fetchall()
 
-    # 本日の値下がり TOP20
+    # 本日の値下がり TOP20（値幅制限を超える異常値=株式分割等を除外）
     cur.execute("""
         SELECT dp.code, s.name, dp.close, dp.change_pct,
                COALESCE(dp.turnover, dp.volume * dp.close) AS tval
         FROM daily_prices dp
         JOIN stocks s ON dp.code = s.code
         WHERE dp.date = %s AND dp.close IS NOT NULL AND dp.change_pct IS NOT NULL
+          AND ABS(dp.change_pct) <= 50
           AND s.is_active = TRUE
         ORDER BY dp.change_pct ASC
         LIMIT 20
     """, (latest_date,))
     losers = cur.fetchall()
 
-    # 週間値上がり TOP20（7日前から latest_date の騰落率）
-    week_ago = latest_date - timedelta(days=7)
-    cur.execute("""
+    # 週間値上がり/値下がり TOP20（7営業日前との比較・株式分割等を除外）
+    week_ago = latest_date - timedelta(days=10)
+    weekly_sql = """
         SELECT dp.code, s.name, dp.close, dp.change_pct,
                (dp.close - prev.close) / prev.close * 100 AS weekly_chg
         FROM daily_prices dp
@@ -1086,24 +1092,14 @@ def _build_rankings_page() -> str:
         ) prev ON dp.code = prev.code
         WHERE dp.date = %s AND dp.close IS NOT NULL AND prev.close IS NOT NULL
           AND prev.close > 0 AND s.is_active = TRUE
-        ORDER BY weekly_chg DESC
+          AND ABS((dp.close - prev.close) / prev.close * 100) <= 60
+        ORDER BY weekly_chg {order}
         LIMIT 20
-    """, (week_ago, latest_date))
-    weekly = cur.fetchall()
-
-    # 売買代金 TOP20
-    cur.execute("""
-        SELECT dp.code, s.name, dp.close, dp.change_pct,
-               COALESCE(dp.turnover, dp.volume * dp.close) AS tval
-        FROM daily_prices dp
-        JOIN stocks s ON dp.code = s.code
-        WHERE dp.date = %s AND dp.close IS NOT NULL
-          AND COALESCE(dp.turnover, dp.volume * dp.close) IS NOT NULL
-          AND s.is_active = TRUE
-        ORDER BY tval DESC
-        LIMIT 20
-    """, (latest_date,))
-    turnover = cur.fetchall()
+    """
+    cur.execute(weekly_sql.format(order="DESC"), (week_ago, latest_date))
+    weekly_gainers = cur.fetchall()
+    cur.execute(weekly_sql.format(order="ASC"), (week_ago, latest_date))
+    weekly_losers = cur.fetchall()
 
     cur.close()
     conn.close()
@@ -1123,10 +1119,10 @@ def _build_rankings_page() -> str:
                 tval_str  = f"{float(extra or 0)/1e8:,.1f}億" if extra else "-"
 
             rows += f"""<tr>
-          <td class="muted" style="width:32px;text-align:center">{i}</td>
-          <td class="left">
-            <a class="tbl-link" href="/stock/{code}">{name}</a>
-            <span class="muted" style="font-size:11px"> {code}</span>
+          <td class="muted" style="width:28px;text-align:center">{i}</td>
+          <td class="td-name">
+            <a class="tbl-link" href="/stock/{code}" title="{name}">{name}</a>
+            <div class="td-sub">{code}</div>
           </td>
           <td>{cl:,.0f}</td>
           <td>{extra_str if weekly else chg_str}</td>
@@ -1152,10 +1148,10 @@ def _build_rankings_page() -> str:
             cl = float(close or 0)
             tv = float(tval or 0) if tval else 0
             rows += f"""<tr>
-          <td class="muted" style="width:32px;text-align:center">{i}</td>
-          <td class="left">
-            <a class="tbl-link" href="/stock/{code}">{name}</a>
-            <span class="muted" style="font-size:11px"> {code}</span>
+          <td class="muted" style="width:28px;text-align:center">{i}</td>
+          <td class="td-name">
+            <a class="tbl-link" href="/stock/{code}" title="{name}">{name}</a>
+            <div class="td-sub">{code}</div>
           </td>
           <td>{cl:,.0f}</td>
           <td>{_fmt_chg(chg)}</td>
@@ -1164,7 +1160,7 @@ def _build_rankings_page() -> str:
         return f"""<div class="table-wrap">
       <table>
         <thead><tr>
-          <th style="width:32px">#</th><th class="left">銘柄</th>
+          <th style="width:28px">#</th><th class="left">銘柄</th>
           <th>終値</th><th>騰落率</th><th>売買代金</th>
         </tr></thead>
         <tbody>{rows}</tbody>
@@ -1190,12 +1186,12 @@ def _build_rankings_page() -> str:
 
 <div class="grid-2">
   <div class="card">
-    <div class="card-header">週間値上がり TOP20</div>
-    {_rank_table(weekly, weekly=True)}
+    <div class="card-header">▲ 週間値上がり TOP20</div>
+    {_rank_table(weekly_gainers, weekly=True)}
   </div>
   <div class="card">
-    <div class="card-header">売買代金 TOP20</div>
-    {_tval_table(turnover)}
+    <div class="card-header">▼ 週間値下がり TOP20</div>
+    {_rank_table(weekly_losers, weekly=True)}
   </div>
 </div>"""
 
@@ -2184,9 +2180,16 @@ _SCREEN_CSS = """
 .sc-table th.sort-desc::after { content: ' ↓'; color: #58a6ff; }
 .sc-table td { padding: 8px 10px; border-bottom: 1px solid #1c2128; white-space: nowrap; }
 .sc-table tr:hover td { background: #1c2128; }
-.sc-table .sc-code { font-family: monospace; font-size: 12px; color: #8b949e; }
-.sc-table .sc-name a { color: #79c0ff; }
-.sc-table .sc-name a:hover { text-decoration: underline; }
+.sc-table .sc-name { max-width: 180px; min-width: 120px; white-space: normal; }
+.sc-table .sc-name a { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#79c0ff; text-decoration:none; font-weight:500; }
+.sc-table .sc-name a:hover { text-decoration:underline; }
+.sc-name-sub { display:flex; align-items:center; gap:4px; margin-top:2px; }
+.sc-name-code { font-family:monospace; font-size:10px; color:#6e7681; }
+.mkt-badge { display:inline-block; font-size:9px; padding:1px 4px; border-radius:2px; font-weight:700; line-height:1.5; }
+.mkt-badge.prime  { background:rgba(88,166,255,0.12);  color:#58a6ff; }
+.mkt-badge.std    { background:rgba(63,185,80,0.12);   color:#3fb950; }
+.mkt-badge.growth { background:rgba(163,113,247,0.12); color:#a371f7; }
+.mkt-badge.other  { background:rgba(139,148,158,0.12); color:#8b949e; }
 .sc-table .num { text-align: right; }
 .sc-table .up  { color: #E84040; }
 .sc-table .dn  { color: #3A9FE0; }
@@ -2678,66 +2681,66 @@ def _build_screen_page() -> str:
       conds:[{{f:'vs_ma25',op:'>=',val:0,lbl:'株価>MA25'}},{{f:'ma25_vs_ma75',op:'>=',val:0,lbl:'MA25>MA75'}},
              {{f:'dev_high52w',op:'>=',val:-10,lbl:'52週高値-10%内'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}},
              {{f:'turnover_20d',op:'>=',val:10,lbl:'売買代金10億+'}}],
-      cols:['code','name','market','close','change_pct','chg25d','dev_ma25','dev_high52w','vol20_ratio','turnover_20d','market_cap'],sort:'chg25d-desc'}},
+      cols:['name','close','change_pct','chg25d','dev_ma25','dev_high52w','vol20_ratio','turnover_20d','market_cap'],sort:'chg25d-desc'}},
     {{name:'② ブレイクアウト',desc:'20日高値更新・出来高急増・RSI55〜80・MACD-GC。上昇加速の初動サイン。',
       conds:[{{f:'break_20d',op:'=',val:1,lbl:'20日高値更新'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}},
              {{f:'rsi14',op:'>=',val:55,lbl:'RSI≥55'}},{{f:'rsi14',op:'<=',val:80,lbl:'RSI≤80'}},{{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC'}}],
-      cols:['code','name','market','close','change_pct','chg25d','rsi14','vol20_ratio','turnover_day','break_20d','macd_gc'],sort:'vol20_ratio-desc'}},
+      cols:['name','close','change_pct','chg25d','rsi14','vol20_ratio','turnover_day','break_20d','macd_gc'],sort:'vol20_ratio-desc'}},
     {{name:'③ 好決算モメンタム',desc:'売上+15%・営業利益+20%の高成長。決算跨ぎで急伸しやすい銘柄群。',
       conds:[{{f:'rev_growth',op:'>=',val:15,lbl:'売上+15%'}},{{f:'op_growth',op:'>=',val:20,lbl:'営業利益+20%'}},
              {{f:'vol20_ratio',op:'>=',val:1.2,lbl:'出来高1.2倍+'}}],
-      cols:['code','name','market','close','change_pct','chg25d','rev_growth','op_growth','eps_growth','roe','rsi14'],sort:'op_growth-desc'}},
+      cols:['name','close','change_pct','chg25d','rev_growth','op_growth','eps_growth','roe','rsi14'],sort:'op_growth-desc'}},
     {{name:'④ V字反転',desc:'急落後の反発局面。RSI30〜55・MACDゴールデンクロス・出来高回復が揃う。',
       conds:[{{f:'rsi14',op:'>=',val:30,lbl:'RSI≥30'}},{{f:'rsi14',op:'<=',val:55,lbl:'RSI≤55'}},
              {{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC'}},{{f:'chg25d',op:'<=',val:-5,lbl:'25日-5%以下'}},
              {{f:'vol20_ratio',op:'>=',val:1.2,lbl:'出来高1.2倍+'}}],
-      cols:['code','name','market','close','change_pct','chg25d','chg75d','rsi14','dev_ma25','macd_gc','vol20_ratio'],sort:'chg25d-asc'}},
+      cols:['name','close','change_pct','chg25d','chg75d','rsi14','dev_ma25','macd_gc','vol20_ratio'],sort:'chg25d-asc'}},
     {{name:'⑤ 業績急成長',desc:'売上+20%・EPS+25%・ROE15%・営業利益率10%以上が揃った成長株。',
       conds:[{{f:'rev_growth',op:'>=',val:20,lbl:'売上+20%'}},{{f:'eps_growth',op:'>=',val:25,lbl:'EPS+25%'}},
              {{f:'roe',op:'>=',val:15,lbl:'ROE≥15%'}},{{f:'op_margin',op:'>=',val:10,lbl:'営業利益率≥10%'}},
              {{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}}],
-      cols:['code','name','market','close','change_pct','per','pbr','roe','rev_growth','eps_growth','op_margin','roic'],sort:'eps_growth-desc'}},
+      cols:['name','close','change_pct','per','pbr','roe','rev_growth','eps_growth','op_margin','roic'],sort:'eps_growth-desc'}},
     {{name:'⑥ 小型株爆発',desc:'時価総額50〜500億の小型株で20日高値更新・出来高急増のもの。',
       conds:[{{f:'market_cap',op:'>=',val:50e8,lbl:'時価総額50億+'}},{{f:'market_cap',op:'<=',val:500e8,lbl:'時価総額500億以下'}},
              {{f:'break_20d',op:'=',val:1,lbl:'20日高値更新'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}}],
-      cols:['code','name','market','close','change_pct','chg25d','rsi14','vol20_ratio','turnover_day','break_20d','market_cap'],sort:'vol20_ratio-desc'}},
+      cols:['name','close','change_pct','chg25d','rsi14','vol20_ratio','turnover_day','break_20d','market_cap'],sort:'vol20_ratio-desc'}},
     {{name:'⑦ 高配当バリュー',desc:'配当利回り3%以上・PBR1.5倍以下・ROE10%以上・営業CF黒字の持続可能高配当株。',
       conds:[{{f:'div_yield',op:'>=',val:3,lbl:'配当3%+'}},{{f:'pbr',op:'<=',val:1.5,lbl:'PBR≤1.5倍'}},
              {{f:'roe',op:'>=',val:10,lbl:'ROE≥10%'}},{{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}}],
-      cols:['code','name','market','close','change_pct','div_yield','pbr','per','roe','roic','cf_positive'],sort:'div_yield-desc'}},
+      cols:['name','close','change_pct','div_yield','pbr','per','roe','roic','cf_positive'],sort:'div_yield-desc'}},
     {{name:'⑧ 低PBR発掘',desc:'PBR0.8倍以下でROE黒字・CF安定。解散価値以下で放置された超割安株。',
       conds:[{{f:'pbr',op:'<=',val:0.8,lbl:'PBR≤0.8倍'}},{{f:'roe',op:'>=',val:5,lbl:'ROE≥5%'}},
              {{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}}],
-      cols:['code','name','market','close','change_pct','pbr','per','roe','div_yield','market_cap','chg25d'],sort:'pbr-asc'}},
+      cols:['name','close','change_pct','pbr','per','roe','div_yield','market_cap','chg25d'],sort:'pbr-asc'}},
     {{name:'⑨ 高ROEグロース',desc:'ROE20%以上・ROIC10%以上・CF黒字・営業利益率15%以上の高資本効率優良成長株。',
       conds:[{{f:'roe',op:'>=',val:20,lbl:'ROE≥20%'}},{{f:'roic',op:'>=',val:10,lbl:'ROIC≥10%'}},
              {{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}},{{f:'op_margin',op:'>=',val:15,lbl:'営業利益率≥15%'}}],
-      cols:['code','name','market','close','change_pct','per','pbr','roe','roic','op_margin','rev_growth','eps_growth'],sort:'roe-desc'}},
+      cols:['name','close','change_pct','per','pbr','roe','roic','op_margin','rev_growth','eps_growth'],sort:'roe-desc'}},
     {{name:'⑩ 機関投資家注目',desc:'時価総額500億以上・売買代金20億以上・ROE15%・営業利益率15%以上の大型優良株。',
       conds:[{{f:'market_cap',op:'>=',val:500e8,lbl:'時価総額500億+'}},{{f:'turnover_20d',op:'>=',val:20,lbl:'売買代金20億+'}},
              {{f:'roe',op:'>=',val:15,lbl:'ROE≥15%'}},{{f:'op_margin',op:'>=',val:15,lbl:'営業利益率≥15%'}}],
-      cols:['code','name','market','close','change_pct','market_cap','turnover_20d','per','pbr','roe','op_margin','div_yield'],sort:'market_cap-desc'}},
+      cols:['name','close','change_pct','market_cap','turnover_20d','per','pbr','roe','op_margin','div_yield'],sort:'market_cap-desc'}},
     {{name:'⑪ ボックス上抜け',desc:'65日高値更新（3ヶ月レンジ上抜け）・出来高急増・MACD-GCで力強い上放れ。',
       conds:[{{f:'break_65d',op:'=',val:1,lbl:'65日高値更新'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}},
              {{f:'rsi14',op:'>=',val:55,lbl:'RSI≥55'}},{{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC'}}],
-      cols:['code','name','market','close','change_pct','chg75d','rsi14','vol20_ratio','turnover_day','break_65d','macd_gc'],sort:'chg75d-desc'}},
+      cols:['name','close','change_pct','chg75d','rsi14','vol20_ratio','turnover_day','break_65d','macd_gc'],sort:'chg75d-desc'}},
     {{name:'⑫ 押し目買い',desc:'MA25付近に押してきた（乖離-5〜+2%）・MA75上・RSI40〜65の理想的エントリーゾーン。',
       conds:[{{f:'dev_ma25',op:'>=',val:-5,lbl:'MA25乖離-5%以上'}},{{f:'dev_ma25',op:'<=',val:2,lbl:'MA25乖離+2%以下'}},
              {{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}},{{f:'rsi14',op:'>=',val:40,lbl:'RSI≥40'}},{{f:'rsi14',op:'<=',val:65,lbl:'RSI≤65'}}],
-      cols:['code','name','market','close','change_pct','dev_ma25','dev_ma75','rsi14','vol20_ratio','chg75d','market_cap'],sort:'dev_ma25-asc'}},
+      cols:['name','close','change_pct','dev_ma25','dev_ma75','rsi14','vol20_ratio','chg75d','market_cap'],sort:'dev_ma25-asc'}},
     {{name:'⑬ MACD-GC',desc:'直近5本以内にMACDがシグナルを上抜け。株価>MA25・RSI50以上で強度確認。',
       conds:[{{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC発生'}},{{f:'vs_ma25',op:'>=',val:0,lbl:'株価>MA25'}},
              {{f:'rsi14',op:'>=',val:50,lbl:'RSI≥50'}}],
-      cols:['code','name','market','close','change_pct','rsi14','macd','macd_signal','dev_ma25','vol20_ratio','chg25d'],sort:'chg25d-desc'}},
+      cols:['name','close','change_pct','rsi14','macd','macd_signal','dev_ma25','vol20_ratio','chg25d'],sort:'chg25d-desc'}},
     {{name:'⑭ 増配・高配当',desc:'配当利回り2%以上・配当性向50%以下・ROE10%以上・CF黒字で持続可能な配当株。',
       conds:[{{f:'div_yield',op:'>=',val:2,lbl:'配当2%+'}},{{f:'payout_ratio',op:'<=',val:50,lbl:'配当性向50%以下'}},
              {{f:'roe',op:'>=',val:10,lbl:'ROE≥10%'}},{{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}}],
-      cols:['code','name','market','close','change_pct','div_yield','payout_ratio','pbr','roe','rev_growth','market_cap'],sort:'div_yield-desc'}},
+      cols:['name','close','change_pct','div_yield','payout_ratio','pbr','roe','rev_growth','market_cap'],sort:'div_yield-desc'}},
     {{name:'⑮ 業績+チャート複合',desc:'売上+15%・EPS+15%・ROE15%+・MA75上・出来高増加が揃った総合戦略。',
       conds:[{{f:'rev_growth',op:'>=',val:15,lbl:'売上+15%'}},{{f:'eps_growth',op:'>=',val:15,lbl:'EPS+15%'}},
              {{f:'roe',op:'>=',val:15,lbl:'ROE≥15%'}},{{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}},
              {{f:'vol20_ratio',op:'>=',val:1.3,lbl:'出来高1.3倍+'}}],
-      cols:['code','name','market','close','change_pct','rev_growth','eps_growth','roe','roic','chg25d','rsi14','vol20_ratio'],sort:'rev_growth-desc'}},
+      cols:['name','close','change_pct','rev_growth','eps_growth','roe','roic','chg25d','rsi14','vol20_ratio'],sort:'rev_growth-desc'}},
   ];
 
   var COL={{
@@ -2756,7 +2759,7 @@ def _build_screen_page() -> str:
     cf_positive:{{h:'CF',cls:'num'}},rev_growth:{{h:'売上成長%',cls:'num'}},
     op_growth:{{h:'営業益成長%',cls:'num'}},eps_growth:{{h:'EPS成長%',cls:'num'}},
   }};
-  var DEFAULT_COLS=['code','name','market','close','change_pct','chg25d','chg75d','dev_ma25','market_cap','per','pbr','roe','div_yield'];
+  var DEFAULT_COLS=['name','close','change_pct','chg25d','chg75d','dev_ma25','market_cap','per','pbr','roe','div_yield'];
 
   /* ── 数値フィルターID ── */
   var NUM_IDS=['f-rsi-min','f-rsi-max','f-dm25-min','f-dm25-max','f-dm75-min',
@@ -2858,7 +2861,13 @@ def _build_screen_page() -> str:
   function fmtCell(s,col){{
     var v=s[col];
     if(col==='code')return'<a href="/stock/'+s.code+'" style="font-family:monospace;color:#8b949e;font-size:12px;text-decoration:none">'+s.code+'</a>';
-    if(col==='name')return'<a href="/stock/'+s.code+'" style="color:#79c0ff">'+escHtml(s.name)+'</a>';
+    if(col==='name'){{
+      var mkt=s.market||'';
+      var bc=mkt.includes('プライム')?'prime':mkt.includes('スタンダード')?'std':mkt.includes('グロース')?'growth':'other';
+      var bl=mkt.includes('プライム')?'P':mkt.includes('スタンダード')?'S':mkt.includes('グロース')?'G':'';
+      return'<a href="/stock/'+s.code+'" title="'+escHtml(s.name)+'">'+escHtml(s.name)+'</a>'
+            +'<div class="sc-name-sub"><span class="sc-name-code">'+s.code+'</span>'+(bl?'<span class="mkt-badge '+bc+'">'+bl+'</span>':'')+'</div>';
+    }}
     if(col==='market')return'<span style="font-size:11px;color:#8b949e">'+escHtml(s.market)+'</span>';
     if(col==='close')return v?v.toLocaleString('ja-JP',{{maximumFractionDigits:0}}):dash;
     if(['change_pct','chg5d','chg25d','chg75d','dev_ma25','dev_ma75','dev_high52w'].indexOf(col)>=0)return fmtPct(v);
