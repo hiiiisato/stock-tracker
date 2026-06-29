@@ -9,7 +9,7 @@
 """
 import sys
 import traceback
-from datetime import datetime
+from datetime import datetime, date
 from config import get_conn
 from master import update_stock_master, update_trading_calendar
 from prices_yahoo import fetch_and_store_yahoo
@@ -23,6 +23,35 @@ from financials_kabutan import run as fetch_kabutan_financials
 from event_researcher import research_top_movers
 from market_indices import fetch_and_store as update_market_indices, ensure_table as ensure_indices_table
 from research_strategy import RESEARCH_THRESHOLD_PCT
+
+
+def _detect_split_candidates(target_date: date) -> list[str]:
+    """
+    当日の前日比 -30% 未満（生close比較）の銘柄を株式分割候補として返す。
+    split_backfill.run_for_codes() のインプットになる。
+    """
+    conn = get_conn()
+    cur  = conn.cursor()
+    # 前日の最新日（取引日）を取得して、今日との生close比を計算
+    cur.execute("""
+        SELECT today.code
+        FROM daily_prices today
+        JOIN daily_prices prev
+          ON today.code = prev.code
+         AND prev.date = (
+               SELECT MAX(d.date) FROM daily_prices d
+               WHERE d.code = today.code AND d.date < %s
+             )
+        WHERE today.date = %s
+          AND today.close IS NOT NULL
+          AND prev.close IS NOT NULL
+          AND prev.close > 0
+          AND today.close / prev.close < 0.70
+    """, (target_date, target_date))
+    codes = [r[0] for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return codes
 
 
 def _log(fetch_type: str, status: str, rows: int = 0, error: str = None):
@@ -101,6 +130,24 @@ def run(init: bool = False, rankings_only: bool = False):
             print(f"  エラー: {e}")
             traceback.print_exc()
             _log("prices", "failed", error=str(e))
+
+    # 3.5. 株式分割 自動検知・バックフィル
+    if not rankings_only:
+        print("\n[分割検知] 前日比 -30% 未満の銘柄を確認中...")
+        try:
+            from split_backfill import run_for_codes as split_backfill_codes
+            target_date = date.today()
+            split_candidates = _detect_split_candidates(target_date)
+            if split_candidates:
+                print(f"  分割候補: {split_candidates}")
+                n_split = split_backfill_codes(split_candidates)
+                _log("split_auto_backfill", "done", len(split_candidates))
+            else:
+                print("  分割候補なし。")
+        except Exception as e:
+            print(f"  エラー: {e}")
+            traceback.print_exc()
+            _log("split_auto_backfill", "failed", error=str(e))
 
     # 4. 配当・財務・ファンダメンタルズ更新（毎週月曜のみ）
     if datetime.now().weekday() == 0 and not rankings_only:

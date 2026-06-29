@@ -153,11 +153,16 @@ def recompute_change_pct(codes: list[str] | None = None):
             WHERE sub.prev_adj IS NOT NULL AND sub.prev_adj > 0
         """, codes)
     else:
-        # 全銘柄（重いので分割実行 — バッチごとに commit）
+        # 全銘柄（重いので分割実行 — バッチごとに commit + 再接続）
         cur.execute("SELECT DISTINCT code FROM daily_prices WHERE adj_close IS NOT NULL")
         all_codes = [r[0] for r in cur.fetchall()]
         BATCH = 200
+        RECONNECT_EVERY = 2000  # 2000銘柄ごとに再接続
         for start in range(0, len(all_codes), BATCH):
+            if start > 0 and start % RECONNECT_EVERY == 0:
+                cur.close(); conn.close()
+                conn = get_conn()
+                cur  = conn.cursor()
             batch = all_codes[start:start + BATCH]
             fmt   = ",".join(["%s"] * len(batch))
             cur.execute(f"""
@@ -182,6 +187,83 @@ def recompute_change_pct(codes: list[str] | None = None):
     conn.commit()
     cur.close()
     conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 自動バックフィル: 特定銘柄のみ（daily_run.py からの分割自動対応用）
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_for_codes(codes: list[str], max_workers: int = 4) -> int:
+    """
+    指定銘柄の adj_close / adj_factor を Yahoo Finance から再取得・DB更新。
+    daily_run.py の分割自動検知後に呼ばれる。
+    戻り値: 更新行数（0の場合はデータなし）。
+    """
+    if not codes:
+        return 0
+
+    ensure_splits_table()
+    print(f"    [分割バックフィル] 対象: {codes}")
+
+    all_price_rows: list[dict] = []
+    all_split_rows: list[dict] = []
+
+    def fetch(code4):
+        time.sleep(0.05)
+        return code4, *_fetch_adj(code4)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(fetch, c): c for c in codes}
+        for future in as_completed(futures):
+            code4, price_rows, split_rows = future.result()
+            if price_rows:
+                all_price_rows.extend(price_rows)
+                all_split_rows.extend(split_rows)
+            else:
+                print(f"    [分割バックフィル] {code4}: データ取得失敗（スキップ）")
+
+    if not all_price_rows:
+        return 0
+
+    # adj_close / adj_factor を UPDATE（10,000行ごとに再接続）
+    conn = get_conn()
+    cur  = conn.cursor()
+    RECONNECT_EVERY = 10000
+    updated = 0
+    for i, row in enumerate(all_price_rows):
+        if i > 0 and i % RECONNECT_EVERY == 0:
+            cur.close(); conn.close()
+            conn = get_conn()
+            cur  = conn.cursor()
+        cur.execute("""
+            UPDATE daily_prices
+            SET adj_close = %s,
+                adj_factor = CASE WHEN close > 0 THEN ROUND(%s / close, 6) ELSE 1.0 END
+            WHERE code = %s AND date = %s
+        """, (row["adj_close"], row["adj_close"], row["code"], row["date"]))
+        updated += 1
+    conn.commit()
+    print(f"    [分割バックフィル] adj_close 更新: {updated} 行")
+
+    # 分割イベントを stock_splits に記録
+    if all_split_rows:
+        split_db_rows = [(r["code"], r["ex_date"], r["split_ratio"], r["source"]) for r in all_split_rows]
+        bulk_upsert(cur, "stock_splits",
+            ["code", "ex_date", "split_ratio", "source"],
+            split_db_rows,
+            update_cols=["split_ratio", "source"])
+        conn.commit()
+        for r in sorted(all_split_rows, key=lambda x: x["ex_date"]):
+            print(f"    [分割検知] {r['code']}: {r['ex_date']} ratio={r['split_ratio']}")
+
+    cur.close()
+    conn.close()
+
+    # change_pct を adj_close ベースで再計算
+    print(f"    [分割バックフィル] change_pct 再計算中...")
+    recompute_change_pct(codes)
+    print(f"    [分割バックフィル] 完了: {len(codes)} 銘柄")
+    return updated
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -248,9 +330,15 @@ def run(splits_only: bool = False, max_workers: int = 8):
     cur  = conn.cursor()
 
     # 既存行の adj_close / adj_factor を UPDATE（INSERT はしない）
+    # 10,000行ごとに再接続してTiDB Cloud接続タイムアウトを回避
     BATCH = 500
+    RECONNECT_EVERY = 10000
     updated = 0
     for start in range(0, len(all_price_rows), BATCH):
+        if updated > 0 and updated % RECONNECT_EVERY == 0:
+            cur.close(); conn.close()
+            conn = get_conn()
+            cur  = conn.cursor()
         batch = all_price_rows[start:start + BATCH]
         for row in batch:
             # adj_factor = adj_close / DBのclose（Yahooのcloseは遡及調整済みのためDB値を使用）
