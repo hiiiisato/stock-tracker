@@ -152,7 +152,7 @@ def fetch_and_store_yahoo(max_workers: int = 10) -> int:
             SELECT code, date,
                    LAG(close) OVER (PARTITION BY code ORDER BY date) AS prev_close
             FROM daily_prices
-            WHERE date >= %s - INTERVAL 7 DAY
+            WHERE date >= DATE_SUB(%s, INTERVAL 7 DAY)
               AND date <= %s
         ) sub ON dp.code = sub.code AND dp.date = sub.date
         SET dp.change_pct = CASE
