@@ -282,22 +282,27 @@ def run() -> int:
     # MA200(200日) + スロープ用20日前 + 65日高値 = 最低265営業日必要 → 500カレンダー日で確保
     date_from = (date.today() - timedelta(days=500)).strftime("%Y-%m-%d")
     cur.execute("""
-        SELECT code, date, close, high, low, volume
+        SELECT code, date,
+               COALESCE(adj_close, close) AS close,  -- 分割調整済を優先、なければ生値
+               high, low, volume,
+               close AS raw_close                     -- 売買代金計算は生値で
         FROM daily_prices
         WHERE date >= %s AND close IS NOT NULL AND close > 0
         ORDER BY code, date
     """, (date_from,))
 
     data: dict[str, list] = defaultdict(list)
-    for code, dt, close, high, low, vol in cur.fetchall():
-        data[code].append((dt, float(close), float(high or close), float(low or close), int(vol or 0)))
+    for code, dt, close, high, low, vol, raw_close in cur.fetchall():
+        data[code].append((dt, float(close), float(high or close), float(low or close), int(vol or 0), float(raw_close or close)))
 
-    # 52週高値・安値（別クエリで取得）
+    # 52週高値・安値（調整済価格で取得）
     date_from_52w = (date.today() - timedelta(days=380)).strftime("%Y-%m-%d")
     cur.execute("""
-        SELECT code, MAX(high), MIN(low)
+        SELECT code,
+               MAX(COALESCE(adj_close, high)),   -- 調整済終値の52週高値
+               MIN(COALESCE(adj_close, low))    -- 調整済終値の52週安値
         FROM daily_prices
-        WHERE date >= %s AND high IS NOT NULL AND low IS NOT NULL
+        WHERE date >= %s AND close IS NOT NULL
         GROUP BY code
     """, (date_from_52w,))
     w52 = {r[0]: (float(r[1]) if r[1] else None, float(r[2]) if r[2] else None)
@@ -318,11 +323,13 @@ def run() -> int:
         if n < 5:
             continue
 
-        closes  = [p[1] for p in prices]
-        highs   = [p[2] for p in prices]
-        vols    = [p[4] for p in prices]
-        last    = closes[-1]
-        last_hi = highs[-1]
+        closes    = [p[1] for p in prices]   # adj_close（指標計算用）
+        highs     = [p[2] for p in prices]   # raw high（サポレジ用）
+        vols      = [p[4] for p in prices]
+        raw_cls   = [p[5] for p in prices]   # 生終値（売買代金計算用）
+        last      = closes[-1]
+        last_hi   = highs[-1]
+        last_raw  = raw_cls[-1]
 
         # ─ 移動平均 ─
         ma5   = sum(closes[-5:])   / 5   if n >= 5   else None
@@ -375,11 +382,11 @@ def run() -> int:
         # ─ MACD(12,26,9) ─
         macd, macd_signal, macd_hist, macd_gc = _macd_calc(closes)
 
-        # ─ 売買代金 ─
-        turnover_day  = last * vols[-1] / 1e8 if vols[-1] else None
+        # ─ 売買代金（実際の売買金額なので生値×出来高を使う）─
+        turnover_day  = last_raw * vols[-1] / 1e8 if vols[-1] else None
         turnover_20d  = None
         if n >= 20:
-            t20 = [closes[i] * vols[i] / 1e8 for i in range(-20, 0) if vols[i]]
+            t20 = [raw_cls[i] * vols[i] / 1e8 for i in range(-20, 0) if vols[i]]
             if t20:
                 turnover_20d = sum(t20) / len(t20)
 
@@ -407,7 +414,7 @@ def run() -> int:
         cf_positive = fm.get("cf_positive", 0)
 
         rows.append((
-            code, today, _round(last, 2),
+            code, today, _round(last_raw, 2),   # close は表示用に生値
             _round(chg5d), _round(chg25d), _round(chg75d), _round(chg126d),
             _round(ma5, 4), _round(ma25, 4), _round(ma50, 4),
             _round(ma75, 4), _round(ma200, 4), _round(ma200_slope, 4),

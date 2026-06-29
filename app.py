@@ -1076,15 +1076,16 @@ def _build_rankings_page() -> str:
     """, (latest_date,))
     losers = cur.fetchall()
 
-    # 週間値上がり/値下がり TOP20（7営業日前との比較・株式分割等を除外）
-    week_ago = latest_date - timedelta(days=10)
+    # 週間値上がり/値下がり TOP20（1週間前との比較・株式分割調整済み）
+    week_ago = latest_date - timedelta(days=7)
     weekly_sql = """
         SELECT dp.code, s.name, dp.close, dp.change_pct,
-               (dp.close - prev.close) / prev.close * 100 AS weekly_chg
+               (COALESCE(dp.adj_close, dp.close) - COALESCE(prev.adj_close, prev.close))
+               / COALESCE(prev.adj_close, prev.close) * 100 AS weekly_chg
         FROM daily_prices dp
         JOIN stocks s ON dp.code = s.code
         JOIN (
-            SELECT code, close
+            SELECT code, close, adj_close
             FROM daily_prices
             WHERE date = (
                 SELECT MAX(date) FROM daily_prices WHERE date <= %s
@@ -1092,7 +1093,10 @@ def _build_rankings_page() -> str:
         ) prev ON dp.code = prev.code
         WHERE dp.date = %s AND dp.close IS NOT NULL AND prev.close IS NOT NULL
           AND prev.close > 0 AND s.is_active = TRUE
-          AND ABS((dp.close - prev.close) / prev.close * 100) <= 60
+          AND ABS(
+              (COALESCE(dp.adj_close, dp.close) - COALESCE(prev.adj_close, prev.close))
+              / COALESCE(prev.adj_close, prev.close) * 100
+          ) <= 50
         ORDER BY weekly_chg {order}
         LIMIT 20
     """
@@ -3183,12 +3187,19 @@ def _build_stock_page(code: str) -> str:
         abort(404)
     s_code, s_name, market, sector, s_biz_desc, s_biz_updated = row
 
-    # 価格データ（直近3年）
+    # 価格データ（直近3年）— adj_closeで連続チャートを表示（株式分割対応）
+    # close/adj_closeの比率をopen/high/lowにも適用し、分割前後で連続した表示にする
     from_dt = date.today() - timedelta(days=365 * 3)
     cur.execute("""
-        SELECT date, open, high, low, close, volume, change_pct
+        SELECT date,
+               ROUND(open * COALESCE(adj_close, close) / close, 2) AS open,
+               ROUND(high * COALESCE(adj_close, close) / close, 2) AS high,
+               ROUND(low  * COALESCE(adj_close, close) / close, 2) AS low,
+               COALESCE(adj_close, close)                           AS close,
+               volume,
+               change_pct
         FROM daily_prices
-        WHERE code = %s AND date >= %s AND close IS NOT NULL
+        WHERE code = %s AND date >= %s AND close IS NOT NULL AND close > 0
         ORDER BY date
     """, (code, from_dt))
     prices = cur.fetchall()

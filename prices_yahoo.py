@@ -1,6 +1,10 @@
 """
-Yahoo Finance APIで日本株の当日〜直近価格を取得してTiDBに保存。
-J-Quantsフリープランの範囲外（2026-03-31以降）を補完する。
+Yahoo Finance APIで日本株の日次価格を取得してTiDBに保存。
+
+取得値:
+  close     … 実際の終値（画面表示用）
+  adj_close … 株式分割・配当調整済終値（指標計算・チャート用）
+  adj_factor… 調整係数 = adj_close / close（1.0=未調整、0.1=10:1分割）
 
 取得タイミング: 東京市場終了後 (15:30 JST) 以降に実行すること
 """
@@ -33,7 +37,7 @@ def _get_missing_date_range(conn) -> Tuple[Optional[date], Optional[date]]:
 
 
 def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
-    """Yahoo Finance APIから1銘柄の日次データを取得。"""
+    """Yahoo Finance APIから1銘柄の日次データを取得（adjclose込み）。"""
     ticker = f"{code4}.T"
     url = YAHOO_API.format(ticker=ticker)
 
@@ -57,7 +61,7 @@ def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
             if not result:
                 return []
 
-            res = result[0]
+            res        = result[0]
             timestamps = res.get("timestamp", [])
             quotes     = res.get("indicators", {}).get("quote", [{}])[0]
             opens      = quotes.get("open",   [])
@@ -65,6 +69,8 @@ def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
             lows       = quotes.get("low",    [])
             closes     = quotes.get("close",  [])
             volumes    = quotes.get("volume", [])
+            # adjclose: 株式分割・配当調整済終値
+            adjcloses  = res.get("indicators", {}).get("adjclose", [{}])[0].get("adjclose", [])
 
             rows = []
             for i, ts in enumerate(timestamps):
@@ -72,14 +78,22 @@ def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
                 if close is None:
                     continue
                 dt = datetime.fromtimestamp(ts).date()
+
+                adj_c = adjcloses[i] if (i < len(adjcloses) and adjcloses[i] is not None) else close
+                adj_c = round(adj_c, 4)
+                # adj_factor = adjclose / close（分割前: < 1.0、通常: 1.0）
+                adj_factor = round(adj_c / close, 6) if close != 0 else 1.0
+
                 rows.append({
-                    "code":   code4,
-                    "date":   str(dt),
-                    "open":   round(opens[i],  2) if i < len(opens)   and opens[i]   else None,
-                    "high":   round(highs[i],  2) if i < len(highs)   and highs[i]   else None,
-                    "low":    round(lows[i],   2) if i < len(lows)    and lows[i]    else None,
-                    "close":  round(close,     2),
-                    "volume": int(volumes[i])     if i < len(volumes)  and volumes[i] else None,
+                    "code":       code4,
+                    "date":       str(dt),
+                    "open":       round(opens[i],  2) if i < len(opens)  and opens[i]  else None,
+                    "high":       round(highs[i],  2) if i < len(highs)  and highs[i]  else None,
+                    "low":        round(lows[i],   2) if i < len(lows)   and lows[i]   else None,
+                    "close":      round(close,     2),
+                    "volume":     int(volumes[i])     if i < len(volumes) and volumes[i] else None,
+                    "adj_close":  adj_c,
+                    "adj_factor": adj_factor,
                 })
             return rows
         except Exception:
@@ -107,8 +121,8 @@ def fetch_and_store_yahoo(max_workers: int = 10) -> int:
 
     print(f"  対象銘柄: {len(codes)} 件 (並列{max_workers}本)")
 
-    all_rows = []
-    failed = []
+    all_rows: List[dict] = []
+    failed: List[str] = []
 
     def fetch(code4):
         time.sleep(0.02)
@@ -134,34 +148,36 @@ def fetch_and_store_yahoo(max_workers: int = 10) -> int:
 
     db_rows = [(
         r["code"], r["date"], r["open"], r["high"],
-        r["low"],  r["close"], r["volume"],
+        r["low"], r["close"], r["volume"], r["adj_close"], r["adj_factor"],
     ) for r in all_rows]
 
     conn = get_conn()
     cur = conn.cursor()
     bulk_upsert(cur, "daily_prices",
-        ["code", "date", "open", "high", "low", "close", "volume"],
+        ["code", "date", "open", "high", "low", "close", "volume", "adj_close", "adj_factor"],
         db_rows,
-        update_cols=["open", "high", "low", "close", "volume"])
+        update_cols=["open", "high", "low", "close", "volume", "adj_close", "adj_factor"])
     conn.commit()
 
-    # 前日比を更新
+    # 前日比をadj_closeベースで更新（株式分割の影響を除外）
     cur.execute("""
         UPDATE daily_prices dp
         JOIN (
             SELECT code, date,
-                   LAG(close) OVER (PARTITION BY code ORDER BY date) AS prev_close
+                   LAG(adj_close) OVER (PARTITION BY code ORDER BY date) AS prev_adj
             FROM daily_prices
             WHERE date >= DATE_SUB(%s, INTERVAL 7 DAY)
               AND date <= %s
+              AND adj_close IS NOT NULL
         ) sub ON dp.code = sub.code AND dp.date = sub.date
         SET dp.change_pct = CASE
-            WHEN ABS((dp.close - sub.prev_close) / sub.prev_close * 100) > 9999 THEN NULL
-            ELSE ROUND((dp.close - sub.prev_close) / sub.prev_close * 100, 4)
+            WHEN sub.prev_adj IS NULL OR sub.prev_adj = 0 THEN NULL
+            WHEN ABS((dp.adj_close - sub.prev_adj) / sub.prev_adj * 100) > 9999 THEN NULL
+            ELSE ROUND((dp.adj_close - sub.prev_adj) / sub.prev_adj * 100, 4)
         END
         WHERE dp.date >= %s
-          AND sub.prev_close IS NOT NULL
-          AND sub.prev_close > 0
+          AND sub.prev_adj IS NOT NULL
+          AND sub.prev_adj > 0
     """, (date_from, date_to, date_from))
     conn.commit()
 
