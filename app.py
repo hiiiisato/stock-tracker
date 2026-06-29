@@ -3686,10 +3686,10 @@ def _build_stock_page(code: str) -> str:
     var layout={{
       paper_bgcolor:'#161b22',plot_bgcolor:'#161b22',
       font:{{color:'#c9d1d9',size:11}},
-      height:340,margin:{{l:55,r:10,t:10,b:30}},
+      height:340,margin:{{l:10,r:55,t:10,b:30}},
       xaxis:{{rangeslider:{{visible:false}},gridcolor:'#21262d',color:'#8b949e',
               type:'category',nticks:8}},
-      yaxis:{{gridcolor:'#21262d',color:'#8b949e',side:'right'}},
+      yaxis:{{gridcolor:'#21262d',color:'#8b949e',side:'right',automargin:true}},
       showlegend:activeMAs.size>0,
       legend:{{x:0.01,y:0.99,bgcolor:'rgba(22,27,34,0.8)',font:{{size:10}},orientation:'h'}},
     }};
