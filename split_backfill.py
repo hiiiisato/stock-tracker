@@ -134,30 +134,34 @@ def recompute_change_pct(codes: list[str] | None = None):
     cur  = conn.cursor()
 
     if codes:
-        # 指定銘柄のみ（IN句）
-        fmt = ",".join(["%s"] * len(codes))
-        cur.execute(f"""
-            UPDATE daily_prices dp
-            JOIN (
-                SELECT code, date,
-                       LAG(adj_close) OVER (PARTITION BY code ORDER BY date) AS prev_adj
-                FROM daily_prices
-                WHERE code IN ({fmt})
-                  AND adj_close IS NOT NULL
-            ) sub ON dp.code = sub.code AND dp.date = sub.date
-            SET dp.change_pct = CASE
-                WHEN sub.prev_adj IS NULL OR sub.prev_adj = 0 THEN NULL
-                WHEN ABS((dp.adj_close - sub.prev_adj) / sub.prev_adj * 100) > 9999 THEN NULL
-                ELSE ROUND((dp.adj_close - sub.prev_adj) / sub.prev_adj * 100, 4)
-            END
-            WHERE sub.prev_adj IS NOT NULL AND sub.prev_adj > 0
-        """, codes)
+        # 指定銘柄もバッチ分割（LAGウィンドウ関数がメモリを消費するため）
+        BATCH = 30
+        for start in range(0, len(codes), BATCH):
+            batch = codes[start:start + BATCH]
+            fmt   = ",".join(["%s"] * len(batch))
+            cur.execute(f"""
+                UPDATE daily_prices dp
+                JOIN (
+                    SELECT code, date,
+                           LAG(adj_close) OVER (PARTITION BY code ORDER BY date) AS prev_adj
+                    FROM daily_prices
+                    WHERE code IN ({fmt})
+                      AND adj_close IS NOT NULL
+                ) sub ON dp.code = sub.code AND dp.date = sub.date
+                SET dp.change_pct = CASE
+                    WHEN sub.prev_adj IS NULL OR sub.prev_adj = 0 THEN NULL
+                    WHEN ABS((dp.adj_close - sub.prev_adj) / sub.prev_adj * 100) > 9999 THEN NULL
+                    ELSE ROUND((dp.adj_close - sub.prev_adj) / sub.prev_adj * 100, 4)
+                END
+                WHERE sub.prev_adj IS NOT NULL AND sub.prev_adj > 0
+            """, batch)
+            conn.commit()
     else:
         # 全銘柄（重いので分割実行 — バッチごとに commit + 再接続）
         cur.execute("SELECT DISTINCT code FROM daily_prices WHERE adj_close IS NOT NULL")
         all_codes = [r[0] for r in cur.fetchall()]
-        BATCH = 200
-        RECONNECT_EVERY = 2000  # 2000銘柄ごとに再接続
+        BATCH = 30              # LAGウィンドウ関数のメモリ超過を防ぐため小バッチ
+        RECONNECT_EVERY = 600  # 600銘柄ごとに再接続
         for start in range(0, len(all_codes), BATCH):
             if start > 0 and start % RECONNECT_EVERY == 0:
                 cur.close(); conn.close()
