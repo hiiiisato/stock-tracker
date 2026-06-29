@@ -3436,6 +3436,13 @@ def _build_stock_page(code: str) -> str:
     for _ex_date, _amount in div_all_rows:
         _div_by_year[str(_ex_date)[:4]] += float(_amount or 0)
 
+    # 通期予想DPSを年別に辞書化（実績が不完全な年度の補完用）
+    _fc_dps_by_year: dict = {}
+    for _r in forecast_rows:
+        _yr = str(_r[0])[:4]
+        if _r[5] is not None and _yr not in _fc_dps_by_year:
+            _fc_dps_by_year[_yr] = float(_r[5])
+
     def _build_fin_rows(rows, fc_rows=None, shares_cnt=None, latest_te=None):
         # r indices (financials): [0]period_end [1]period_type [2]revenue
         #   [3]operating_income [4]ordinary_income [5]net_income
@@ -3455,7 +3462,12 @@ def _build_stock_page(code: str) -> str:
             te   = _to_oku(r[7])
             cf   = _to_oku(r[8])
             yr   = period_end[:4]
-            dps  = round(_div_by_year[yr], 1) if yr in _div_by_year else None
+            _actual_dps = _div_by_year.get(yr, 0.0)
+            _plan_dps   = _fc_dps_by_year.get(yr)
+            if _plan_dps is not None and _actual_dps < _plan_dps:
+                dps = round(_plan_dps, 1)   # 実績が計画未達 → 計画値で補完
+            else:
+                dps = round(_actual_dps, 1) if _actual_dps > 0 else None
             # ROE = 純利益 ÷ 平均自己資本（当期・前期平均）× 100
             cur_te = float(r[7]) if r[7] is not None else None
             cur_ta = float(r[6]) if r[6] is not None else None
