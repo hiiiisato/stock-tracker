@@ -1460,10 +1460,10 @@ def _build_events_page(event_date_str: str = None, period: str = "daily") -> str
             ai_html   = _render_ai_summary(s.get("ai_summary") or "")
             news_html  = _render_news_items(s["news_items"] or "",
                                             collapsed=bool(ai_html))
-            sign = "+" if pct > 0 else ""
+            sign = "+" if pct > 0 else "−"
             cards.append(f"""<div class="ev-card">
   <div class="ev-card-top">
-    <span class="ev-pct {color}">{arrow}{sign}{pct:.1f}%</span>
+    <span class="ev-pct {color}">{sign}{pct:.1f}%</span>
     <a class="ev-stock-link" href="/stock/{code}">{name}（{code}）</a>
     <span class="ev-rank">{rk_str}</span>
   </div>
@@ -2090,136 +2090,170 @@ _SCREEN_CSS = """
 .sc-wrap { max-width: 1200px; margin: 0 auto; }
 .sc-page-title { font-size: 20px; font-weight: 700; color: #e6edf3; margin-bottom: 14px; }
 
-/* ── 戦略タブ ── */
-.sc-tabs-outer {
-  overflow-x: auto; margin-bottom: 14px; padding-bottom: 4px;
-  scrollbar-width: thin; scrollbar-color: #30363d transparent;
+/* ── プリセット戦略カード ── */
+.sc-section-label { font-size:11px; color:#484f58; text-transform:uppercase; letter-spacing:0.8px; font-weight:600; margin-bottom:8px; }
+.sc-presets-row { display:flex; gap:8px; overflow-x:auto; padding-bottom:8px; margin-bottom:14px; scrollbar-width:thin; scrollbar-color:#30363d transparent; }
+.sc-presets-row::-webkit-scrollbar { height:4px; }
+.sc-presets-row::-webkit-scrollbar-thumb { background:#30363d; border-radius:2px; }
+.sc-preset-card {
+  flex-shrink:0; background:#161b22; border:1px solid #30363d; border-radius:10px;
+  padding:12px 14px; cursor:pointer; transition:all 0.15s; text-align:left;
+  min-width:140px; max-width:190px; font-family:inherit;
 }
-.sc-tabs-outer::-webkit-scrollbar { height: 4px; }
-.sc-tabs-outer::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
-.sc-tabs { display: flex; gap: 6px; width: max-content; }
-.sc-tab {
-  background: #21262d; border: 1px solid #30363d; border-radius: 20px;
-  color: #8b949e; font-size: 12px; padding: 5px 12px; cursor: pointer;
-  white-space: nowrap; transition: all 0.15s;
-}
-.sc-tab:hover  { border-color: #58a6ff; color: #58a6ff; }
-.sc-tab.active { background: #1f3451; border-color: #58a6ff; color: #58a6ff; font-weight: 600; }
+.sc-preset-card:hover { border-color:#58a6ff; }
+.sc-preset-card.active { background:#1f3451; border-color:#58a6ff; }
+.sc-all-card { min-width:60px!important; max-width:76px!important; display:flex!important; align-items:center!important; justify-content:center!important; font-size:13px!important; color:#8b949e; }
+.sc-all-card.active { color:#58a6ff; }
+.sc-preset-card-name { font-size:12px; color:#e6edf3; font-weight:600; margin-bottom:4px; line-height:1.4; }
+.sc-preset-card.active .sc-preset-card-name { color:#79c0ff; }
+.sc-preset-card-conds { font-size:10px; color:#6e7681; line-height:1.6; }
+.sc-preset-card.active .sc-preset-card-conds { color:#58a6ff; opacity:0.8; }
+.sc-preset-hit-count { font-size:11px; color:#58a6ff; margin-top:6px; font-weight:600; }
 
-/* ── 戦略情報パネル ── */
-.sc-strat-panel {
-  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-  padding: 12px 16px; margin-bottom: 12px;
-}
-.sc-strat-desc { font-size: 12px; color: #8b949e; margin-bottom: 8px; line-height: 1.6; }
-.sc-strat-conds { display: flex; flex-wrap: wrap; gap: 6px; }
-.sc-cond-chip {
-  font-size: 11px; padding: 3px 10px; border-radius: 12px; white-space: nowrap;
-  background: #1f3451; border: 1px solid #2f4a6e; color: #79c0ff;
-}
+/* ── 市場フィルター ── */
+.sc-market-row { display:flex; flex-wrap:wrap; gap:8px 14px; margin-bottom:10px; padding:4px 2px; }
+.sc-chk { display:flex; align-items:center; gap:5px; font-size:13px; color:#c9d1d9; cursor:pointer; }
+.sc-chk input { accent-color:#58a6ff; width:14px; height:14px; }
 
-/* ── カスタムフィルター ── */
-.sc-adv { margin-bottom: 12px; }
-.sc-adv > summary {
-  cursor: pointer; font-size: 13px; color: #8b949e; padding: 8px 14px;
-  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-  user-select: none; list-style: none;
+/* ── アクティブ条件バー ── */
+.sc-active-bar {
+  background:#161b22; border:1px solid #30363d; border-radius:8px;
+  padding:8px 12px; margin-bottom:8px; display:flex; align-items:center;
+  flex-wrap:wrap; gap:6px; min-height:44px;
 }
-.sc-adv > summary:hover { color: #c9d1d9; }
-.sc-adv[open] > summary { border-radius: 8px 8px 0 0; }
-.sc-filters {
-  background: #161b22; border: 1px solid #30363d; border-top: none;
-  border-radius: 0 0 8px 8px; padding: 16px 20px;
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px 24px;
+.sc-no-cond-label { font-size:12px; color:#484f58; font-style:italic; }
+.sc-active-chip {
+  display:inline-flex; align-items:center; gap:5px;
+  background:#1f3451; border:1px solid #2f4a6e; border-radius:16px;
+  color:#79c0ff; font-size:12px; padding:4px 10px;
+  cursor:pointer; white-space:nowrap; transition:all 0.15s; font-family:inherit;
 }
-.sc-filter-label {
-  font-size: 11px; color: #8b949e; margin-bottom: 6px;
-  font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+.sc-active-chip:hover { border-color:#58a6ff; }
+.sc-active-chip.editing { border-color:#f0b429; background:#2d2016; color:#f0b429; }
+.sc-chip-x {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:14px; height:14px; border-radius:50%; background:#2f4a6e;
+  color:#8b949e; font-size:9px; font-weight:700; cursor:pointer; transition:all 0.1s; line-height:1;
 }
-.sc-range { display: flex; align-items: center; gap: 6px; }
-.sc-range input[type="number"] {
-  width: 80px; background: #0d1117; border: 1px solid #30363d; border-radius: 5px;
-  color: #e6edf3; font-size: 13px; padding: 5px 8px; text-align: right;
+.sc-chip-x:hover { background:#e84040; color:#fff; }
+.sc-add-cond-btn {
+  display:inline-flex; align-items:center; gap:4px;
+  background:transparent; border:1px dashed #30363d; border-radius:16px;
+  color:#8b949e; font-size:12px; padding:4px 12px; cursor:pointer;
+  transition:all 0.15s; font-family:inherit;
 }
-.sc-range input[type="number"]:focus { outline: none; border-color: #58a6ff; }
-.sc-range-sep { color: #484f58; font-size: 12px; }
-.sc-market-checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
-.sc-chk { display: flex; align-items: center; gap: 5px; font-size: 13px; color: #c9d1d9; cursor: pointer; }
-.sc-chk input { accent-color: #58a6ff; width: 14px; height: 14px; }
+.sc-add-cond-btn:hover { border-color:#58a6ff; color:#58a6ff; }
+.sc-bar-clear-btn {
+  margin-left:auto; padding:3px 10px; background:transparent; border:1px solid #30363d;
+  border-radius:4px; color:#484f58; font-size:11px; cursor:pointer; font-family:inherit;
+}
+.sc-bar-clear-btn:hover { border-color:#e84040; color:#e84040; }
+
+/* ── 条件ピッカーパネル ── */
+.sc-cond-picker {
+  background:#161b22; border:1px solid #30363d; border-radius:10px;
+  margin-bottom:12px; overflow:hidden;
+}
+.sc-cond-picker-tabs { display:flex; border-bottom:1px solid #30363d; overflow-x:auto; scrollbar-width:none; }
+.sc-cond-picker-tabs::-webkit-scrollbar { display:none; }
+.sc-cp-tab {
+  padding:8px 16px; font-size:12px; color:#8b949e; cursor:pointer;
+  border:none; background:transparent; border-bottom:2px solid transparent;
+  white-space:nowrap; transition:all 0.15s; font-family:inherit; margin:0;
+}
+.sc-cp-tab.active { color:#58a6ff; border-bottom-color:#58a6ff; }
+.sc-cp-tab:hover { color:#c9d1d9; }
+.sc-cond-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:6px; padding:12px; }
+.sc-cond-item {
+  display:flex; align-items:center; justify-content:center;
+  background:#21262d; border:1px solid #30363d; border-radius:6px;
+  padding:8px 10px; cursor:pointer; transition:all 0.15s;
+  font-size:12px; color:#8b949e; text-align:center; font-family:inherit;
+}
+.sc-cond-item:hover { border-color:#58a6ff; color:#58a6ff; background:#1f3451; }
+.sc-cond-item.active-cond { border-color:#3fb950; color:#3fb950; background:#0d1f0d; }
+.sc-picker-footer { padding:8px 12px; border-top:1px solid #21262d; display:flex; justify-content:flex-end; }
+.sc-picker-close-btn { padding:4px 12px; background:transparent; border:1px solid #30363d; border-radius:4px; color:#8b949e; font-size:12px; cursor:pointer; font-family:inherit; }
+.sc-picker-close-btn:hover { border-color:#58a6ff; color:#58a6ff; }
+
+/* ── ヒストグラム＋スライダー ── */
+.sc-hist-wrap {
+  background:#0d1117; border:1px solid #1f6feb; border-radius:10px;
+  padding:14px 16px; margin-bottom:12px; border-left:3px solid #1f6feb;
+}
+.sc-hist-header { display:flex; align-items:center; margin-bottom:10px; }
+.sc-hist-title { font-size:14px; color:#e6edf3; font-weight:600; flex:1; }
+.sc-hist-close { background:transparent; border:none; color:#8b949e; cursor:pointer; font-size:18px; padding:0; line-height:1; }
+.sc-hist-close:hover { color:#e84040; }
+.sc-range-val-display { font-size:15px; color:#58a6ff; font-weight:700; text-align:center; margin-bottom:10px; letter-spacing:0.5px; }
+.sc-hist-bars { display:flex; align-items:flex-end; gap:1px; height:60px; margin-bottom:4px; background:#0a0f17; border-radius:4px; padding:4px 2px 0; }
+.sc-hist-bar { flex:1; background:#21262d; border-radius:1px 1px 0 0; min-height:2px; }
+.sc-hist-bar.in-range { background:#1f6feb; }
+.sc-range-wrap { position:relative; height:22px; margin:8px 0 4px; }
+.sc-range-track { position:absolute; top:50%; transform:translateY(-50%); left:0; right:0; height:4px; background:#21262d; border-radius:2px; }
+.sc-range-fill { position:absolute; top:0; height:100%; background:#1f6feb; border-radius:2px; left:0%; width:100%; }
+input.sc-range-input {
+  position:absolute; top:50%; transform:translateY(-50%); left:0; width:100%; height:22px;
+  -webkit-appearance:none; appearance:none; background:transparent; pointer-events:none; margin:0; padding:0;
+}
+input.sc-range-input::-webkit-slider-thumb {
+  -webkit-appearance:none; width:16px; height:16px; border-radius:50%;
+  background:#58a6ff; border:2px solid #0d1117; cursor:pointer; pointer-events:all; box-shadow:0 1px 4px rgba(0,0,0,0.5);
+}
+input.sc-range-input::-moz-range-thumb {
+  width:16px; height:16px; border-radius:50%; background:#58a6ff; border:2px solid #0d1117; cursor:pointer; pointer-events:all;
+}
+.sc-range-labels { display:flex; justify-content:space-between; font-size:11px; color:#6e7681; margin-top:4px; }
+.sc-hist-actions { display:flex; gap:8px; margin-top:12px; }
+.sc-hist-reset-btn { flex:1; padding:6px; background:#21262d; border:1px solid #30363d; border-radius:6px; color:#8b949e; font-size:12px; cursor:pointer; font-family:inherit; }
+.sc-hist-reset-btn:hover { color:#e84040; border-color:#e84040; }
+.sc-hist-done-btn { flex:2; padding:6px; background:#1f6feb; border:none; border-radius:6px; color:#fff; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit; }
+.sc-hist-done-btn:hover { background:#388bfd; }
 
 /* ── 結果ヘッダー ── */
-.sc-result-header {
-  display: flex; align-items: center; margin-bottom: 10px;
-  flex-wrap: wrap; gap: 8px;
-}
-.sc-count { font-size: 13px; color: #8b949e; }
-.sc-sort {
-  background: #21262d; border: 1px solid #30363d; border-radius: 5px;
-  color: #c9d1d9; font-size: 13px; padding: 4px 8px; cursor: pointer; margin-left: auto;
-}
+.sc-result-header { display:flex; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px; }
+.sc-count { font-size:13px; color:#8b949e; }
+.sc-sort { background:#21262d; border:1px solid #30363d; border-radius:5px; color:#c9d1d9; font-size:13px; padding:4px 8px; cursor:pointer; margin-left:auto; }
 
 /* ── テーブル ── */
-.sc-table-wrap { overflow-x: auto; }
-.sc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.sc-table th {
-  background: #161b22; color: #8b949e; font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.4px;
-  padding: 8px 10px; border-bottom: 1px solid #30363d; white-space: nowrap;
-  cursor: pointer; user-select: none;
-}
-.sc-table th:hover  { color: #c9d1d9; }
-.sc-table th.sort-asc::after  { content: ' ↑'; color: #58a6ff; }
-.sc-table th.sort-desc::after { content: ' ↓'; color: #58a6ff; }
-.sc-table td { padding: 8px 10px; border-bottom: 1px solid #1c2128; white-space: nowrap; }
-.sc-table tr:hover td { background: #1c2128; }
-.sc-table .sc-name { max-width: 180px; min-width: 120px; white-space: normal; }
+.sc-table-wrap { overflow-x:auto; }
+.sc-table { width:100%; border-collapse:collapse; font-size:13px; }
+.sc-table th { background:#161b22; color:#8b949e; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; padding:8px 10px; border-bottom:1px solid #30363d; white-space:nowrap; cursor:pointer; user-select:none; }
+.sc-table th:hover { color:#c9d1d9; }
+.sc-table th.sort-asc::after { content:' ↑'; color:#58a6ff; }
+.sc-table th.sort-desc::after { content:' ↓'; color:#58a6ff; }
+.sc-table td { padding:8px 10px; border-bottom:1px solid #1c2128; white-space:nowrap; }
+.sc-table tr:hover td { background:#1c2128; }
+.sc-table .sc-name { max-width:180px; min-width:120px; white-space:normal; }
 .sc-table .sc-name a { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#79c0ff; text-decoration:none; font-weight:500; }
 .sc-table .sc-name a:hover { text-decoration:underline; }
 .sc-name-sub { display:flex; align-items:center; gap:4px; margin-top:2px; }
 .sc-name-code { font-family:monospace; font-size:10px; color:#6e7681; }
 .mkt-badge { display:inline-block; font-size:9px; padding:1px 4px; border-radius:2px; font-weight:700; line-height:1.5; }
-.mkt-badge.prime  { background:rgba(88,166,255,0.12);  color:#58a6ff; }
-.mkt-badge.std    { background:rgba(63,185,80,0.12);   color:#3fb950; }
-.mkt-badge.growth { background:rgba(163,113,247,0.12); color:#a371f7; }
-.mkt-badge.other  { background:rgba(139,148,158,0.12); color:#8b949e; }
-.sc-table .num { text-align: right; }
-.sc-table .up  { color: #E84040; }
-.sc-table .dn  { color: #3A9FE0; }
-.sc-flag-on  { color: #3fb950; }
-.sc-flag-off { color: #484f58; }
-.sc-empty { text-align: center; padding: 48px; color: #484f58; }
-.sc-loading { text-align: center; padding: 48px; color: #8b949e; }
+.mkt-badge.prime  { background:rgba(88,166,255,0.12); color:#58a6ff; }
+.mkt-badge.std    { background:rgba(63,185,80,0.12);  color:#3fb950; }
+.mkt-badge.growth { background:rgba(163,113,247,0.12);color:#a371f7; }
+.mkt-badge.other  { background:rgba(139,148,158,0.12);color:#8b949e; }
+.sc-table .num { text-align:right; }
+.sc-table .up  { color:#E84040; }
+.sc-table .dn  { color:#3A9FE0; }
+.sc-flag-on  { color:#3fb950; }
+.sc-flag-off { color:#484f58; }
+.sc-empty   { text-align:center; padding:48px; color:#484f58; }
+.sc-loading { text-align:center; padding:48px; color:#8b949e; }
 
-/* 常時表示フィルターパネル */
-.sc-filter-panel { background:#0d1117; border:1px solid #30363d; border-radius:8px; padding:10px 12px; margin-bottom:12px; display:flex; flex-direction:column; gap:8px; }
-.sc-filter-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-.sc-fi { display:flex; align-items:center; gap:3px; white-space:nowrap; }
-.sc-fi-lbl { font-size:11px; color:#8b949e; margin-right:3px; }
-.sc-fi-inp { width:58px; padding:3px 5px; background:#161b22; border:1px solid #30363d; border-radius:4px; color:#c9d1d9; font-size:12px; }
-.sc-fi-inp:focus { border-color:#58a6ff; outline:none; }
-.sc-fi-inp.active { border-color:#3fb950; background:#0d1f0d; }
-.sc-fi-sep { color:#484f58; font-size:11px; }
-.sc-fi-unit { font-size:11px; color:#484f58; }
-.sc-fi-flag { display:flex; align-items:center; gap:4px; font-size:12px; color:#8b949e; cursor:pointer; border:1px solid #30363d; border-radius:6px; padding:3px 8px; white-space:nowrap; transition:all 0.15s; }
-.sc-fi-flag input { accent-color:#3fb950; }
-.sc-fi-flag:has(input:checked) { color:#3fb950; border-color:#3fb950; background:#0d1f0d; }
-.sc-apply-btn { padding:4px 14px; background:#1f6feb; border:1px solid #388bfd; border-radius:4px; color:#fff; font-size:12px; font-weight:600; cursor:pointer; margin-left:auto; }
-.sc-apply-btn:hover { background:#388bfd; }
-.sc-clear-btn { padding:3px 12px; background:transparent; border:1px solid #30363d; border-radius:4px; color:#8b949e; font-size:11px; cursor:pointer; }
-.sc-clear-btn:hover { border-color:#e84040; color:#e84040; }
-.sc-cond-chip { cursor:pointer; }
-.sc-cond-chip:hover { border-color:#58a6ff; color:#58a6ff; background:#1f3451; }
+/* 非表示フィルター入力 */
+#scHiddenInputs { display:none!important; }
 
 @media (max-width: 768px) {
-  .sc-wrap { padding: 8px; }
-  .sc-tabs-outer { margin-bottom: 8px; }
-  .sc-tab { padding: 5px 10px; font-size: 12px; }
-  .sc-result-header { flex-direction: column; align-items: flex-start; gap: 6px; }
-  .sc-sort { width: 100%; }
-  .sc-table { font-size: 12px; }
-  .sc-table th, .sc-table td { padding: 6px 6px; }
-  .sc-filters { grid-template-columns: 1fr; }
-  .cg-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .sc-wrap { padding:8px; }
+  .sc-preset-card { min-width:120px; max-width:160px; padding:10px 12px; }
+  .sc-presets-row { margin-bottom:10px; }
+  .sc-result-header { flex-direction:column; align-items:flex-start; gap:6px; }
+  .sc-sort { width:100%; }
+  .sc-table { font-size:12px; }
+  .sc-table th, .sc-table td { padding:6px 6px; }
+  .cg-grid { grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); }
 }
 """
 
@@ -2475,136 +2509,51 @@ def _build_screen_page() -> str:
 <div class="sc-wrap">
   <div class="sc-page-title">スクリーニング</div>
 
-  <div class="sc-tabs-outer">
-    <div class="sc-tabs" id="scTabs">
-      <button class="sc-tab active" data-strat="-1">すべて</button>
-      <button class="sc-tab" data-strat="0">① トレンド初動</button>
-      <button class="sc-tab" data-strat="1">② ブレイクアウト</button>
-      <button class="sc-tab" data-strat="2">③ 好決算モメンタム</button>
-      <button class="sc-tab" data-strat="3">④ V字反転</button>
-      <button class="sc-tab" data-strat="4">⑤ 業績急成長</button>
-      <button class="sc-tab" data-strat="5">⑥ 小型株爆発</button>
-      <button class="sc-tab" data-strat="6">⑦ 高配当バリュー</button>
-      <button class="sc-tab" data-strat="7">⑧ 低PBR発掘</button>
-      <button class="sc-tab" data-strat="8">⑨ 高ROEグロース</button>
-      <button class="sc-tab" data-strat="9">⑩ 機関投資家注目</button>
-      <button class="sc-tab" data-strat="10">⑪ ボックス上抜け</button>
-      <button class="sc-tab" data-strat="11">⑫ 押し目買い</button>
-      <button class="sc-tab" data-strat="12">⑬ MACD-GC</button>
-      <button class="sc-tab" data-strat="13">⑭ 増配・高配当</button>
-      <button class="sc-tab" data-strat="14">⑮ 業績+チャート複合</button>
-    </div>
-  </div>
+  <div class="sc-section-label">プリセット戦略</div>
+  <div class="sc-presets-row" id="scPresetsRow"></div>
 
-  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;padding:4px 2px">
+  <div class="sc-market-row">
     <label class="sc-chk"><input class="sc-mkt-chk" type="checkbox" value="プライム" checked> プライム</label>
     <label class="sc-chk"><input class="sc-mkt-chk" type="checkbox" value="スタンダード" checked> スタンダード</label>
     <label class="sc-chk"><input class="sc-mkt-chk" type="checkbox" value="グロース" checked> グロース</label>
     <label class="sc-chk"><input class="sc-mkt-chk" type="checkbox" value="other" checked> その他</label>
   </div>
 
-  <div class="sc-strat-panel" id="scStratPanel" style="display:none">
-    <div class="sc-strat-desc" id="scStratDesc"></div>
-    <div class="sc-strat-conds" id="scStratConds"></div>
+  <div class="sc-active-bar" id="scActiveBar">
+    <span class="sc-no-cond-label" id="scNoCondLabel">条件なし（全件表示）</span>
+    <button class="sc-add-cond-btn" id="scAddCondBtn">＋ 条件を追加</button>
+    <button class="sc-bar-clear-btn" id="scBarClearBtn" style="display:none">✕ クリア</button>
   </div>
 
-  <div class="sc-filter-panel">
-    <div class="sc-filter-row">
-      <div class="sc-fi"><span class="sc-fi-lbl">RSI</span>
-        <input class="sc-fi-inp" id="f-rsi-min" type="number" placeholder="下限" min="0" max="100" step="1">
-        <span class="sc-fi-sep">〜</span>
-        <input class="sc-fi-inp" id="f-rsi-max" type="number" placeholder="上限" min="0" max="100" step="1">
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">MA25乖離%</span>
-        <input class="sc-fi-inp" id="f-dm25-min" type="number" placeholder="下限" step="1">
-        <span class="sc-fi-sep">〜</span>
-        <input class="sc-fi-inp" id="f-dm25-max" type="number" placeholder="上限" step="1">
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">MA75乖離%</span>
-        <input class="sc-fi-inp" id="f-dm75-min" type="number" placeholder="下限" step="1">
-        <span class="sc-fi-sep">〜</span>
-        <input class="sc-fi-inp" id="f-dm75-max" type="number" placeholder="上限" step="1">
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">52週高値乖離%</span>
-        <input class="sc-fi-inp" id="f-d52h-min" type="number" placeholder="下限" step="1">
-        <span class="sc-fi-sep">〜</span>
-        <input class="sc-fi-inp" id="f-d52h-max" type="number" placeholder="上限" step="1">
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">出来高比</span>
-        <input class="sc-fi-inp" id="f-vol-min" type="number" placeholder="例:1.5" step="0.1">
-        <span class="sc-fi-unit">x+</span>
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">売買代金(億)</span>
-        <input class="sc-fi-inp" id="f-turn-min" type="number" placeholder="下限" step="1">
-        <span class="sc-fi-sep">〜</span>
-        <input class="sc-fi-inp" id="f-turn-max" type="number" placeholder="上限" step="1">
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">25日騰落%</span>
-        <input class="sc-fi-inp" id="f-chg25-min" type="number" placeholder="下限" step="1">
-        <span class="sc-fi-sep">〜</span>
-        <input class="sc-fi-inp" id="f-chg25-max" type="number" placeholder="上限" step="1">
-      </div>
+  <div class="sc-cond-picker" id="scCondPicker" style="display:none">
+    <div class="sc-cond-picker-tabs">
+      <button class="sc-cp-tab active" data-cat="テクニカル">テクニカル</button>
+      <button class="sc-cp-tab" data-cat="バリュー">バリュー</button>
+      <button class="sc-cp-tab" data-cat="成長">成長</button>
+      <button class="sc-cp-tab" data-cat="その他">その他</button>
     </div>
-    <div class="sc-filter-row">
-      <label class="sc-fi-flag"><input type="checkbox" id="f-macd-gc"> MACD-GC</label>
-      <label class="sc-fi-flag"><input type="checkbox" id="f-break20"> 20日高値更新</label>
-      <label class="sc-fi-flag"><input type="checkbox" id="f-break65"> 65日高値更新</label>
-      <label class="sc-fi-flag"><input type="checkbox" id="f-cf-pos"> 営業CF黒字</label>
-      <label class="sc-fi-flag"><input type="checkbox" id="f-ma-up"> MA25&gt;MA75</label>
-      <div class="sc-fi"><span class="sc-fi-lbl">PER(倍)</span>
-        <input class="sc-fi-inp" id="f-per-min" type="number" placeholder="下限" step="0.1">
-        <span class="sc-fi-sep">〜</span>
-        <input class="sc-fi-inp" id="f-per-max" type="number" placeholder="上限" step="0.1">
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">PBR(倍)</span>
-        <input class="sc-fi-inp" id="f-pbr-min" type="number" placeholder="下限" step="0.1">
-        <span class="sc-fi-sep">〜</span>
-        <input class="sc-fi-inp" id="f-pbr-max" type="number" placeholder="上限" step="0.1">
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">ROE%</span>
-        <input class="sc-fi-inp" id="f-roe-min" type="number" placeholder="下限" step="1">
-        <span class="sc-fi-sep">〜</span>
-        <input class="sc-fi-inp" id="f-roe-max" type="number" placeholder="上限" step="1">
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">配当利回%</span>
-        <input class="sc-fi-inp" id="f-div-min" type="number" placeholder="下限" step="0.1">
-        <span class="sc-fi-sep">〜</span>
-        <input class="sc-fi-inp" id="f-div-max" type="number" placeholder="上限" step="0.1">
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">配当性向%</span>
-        <input class="sc-fi-inp" id="f-pout-min" type="number" placeholder="下限" step="1">
-        <span class="sc-fi-sep">〜</span>
-        <input class="sc-fi-inp" id="f-pout-max" type="number" placeholder="上限" step="1">
-      </div>
+    <div class="sc-cond-grid" id="scCondGrid"></div>
+    <div class="sc-picker-footer">
+      <button class="sc-picker-close-btn" id="scPickerClose">閉じる</button>
     </div>
-    <div class="sc-filter-row">
-      <div class="sc-fi"><span class="sc-fi-lbl">売上成長%</span>
-        <input class="sc-fi-inp" id="f-rev-min" type="number" placeholder="例:15" step="1">
-        <span class="sc-fi-unit">%+</span>
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">営業益成長%</span>
-        <input class="sc-fi-inp" id="f-op-min" type="number" placeholder="例:20" step="1">
-        <span class="sc-fi-unit">%+</span>
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">EPS成長%</span>
-        <input class="sc-fi-inp" id="f-eps-min" type="number" placeholder="例:25" step="1">
-        <span class="sc-fi-unit">%+</span>
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">営業利益率%</span>
-        <input class="sc-fi-inp" id="f-opm-min" type="number" placeholder="例:15" step="1">
-        <span class="sc-fi-unit">%+</span>
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">ROIC%</span>
-        <input class="sc-fi-inp" id="f-roic-min" type="number" placeholder="例:10" step="1">
-        <span class="sc-fi-unit">%+</span>
-      </div>
-      <div class="sc-fi"><span class="sc-fi-lbl">時価総額(億)</span>
-        <input class="sc-fi-inp" id="f-cap-min" type="number" placeholder="下限" step="10">
-        <span class="sc-fi-sep">〜</span>
-        <input class="sc-fi-inp" id="f-cap-max" type="number" placeholder="上限" step="10">
-      </div>
-      <button class="sc-apply-btn" id="scApply">絞り込む</button>
-      <button class="sc-clear-btn" id="scClear">✕ クリア</button>
+  </div>
+
+  <div class="sc-hist-wrap" id="scHistWrap" style="display:none">
+    <div class="sc-hist-header">
+      <span class="sc-hist-title" id="scHistTitle"></span>
+      <button class="sc-hist-close" id="scHistClose">×</button>
+    </div>
+    <div class="sc-range-val-display" id="scRangeValDisplay"></div>
+    <div class="sc-hist-bars" id="scHistBars"></div>
+    <div class="sc-range-wrap">
+      <div class="sc-range-track"><div class="sc-range-fill" id="scRangeFill"></div></div>
+      <input type="range" id="scRangeMin" class="sc-range-input">
+      <input type="range" id="scRangeMax" class="sc-range-input">
+    </div>
+    <div class="sc-range-labels"><span id="scRangeLblMin"></span><span id="scRangeLblMax"></span></div>
+    <div class="sc-hist-actions">
+      <button class="sc-hist-reset-btn" id="scHistReset">この条件を削除</button>
+      <button class="sc-hist-done-btn" id="scHistDone">確定して閉じる</button>
     </div>
   </div>
 
@@ -2669,6 +2618,28 @@ def _build_screen_page() -> str:
       <thead id="sc-thead"><tr></tr></thead>
       <tbody id="sc-tbody"><tr><td class="sc-loading">データ読み込み中...</td></tr></tbody>
     </table>
+
+  <div id="scHiddenInputs">
+    <input id="f-rsi-min" type="number"><input id="f-rsi-max" type="number">
+    <input id="f-dm25-min" type="number"><input id="f-dm25-max" type="number">
+    <input id="f-dm75-min" type="number"><input id="f-dm75-max" type="number">
+    <input id="f-d52h-min" type="number"><input id="f-d52h-max" type="number">
+    <input id="f-vol-min" type="number">
+    <input id="f-turn-min" type="number"><input id="f-turn-max" type="number">
+    <input id="f-chg25-min" type="number"><input id="f-chg25-max" type="number">
+    <input id="f-per-min" type="number"><input id="f-per-max" type="number">
+    <input id="f-pbr-min" type="number"><input id="f-pbr-max" type="number">
+    <input id="f-roe-min" type="number"><input id="f-roe-max" type="number">
+    <input id="f-div-min" type="number"><input id="f-div-max" type="number">
+    <input id="f-pout-min" type="number"><input id="f-pout-max" type="number">
+    <input id="f-rev-min" type="number"><input id="f-op-min" type="number">
+    <input id="f-eps-min" type="number"><input id="f-opm-min" type="number">
+    <input id="f-roic-min" type="number">
+    <input id="f-cap-min" type="number"><input id="f-cap-max" type="number">
+    <input id="f-macd-gc" type="checkbox"><input id="f-break20" type="checkbox">
+    <input id="f-break65" type="checkbox"><input id="f-cf-pos" type="checkbox">
+    <input id="f-ma-up" type="checkbox">
+  </div>
   </div>
 </div>
 
@@ -2801,6 +2772,9 @@ def _build_screen_page() -> str:
   function clearInputs(){{
     NUM_IDS.forEach(function(id){{var e=document.getElementById(id);if(e){{e.value='';e.classList.remove('active');}}}});
     CHK_IDS.forEach(function(id){{var e=document.getElementById(id);if(e)e.checked=false;}});
+    var hw=document.getElementById('scHistWrap');if(hw)hw.style.display='none';
+    scHistCond=null;
+    if(typeof renderChips==='function')renderChips();
   }}
 
   function populateInputs(stratIdx){{
@@ -2816,6 +2790,7 @@ def _build_screen_page() -> str:
         else{{el.value=scale?Math.round(c.val*scale):c.val;el.classList.add('active');}}
       }});
     }});
+    if(typeof renderChips==='function')renderChips();
   }}
 
   function applyCondToInput(cond){{
@@ -2980,27 +2955,15 @@ def _build_screen_page() -> str:
 
   function applyStrat(idx){{
     curStrat=idx;
-    document.querySelectorAll('.sc-tab').forEach(function(b){{b.classList.remove('active');}});
-    document.querySelector('.sc-tab[data-strat="'+idx+'"]').classList.add('active');
-    var panel=document.getElementById('scStratPanel');
+    document.querySelectorAll('.sc-preset-card').forEach(function(b){{b.classList.remove('active');}});
+    var card=document.querySelector('.sc-preset-card[data-strat="'+idx+'"]');
+    if(card)card.classList.add('active');
     if(idx>=0&&idx<=14){{
       var st=STRATS[idx];
-      panel.style.display='';
-      document.getElementById('scStratDesc').textContent=st.desc;
-      document.getElementById('scStratConds').innerHTML=st.conds.map(function(c){{
-        return'<span class="sc-cond-chip" data-idx="'+idx+'" data-cidx="'+STRATS[idx].conds.indexOf(c)+'">'+c.lbl+'</span>';
-      }}).join('');
-      document.querySelectorAll('.sc-cond-chip').forEach(function(chip){{
-        chip.addEventListener('click',function(){{
-          var si=parseInt(chip.dataset.idx),ci=parseInt(chip.dataset.cidx);
-          applyCondToInput(STRATS[si].conds[ci]);
-        }});
-      }});
       var dashIdx=st.sort.lastIndexOf('-');
       sortCol=st.sort.slice(0,dashIdx);sortDir=st.sort.slice(dashIdx+1)==='desc'?-1:1;
       document.getElementById('sc-sort').value=st.sort;
     }}else{{
-      panel.style.display='none';
       sortCol='market_cap';sortDir=-1;
       document.getElementById('sc-sort').value='market_cap-desc';
     }}
@@ -3008,9 +2971,280 @@ def _build_screen_page() -> str:
     if(scView==='chart'){{loadScChart();}}else{{render();}}
   }}
 
-  document.querySelectorAll('.sc-tab').forEach(function(btn){{
-    btn.addEventListener('click',function(){{applyStrat(parseInt(btn.dataset.strat));}});
-  }});
+  /* ── 条件定義 (カテゴリ別) ── */
+  var COND_DEFS=[
+    {{cat:'テクニカル',id:'rsi',lbl:'RSI',field:'rsi14',minId:'f-rsi-min',maxId:'f-rsi-max',unit:'',step:1}},
+    {{cat:'テクニカル',id:'dm25',lbl:'MA25乖離',field:'dev_ma25',minId:'f-dm25-min',maxId:'f-dm25-max',unit:'%',step:1}},
+    {{cat:'テクニカル',id:'dm75',lbl:'MA75乖離',field:'dev_ma75',minId:'f-dm75-min',maxId:'f-dm75-max',unit:'%',step:1}},
+    {{cat:'テクニカル',id:'d52h',lbl:'52週高値乖離',field:'dev_high52w',minId:'f-d52h-min',maxId:'f-d52h-max',unit:'%',step:1}},
+    {{cat:'テクニカル',id:'vol',lbl:'出来高比',field:'vol20_ratio',minId:'f-vol-min',unit:'x',step:0.1,minOnly:true}},
+    {{cat:'テクニカル',id:'chg25',lbl:'25日騰落',field:'chg25d',minId:'f-chg25-min',maxId:'f-chg25-max',unit:'%',step:1}},
+    {{cat:'テクニカル',id:'macd_gc',lbl:'MACD-GC',chkId:'f-macd-gc',isFlag:true}},
+    {{cat:'テクニカル',id:'break20',lbl:'20日高値更新',chkId:'f-break20',isFlag:true}},
+    {{cat:'テクニカル',id:'break65',lbl:'65日高値更新',chkId:'f-break65',isFlag:true}},
+    {{cat:'テクニカル',id:'maup',lbl:'MA25>MA75',chkId:'f-ma-up',isFlag:true}},
+    {{cat:'バリュー',id:'per',lbl:'PER',field:'per',minId:'f-per-min',maxId:'f-per-max',unit:'倍',step:0.1}},
+    {{cat:'バリュー',id:'pbr',lbl:'PBR',field:'pbr',minId:'f-pbr-min',maxId:'f-pbr-max',unit:'倍',step:0.1}},
+    {{cat:'バリュー',id:'roe',lbl:'ROE',field:'roe',minId:'f-roe-min',maxId:'f-roe-max',unit:'%',step:1}},
+    {{cat:'バリュー',id:'div',lbl:'配当利回り',field:'div_yield',minId:'f-div-min',maxId:'f-div-max',unit:'%',step:0.1}},
+    {{cat:'バリュー',id:'pout',lbl:'配当性向',field:'payout_ratio',minId:'f-pout-min',maxId:'f-pout-max',unit:'%',step:1}},
+    {{cat:'バリュー',id:'turn',lbl:'売買代金',field:'turnover_20d',minId:'f-turn-min',maxId:'f-turn-max',unit:'億',step:1}},
+    {{cat:'バリュー',id:'cap',lbl:'時価総額',field:'market_cap',minId:'f-cap-min',maxId:'f-cap-max',unit:'億',step:10,scale:1e-8}},
+    {{cat:'成長',id:'rev',lbl:'売上成長',field:'rev_growth',minId:'f-rev-min',unit:'%',step:1,minOnly:true}},
+    {{cat:'成長',id:'op',lbl:'営業益成長',field:'op_growth',minId:'f-op-min',unit:'%',step:1,minOnly:true}},
+    {{cat:'成長',id:'eps',lbl:'EPS成長',field:'eps_growth',minId:'f-eps-min',unit:'%',step:1,minOnly:true}},
+    {{cat:'成長',id:'opm',lbl:'営業利益率',field:'op_margin',minId:'f-opm-min',unit:'%',step:1,minOnly:true}},
+    {{cat:'成長',id:'roic',lbl:'ROIC',field:'roic',minId:'f-roic-min',unit:'%',step:1,minOnly:true}},
+    {{cat:'その他',id:'cf',lbl:'営業CF黒字',chkId:'f-cf-pos',isFlag:true}},
+  ];
+  var scPickerCat='テクニカル';
+  var scHistCond=null;
+  var _histData=null;
+
+  /* ── ヘルパー ── */
+  function getCondDef(id){{return COND_DEFS.find(function(d){{return d.id===id;}});}}
+  function isCondActive(cond){{
+    if(cond.isFlag){{var el=document.getElementById(cond.chkId);return!!(el&&el.checked);}}
+    return(cond.minId&&_v(cond.minId)!==null)||(cond.maxId&&_v(cond.maxId)!==null);
+  }}
+  function getCondLabel(cond){{
+    if(cond.isFlag)return cond.lbl+' ✓';
+    var min=cond.minId?_v(cond.minId):null,max=cond.maxId?_v(cond.maxId):null,u=cond.unit||'';
+    var dec=cond.step<1?1:0;
+    function fmt(v){{return parseFloat(v).toFixed(dec)+u;}}
+    if(min!==null&&max!==null)return cond.lbl+': '+fmt(min)+'〜'+fmt(max);
+    if(min!==null)return cond.lbl+': ≥'+fmt(min);
+    if(max!==null)return cond.lbl+': ≤'+fmt(max);
+    return cond.lbl;
+  }}
+  function removeCond(cond){{
+    if(cond.isFlag){{var el=document.getElementById(cond.chkId);if(el)el.checked=false;}}
+    else{{
+      if(cond.minId){{var e=document.getElementById(cond.minId);if(e){{e.value='';e.classList.remove('active');}}}}
+      if(cond.maxId){{var e=document.getElementById(cond.maxId);if(e){{e.value='';e.classList.remove('active');}}}}
+    }}
+    if(scHistCond&&scHistCond.id===cond.id){{
+      document.getElementById('scHistWrap').style.display='none';scHistCond=null;
+    }}
+    renderChips();scheduleRender();
+  }}
+
+  /* ── アクティブ条件チップ描画 ── */
+  function renderChips(){{
+    var bar=document.getElementById('scActiveBar');
+    if(!bar)return;
+    Array.from(bar.querySelectorAll('.sc-active-chip')).forEach(function(c){{c.remove();}});
+    var activeConds=COND_DEFS.filter(isCondActive);
+    var noLabel=document.getElementById('scNoCondLabel');
+    var clearBtn=document.getElementById('scBarClearBtn');
+    var addBtn=document.getElementById('scAddCondBtn');
+    if(!activeConds.length){{
+      if(noLabel)noLabel.style.display='';
+      if(clearBtn)clearBtn.style.display='none';
+    }}else{{
+      if(noLabel)noLabel.style.display='none';
+      if(clearBtn)clearBtn.style.display='';
+      activeConds.forEach(function(cond){{
+        var chip=document.createElement('button');
+        chip.className='sc-active-chip'+(scHistCond&&scHistCond.id===cond.id?' editing':'');
+        var lbl=document.createTextNode(getCondLabel(cond)+' ');
+        chip.appendChild(lbl);
+        var x=document.createElement('span');x.className='sc-chip-x';x.textContent='×';
+        x.addEventListener('click',function(e){{e.stopPropagation();removeCond(cond);}});
+        chip.appendChild(x);
+        if(!cond.isFlag)chip.addEventListener('click',function(){{showHistPanel(cond);}});
+        bar.insertBefore(chip,addBtn);
+      }});
+    }}
+    document.querySelectorAll('.sc-cond-item').forEach(function(item){{
+      var cd=getCondDef(item.dataset.condId);
+      if(cd)item.classList.toggle('active-cond',isCondActive(cd));
+    }});
+  }}
+
+  /* ── 条件ピッカー ── */
+  function showCondPicker(){{
+    var picker=document.getElementById('scCondPicker');
+    var visible=picker.style.display!=='none';
+    picker.style.display=visible?'none':'';
+    if(!visible)renderCondGrid(scPickerCat);
+  }}
+  function renderCondGrid(cat){{
+    scPickerCat=cat;
+    document.querySelectorAll('.sc-cp-tab').forEach(function(t){{t.classList.toggle('active',t.dataset.cat===cat);}});
+    var grid=document.getElementById('scCondGrid');grid.innerHTML='';
+    COND_DEFS.filter(function(d){{return d.cat===cat;}}).forEach(function(cond){{
+      var item=document.createElement('button');
+      item.className='sc-cond-item'+(isCondActive(cond)?' active-cond':'');
+      item.dataset.condId=cond.id;item.textContent=cond.lbl;
+      item.addEventListener('click',function(){{
+        if(cond.isFlag){{
+          var el=document.getElementById(cond.chkId);
+          if(el)el.checked=!el.checked;
+          item.classList.toggle('active-cond',el&&el.checked);
+          renderChips();scheduleRender();
+        }}else{{
+          showHistPanel(cond);
+          document.getElementById('scCondPicker').style.display='none';
+        }}
+      }});
+      grid.appendChild(item);
+    }});
+  }}
+
+  /* ── ヒストグラム ── */
+  var HIST_BINS=30;
+  function computeHist(cond){{
+    var vals=[];
+    stocks.forEach(function(s){{
+      var v=s[cond.field];
+      if(v===null||v===undefined||!isFinite(v))return;
+      if(cond.scale)v=v*cond.scale;
+      vals.push(v);
+    }});
+    if(!vals.length)return null;
+    vals.sort(function(a,b){{return a-b;}});
+    var lo=vals[Math.floor(vals.length*0.01)]||vals[0];
+    var hi=vals[Math.floor(vals.length*0.99)]||vals[vals.length-1];
+    if(lo>=hi)hi=lo+(cond.step||1);
+    var range=hi-lo;
+    var bins=new Array(HIST_BINS).fill(0);
+    vals.forEach(function(v){{
+      if(v<lo||v>hi)return;
+      var idx=Math.min(HIST_BINS-1,Math.floor((v-lo)/range*HIST_BINS));
+      bins[idx]++;
+    }});
+    return{{bins:bins,lo:lo,hi:hi,total:vals.length}};
+  }}
+  function drawHistBars(hist,cond){{
+    var container=document.getElementById('scHistBars');
+    if(!hist){{container.innerHTML='<div style="color:#8b949e;font-size:12px;padding:8px">データなし</div>';return;}}
+    var maxBin=Math.max.apply(null,hist.bins);
+    var curMin=cond.minId?_v(cond.minId):null,curMax=cond.maxId?_v(cond.maxId):null;
+    var range=hist.hi-hist.lo;
+    container.innerHTML='';
+    hist.bins.forEach(function(count,i){{
+      var h=maxBin>0?Math.max(2,Math.round(count/maxBin*56)):2;
+      var binMid=hist.lo+(i+0.5)/HIST_BINS*range;
+      var inRange=true;
+      if(curMin!==null&&binMid<curMin)inRange=false;
+      if(curMax!==null&&binMid>curMax)inRange=false;
+      var bar=document.createElement('div');
+      bar.className='sc-hist-bar'+(inRange?' in-range':'');
+      bar.style.height=h+'px';bar.title=count+'銘柄';
+      container.appendChild(bar);
+    }});
+  }}
+  function updateRangeFill(lo,hi,curMin,curMax){{
+    var fill=document.getElementById('scRangeFill');if(!fill)return;
+    var range=hi-lo||1;
+    var p1=((curMin!==null?curMin:lo)-lo)/range*100;
+    var p2=((curMax!==null?curMax:hi)-lo)/range*100;
+    fill.style.left=Math.max(0,Math.min(100,p1))+'%';
+    fill.style.width=Math.max(0,Math.min(100,p2-p1))+'%';
+  }}
+  function showHistPanel(cond){{
+    scHistCond=cond;
+    var wrap=document.getElementById('scHistWrap');wrap.style.display='';
+    document.getElementById('scHistTitle').textContent=cond.lbl+(cond.unit?' ('+cond.unit+')':'');
+    renderChips();
+    if(!stocks.length){{document.getElementById('scHistBars').innerHTML='<div style="color:#8b949e;font-size:12px;padding:8px">データ読み込み中...</div>';return;}}
+    _histData=computeHist(cond);
+    drawHistBars(_histData,cond);
+    setupRangeSliders(_histData,cond);
+    setTimeout(function(){{wrap.scrollIntoView({{behavior:'smooth',block:'nearest'}});}},50);
+  }}
+  function setupRangeSliders(hist,cond){{
+    if(!hist)return;
+    var step=cond.step||1;
+    var lo=Math.floor(hist.lo/step)*step;
+    var hi=Math.ceil(hist.hi/step)*step;
+    if(lo>=hi)hi=lo+step;
+    var rMin=document.getElementById('scRangeMin'),rMax=document.getElementById('scRangeMax');
+    var display=document.getElementById('scRangeValDisplay');
+    var lblMin=document.getElementById('scRangeLblMin'),lblMax=document.getElementById('scRangeLblMax');
+    if(!rMin||!rMax)return;
+    var curMin=cond.minId?_v(cond.minId):null,curMax=cond.maxId?_v(cond.maxId):null;
+    var dec=step<1?1:0;
+    function fmt(v){{return parseFloat(v).toFixed(dec)+(cond.unit||'');}}
+    rMin.min=lo;rMin.max=hi;rMin.step=step;
+    rMax.min=lo;rMax.max=hi;rMax.step=step;
+    if(cond.minOnly){{
+      rMax.style.opacity='0';rMax.style.pointerEvents='none';
+      rMin.value=curMin!==null?curMin:lo;
+      lblMin.textContent=fmt(lo);lblMax.textContent=fmt(hi);
+      display.textContent='≥ '+fmt(parseFloat(rMin.value));
+      updateRangeFill(lo,hi,parseFloat(rMin.value),hi);
+      rMin.oninput=function(){{
+        var v=parseFloat(rMin.value);
+        display.textContent='≥ '+fmt(v);
+        updateRangeFill(lo,hi,v,hi);
+        var el=document.getElementById(cond.minId);if(el){{el.value=v;el.classList.add('active');}}
+        drawHistBars(_histData,cond);renderChips();scheduleRender();
+      }};
+    }}else{{
+      rMax.style.opacity='';rMax.style.pointerEvents='';
+      rMin.value=curMin!==null?curMin:lo;
+      rMax.value=curMax!==null?curMax:hi;
+      lblMin.textContent=fmt(lo);lblMax.textContent=fmt(hi);
+      function _update(){{
+        var mn=parseFloat(rMin.value),mx=parseFloat(rMax.value);
+        display.textContent=fmt(mn)+' 〜 '+fmt(mx);
+        updateRangeFill(lo,hi,mn,mx);
+        drawHistBars(_histData,cond);
+      }}
+      _update();
+      rMin.oninput=function(){{
+        if(parseFloat(rMin.value)>parseFloat(rMax.value))rMax.value=rMin.value;
+        _update();
+        var el=document.getElementById(cond.minId);if(el){{el.value=parseFloat(rMin.value);el.classList.add('active');}}
+        renderChips();scheduleRender();
+      }};
+      rMax.oninput=function(){{
+        if(parseFloat(rMax.value)<parseFloat(rMin.value))rMin.value=rMax.value;
+        _update();
+        if(cond.maxId){{var el=document.getElementById(cond.maxId);if(el){{el.value=parseFloat(rMax.value);el.classList.add('active');}}}}
+        renderChips();scheduleRender();
+      }};
+    }}
+  }}
+
+  /* ── プリセット戦略のヒット数カウント (市場フィルターを適用) ── */
+  function countStratHits(strat){{
+    return stocks.filter(function(s){{
+      if(!passMarket(s))return false;
+      for(var i=0;i<strat.conds.length;i++){{
+        var c=strat.conds[i],sv=s[c.f];
+        if(sv===null||sv===undefined)return false;
+        if(c.op==='>='&&sv<c.val)return false;
+        if(c.op==='<='&&sv>c.val)return false;
+        if(c.op==='='&&sv!==c.val)return false;
+      }}
+      return true;
+    }}).length;
+  }}
+
+  /* ── プリセットカード生成 ── */
+  (function(){{
+    var row=document.getElementById('scPresetsRow');
+    var allCard=document.createElement('button');
+    allCard.className='sc-preset-card sc-all-card active';
+    allCard.setAttribute('data-strat','-1');allCard.textContent='すべて';
+    allCard.addEventListener('click',function(){{applyStrat(-1);}});
+    row.appendChild(allCard);
+    STRATS.forEach(function(st,idx){{
+      var card=document.createElement('button');
+      card.className='sc-preset-card';card.setAttribute('data-strat',String(idx));
+      var condSummary=st.conds.slice(0,3).map(function(c){{return c.lbl;}}).join(' · ');
+      if(st.conds.length>3)condSummary+=' …';
+      card.innerHTML='<div class="sc-preset-card-name">'+st.name+'</div>'
+        +'<div class="sc-preset-card-conds">'+condSummary+'</div>'
+        +'<div class="sc-preset-hit-count">—</div>';
+      card.addEventListener('click',function(){{applyStrat(idx);}});
+      row.appendChild(card);
+    }});
+  }})();
+
   document.getElementById('sc-sort').addEventListener('change',function(){{
     var dashIdx=this.value.lastIndexOf('-');
     sortCol=this.value.slice(0,dashIdx);sortDir=this.value.slice(dashIdx+1)==='desc'?-1:1;render();
@@ -3020,24 +3254,31 @@ def _build_screen_page() -> str:
   NUM_IDS.forEach(function(id){{
     var el=document.getElementById(id);
     if(!el)return;
-    el.addEventListener('input',function(){{el.classList.toggle('active',el.value!=='');scheduleRender();}});
-    el.addEventListener('change',function(){{el.classList.toggle('active',el.value!=='');render();}});
+    el.addEventListener('input',function(){{el.classList.toggle('active',el.value!=='');renderChips();scheduleRender();}});
+    el.addEventListener('change',function(){{el.classList.toggle('active',el.value!=='');renderChips();render();}});
   }});
   CHK_IDS.forEach(function(id){{
-    var el=document.getElementById(id);if(el)el.addEventListener('change',render);
+    var el=document.getElementById(id);if(el)el.addEventListener('change',function(){{renderChips();render();}});
   }});
   document.querySelectorAll('.sc-mkt-chk').forEach(function(el){{el.addEventListener('change',render);}});
-  document.getElementById('scApply').addEventListener('click',function(){{
-    if(scView==='chart')loadScChart(); else render();
+  document.getElementById('scAddCondBtn').addEventListener('click',showCondPicker);
+  document.getElementById('scBarClearBtn').addEventListener('click',function(){{
+    clearInputs();applyStrat(-1);
   }});
-  document.getElementById('scClear').addEventListener('click',function(){{
-    clearInputs();
-    document.getElementById('scStratPanel').style.display='none';
-    document.querySelectorAll('.sc-tab').forEach(function(b){{b.classList.remove('active');}});
-    document.querySelector('.sc-tab[data-strat="-1"]').classList.add('active');
-    curStrat=-1;sortCol='market_cap';sortDir=-1;
-    document.getElementById('sc-sort').value='market_cap-desc';
-    render();
+  document.getElementById('scPickerClose').addEventListener('click',function(){{
+    document.getElementById('scCondPicker').style.display='none';
+  }});
+  document.querySelectorAll('.sc-cp-tab').forEach(function(t){{
+    t.addEventListener('click',function(){{renderCondGrid(t.dataset.cat);}});
+  }});
+  document.getElementById('scHistClose').addEventListener('click',function(){{
+    document.getElementById('scHistWrap').style.display='none';scHistCond=null;renderChips();
+  }});
+  document.getElementById('scHistReset').addEventListener('click',function(){{
+    if(scHistCond){{removeCond(scHistCond);document.getElementById('scHistWrap').style.display='none';scHistCond=null;}}
+  }});
+  document.getElementById('scHistDone').addEventListener('click',function(){{
+    document.getElementById('scHistWrap').style.display='none';scHistCond=null;renderChips();
   }});
 
   function scCalcMA(closes,period){{
@@ -3163,6 +3404,12 @@ def _build_screen_page() -> str:
 
   fetch('/api/screen').then(function(r){{return r.json();}}).then(function(data){{
     stocks=data;render();
+    STRATS.forEach(function(st,idx){{
+      var card=document.querySelector('.sc-preset-card[data-strat="'+idx+'"]');
+      if(!card)return;
+      var el=card.querySelector('.sc-preset-hit-count');
+      if(el)el.textContent=countStratHits(st)+'銘柄';
+    }});
   }}).catch(function(){{
     document.getElementById('sc-count').textContent='読み込み失敗';
     document.getElementById('sc-tbody').innerHTML='<tr><td colspan="20" style="text-align:center;padding:20px;color:#e84040">データの読み込みに失敗しました。ページをリロードしてください。</td></tr>';
@@ -3881,7 +4128,7 @@ def _build_stock_page(code: str) -> str:
             pct    = float(ev["change_pct"] or 0)
             rk     = ev["ranking"]
             period = "日次" if ev["period"] == "daily" else "週次"
-            arrow  = "▲" if direc == "up" else "▼"
+            sign   = "+" if direc == "up" else "−"
             rk_str = f"（{period}第{rk}位）" if rk else f"（{period}）"
             ai_html   = _render_ai_summary(ev.get("ai_summary") or "")
             news_html = _render_news_items(ev["news_items"] or "",
@@ -3889,7 +4136,7 @@ def _build_stock_page(code: str) -> str:
             ev_cards.append(f"""<div class="event-card">
   <div class="event-header">
     <span class="event-date">{d}</span>
-    <span class="event-badge {direc}">{arrow}{abs(pct):.1f}%</span>
+    <span class="event-badge {direc}">{sign}{abs(pct):.1f}%</span>
     <span class="event-period">{rk_str}</span>
   </div>
   {ai_html}
@@ -4703,4 +4950,4 @@ def stock_detail(code: str):
 
 if __name__ == "__main__":
     _ensure_watchlist()
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=True, host="0.0.0.0", port=5001)

@@ -263,6 +263,8 @@ def _call_gemini_batch(client, batch: list) -> dict:
 - 「増加した」「改善した」などの曖昧表現だけで数値を省略しないこと
 - 「STOCK:証券コード」の行を各銘柄の先頭に必ず付けること
 - 前置き・後書き・余分な説明は不要
+- 関連ニュースがない場合でも「ニュースが見当たらない」で終わらず、業種・製品・マクロ環境・テーマ株物色・需給などから推論して記述すること
+- 「AIが解説」「値動きの背景をAIが解説」等のYahoo Finance自動生成ページは情報源として使用しないこと
 
 ## 出力フォーマット（全銘柄分を続けて出力）
 
@@ -391,6 +393,15 @@ _PRIORITY_SOURCES = {
     "Reuters", "トウシル", "マネックス証券", "SBI証券",
 }
 
+# 全銘柄に自動生成される汎用テンプレートページのタイトルパターン（実質ゴミ情報）
+# 例: Yahoo Finance「今の株価の理由は？値動きの背景をAIが解説」
+_EXCLUDE_TITLE_PATTERNS = (
+    "AIが解説",
+    "値動きの背景をAIが解説",
+    "今の株価の理由は？",
+    "株価の理由は？値動きの背景",
+)
+
 
 def _fetch_google_news(code: str, company_name: str, target_date: date,
                        cfg: dict, direction: str = "") -> list:
@@ -433,6 +444,8 @@ def _fetch_google_news(code: str, company_name: str, target_date: date,
         source = src_el.text.strip() if src_el else "不明"
 
         if source in _EXCLUDE_SOURCES or "掲示板" in title or "BBS" in title.upper():
+            continue
+        if any(pat in title for pat in _EXCLUDE_TITLE_PATTERNS):
             continue
 
         try:
