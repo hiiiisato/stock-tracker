@@ -582,8 +582,8 @@ def _build_index_section() -> str:
     def _card(v: dict) -> str:
         pct  = v["change_pct"]
         cls  = "up" if pct and pct > 0 else ("down" if pct and pct < 0 else "flat")
-        arrow = "▲" if cls == "up" else ("▼" if cls == "down" else "")
-        pct_str = f"{arrow}{abs(pct):.2f}%" if pct is not None else "—"
+        sign    = "+" if cls == "up" else ("−" if cls == "down" else "")
+        pct_str = f"{sign}{abs(pct):.2f}%" if pct is not None else "—"
         pct_color = "#E84040" if cls == "up" else ("#3A9FE0" if cls == "down" else "#484f58")
 
         val = v["close"]
@@ -3005,7 +3005,7 @@ def _build_screen_page() -> str:
       document.getElementById('sc-sort').value='market_cap-desc';
     }}
     populateInputs(idx);
-    if(scView==='chart')loadScChart(); else render();
+    if(scView==='chart'){{loadScChart();}}else{{render();}}
   }}
 
   document.querySelectorAll('.sc-tab').forEach(function(btn){{
@@ -3119,7 +3119,10 @@ def _build_screen_page() -> str:
   }}
   function refreshScGrid(){{if(allScData)scBuildGrid(allScData,lastScCodeOrder);}}
   function loadScChart(){{
-    SC_PAGE=0;var codes=scGetFilteredCodes(200);
+    SC_PAGE=0;
+    var _totalFiltered=stocks.filter(passFilter).length;
+    document.getElementById('sc-count').textContent=_totalFiltered+'銘柄ヒット';
+    var codes=scGetFilteredCodes(200);
     if(!codes.length){{allScData=[];lastScCodeOrder=[];
       document.getElementById('sc-cg-grid').innerHTML='<div style="color:#8b949e;padding:20px">条件に一致する銘柄がありません</div>';
       scUpdatePagination(1,0);return;
