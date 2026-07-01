@@ -3309,7 +3309,11 @@ def _build_screen_page() -> str:
         var v=parseFloat(rMin.value);
         display.textContent='≥ '+fmt(v);
         updateRangeFill(lo,hi,v,hi);
-        var el=document.getElementById(cond.minId);if(el){{el.value=v;el.classList.add('active');}}
+        var el=document.getElementById(cond.minId);
+        if(el){{
+          if(v<=lo){{el.value='';el.classList.remove('active');}}
+          else{{el.value=v;el.classList.add('active');}}
+        }}
         drawHistBars(_histData,cond);renderChips();scheduleRender();
       }};
     }}else{{
@@ -3327,13 +3331,25 @@ def _build_screen_page() -> str:
       rMin.oninput=function(){{
         if(parseFloat(rMin.value)>parseFloat(rMax.value))rMax.value=rMin.value;
         _update();
-        var el=document.getElementById(cond.minId);if(el){{el.value=parseFloat(rMin.value);el.classList.add('active');}}
+        var el=document.getElementById(cond.minId);
+        if(el){{
+          var v=parseFloat(rMin.value);
+          if(v<=lo){{el.value='';el.classList.remove('active');}}
+          else{{el.value=v;el.classList.add('active');}}
+        }}
         renderChips();scheduleRender();
       }};
       rMax.oninput=function(){{
         if(parseFloat(rMax.value)<parseFloat(rMin.value))rMin.value=rMax.value;
         _update();
-        if(cond.maxId){{var el=document.getElementById(cond.maxId);if(el){{el.value=parseFloat(rMax.value);el.classList.add('active');}}}}
+        if(cond.maxId){{
+          var el=document.getElementById(cond.maxId);
+          if(el){{
+            var v=parseFloat(rMax.value);
+            if(v>=hi){{el.value='';el.classList.remove('active');}}
+            else{{el.value=v;el.classList.add('active');}}
+          }}
+        }}
         renderChips();scheduleRender();
       }};
     }}
