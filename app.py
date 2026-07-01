@@ -3208,7 +3208,7 @@ def _build_screen_page() -> str:
     var grid=document.getElementById('scCondGrid');grid.innerHTML='';
     COND_DEFS.filter(function(d){{return d.cat===cat;}}).forEach(function(cond){{
       var item=document.createElement('button');
-      item.className='sc-cond-item'+(isCondActive(cond)?' active-cond':'');
+      item.className='sc-cond-item';
       item.dataset.condId=cond.id;item.textContent=cond.lbl;
       item.addEventListener('click',function(){{
         if(cond.isFlag){{
