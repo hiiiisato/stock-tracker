@@ -2623,22 +2623,42 @@ def _build_screen_page() -> str:
     <input id="f-rsi-min" type="number"><input id="f-rsi-max" type="number">
     <input id="f-dm25-min" type="number"><input id="f-dm25-max" type="number">
     <input id="f-dm75-min" type="number"><input id="f-dm75-max" type="number">
+    <input id="f-dm200-min" type="number"><input id="f-dm200-max" type="number">
     <input id="f-d52h-min" type="number"><input id="f-d52h-max" type="number">
+    <input id="f-d52l-min" type="number"><input id="f-d52l-max" type="number">
     <input id="f-vol-min" type="number">
+    <input id="f-vr625-min" type="number"><input id="f-vr625-max" type="number">
     <input id="f-turn-min" type="number"><input id="f-turn-max" type="number">
     <input id="f-chg25-min" type="number"><input id="f-chg25-max" type="number">
+    <input id="f-stk-min" type="number"><input id="f-stk-max" type="number">
+    <input id="f-vol60-min" type="number"><input id="f-vol60-max" type="number">
+    <input id="f-ytdh-min" type="number"><input id="f-ytdl-min" type="number">
+    <input id="f-nkrel-min" type="number"><input id="f-nkrel-max" type="number">
     <input id="f-per-min" type="number"><input id="f-per-max" type="number">
     <input id="f-pbr-min" type="number"><input id="f-pbr-max" type="number">
     <input id="f-roe-min" type="number"><input id="f-roe-max" type="number">
+    <input id="f-roa-min" type="number"><input id="f-roa-max" type="number">
     <input id="f-div-min" type="number"><input id="f-div-max" type="number">
     <input id="f-pout-min" type="number"><input id="f-pout-max" type="number">
+    <input id="f-ey-min" type="number"><input id="f-ey-max" type="number">
+    <input id="f-eq-min" type="number"><input id="f-eq-max" type="number">
+    <input id="f-de-min" type="number"><input id="f-de-max" type="number">
+    <input id="f-psr-min" type="number"><input id="f-psr-max" type="number">
+    <input id="f-pcfr-min" type="number"><input id="f-pcfr-max" type="number">
+    <input id="f-beta-min" type="number"><input id="f-beta-max" type="number">
     <input id="f-rev-min" type="number"><input id="f-op-min" type="number">
+    <input id="f-ord-min" type="number">
     <input id="f-eps-min" type="number"><input id="f-opm-min" type="number">
-    <input id="f-roic-min" type="number">
+    <input id="f-ordm-min" type="number"><input id="f-roic-min" type="number">
     <input id="f-cap-min" type="number"><input id="f-cap-max" type="number">
     <input id="f-macd-gc" type="checkbox"><input id="f-break20" type="checkbox">
     <input id="f-break65" type="checkbox"><input id="f-cf-pos" type="checkbox">
     <input id="f-ma-up" type="checkbox">
+    <input id="f-gc1" type="checkbox"><input id="f-dc1" type="checkbox">
+    <input id="f-gc3" type="checkbox"><input id="f-dc3" type="checkbox">
+    <input id="f-dc2" type="checkbox">
+    <input id="f-bb-up" type="checkbox"><input id="f-bb-dn" type="checkbox">
+    <input id="f-ytdh-brk" type="checkbox">
   </div>
   </div>
 </div>
@@ -2731,42 +2751,80 @@ def _build_screen_page() -> str:
   var DEFAULT_COLS=['name','close','change_pct','chg25d','chg75d','dev_ma25','market_cap','per','pbr','roe','div_yield'];
 
   /* ── 数値フィルターID ── */
-  var NUM_IDS=['f-rsi-min','f-rsi-max','f-dm25-min','f-dm25-max','f-dm75-min','f-dm75-max',
-               'f-d52h-min','f-d52h-max','f-vol-min','f-turn-min','f-turn-max',
-               'f-per-min','f-per-max','f-pbr-min','f-pbr-max','f-roe-min','f-roe-max',
-               'f-div-min','f-div-max','f-pout-min','f-pout-max','f-rev-min','f-op-min','f-eps-min',
-               'f-opm-min','f-roic-min','f-cap-min','f-cap-max','f-chg25-min','f-chg25-max'];
-  var CHK_IDS=['f-macd-gc','f-break20','f-break65','f-cf-pos','f-ma-up'];
+  var NUM_IDS=[
+    'f-rsi-min','f-rsi-max',
+    'f-dm25-min','f-dm25-max','f-dm75-min','f-dm75-max','f-dm200-min','f-dm200-max',
+    'f-d52h-min','f-d52h-max','f-d52l-min','f-d52l-max',
+    'f-vol-min','f-vr625-min','f-vr625-max',
+    'f-turn-min','f-turn-max',
+    'f-chg25-min','f-chg25-max',
+    'f-stk-min','f-stk-max','f-vol60-min','f-vol60-max',
+    'f-ytdh-min','f-ytdl-min','f-nkrel-min','f-nkrel-max',
+    'f-per-min','f-per-max','f-pbr-min','f-pbr-max',
+    'f-roe-min','f-roe-max','f-roa-min','f-roa-max',
+    'f-div-min','f-div-max','f-pout-min','f-pout-max',
+    'f-ey-min','f-ey-max',
+    'f-eq-min','f-eq-max','f-de-min','f-de-max',
+    'f-psr-min','f-psr-max','f-pcfr-min','f-pcfr-max',
+    'f-beta-min','f-beta-max',
+    'f-rev-min','f-op-min','f-ord-min','f-eps-min',
+    'f-opm-min','f-ordm-min','f-roic-min',
+    'f-cap-min','f-cap-max',
+  ];
+  var CHK_IDS=[
+    'f-macd-gc','f-break20','f-break65','f-cf-pos','f-ma-up',
+    'f-gc1','f-dc1','f-gc3','f-dc3','f-dc2',
+    'f-bb-up','f-bb-dn','f-ytdh-brk',
+  ];
 
-  /* ── 条件→入力欄マッピング ── */
+  /* ── 条件→入力欄マッピング（populateInputs/STRATS用）── */
   var IMAP={{
-    'rsi14':       {{'>=':[['f-rsi-min']],  '<=':[['f-rsi-max']]}},
-    'dev_ma25':    {{'>=':[['f-dm25-min']], '<=':[['f-dm25-max']]}},
-    'dev_ma75':    {{'>=':[['f-dm75-min']], '<=':[['f-dm75-max']]}},
-    'dev_high52w': {{'>=':[['f-d52h-min']], '<=':[['f-d52h-max']]}},
-    'vol20_ratio': {{'>=':[['f-vol-min']]}},
-    'turnover_20d':{{'>=':[['f-turn-min']], '<=':[['f-turn-max']]}},
-    'per':         {{'>=':[['f-per-min']],  '<=':[['f-per-max']]}},
-    'pbr':         {{'>=':[['f-pbr-min']],  '<=':[['f-pbr-max']]}},
-    'roe':         {{'>=':[['f-roe-min']],  '<=':[['f-roe-max']]}},
-    'div_yield':   {{'>=':[['f-div-min']],  '<=':[['f-div-max']]}},
-    'payout_ratio':{{'>=':[['f-pout-min']],'<=':[['f-pout-max']]}},
-    'rev_growth':  {{'>=':[['f-rev-min']]}},
-    'op_growth':   {{'>=':[['f-op-min']]}},
-    'eps_growth':  {{'>=':[['f-eps-min']]}},
-    'op_margin':   {{'>=':[['f-opm-min']]}},
-    'roic':        {{'>=':[['f-roic-min']]}},
-    'chg25d':      {{'>=':[['f-chg25-min']],'<=':[['f-chg25-max']]}},
-    'market_cap':  {{'>=':[['f-cap-min',1e-8]],'<=':[['f-cap-max',1e-8]]}},
-    /* 派生フィールド → 対応入力欄 */
-    'vs_ma25':     {{'>=':[['f-dm25-min']], '<=':[['f-dm25-max']]}},
-    'vs_ma75':     {{'>=':[['f-dm75-min']], '<=':[['f-dm75-max']]}},
-    /* フラグ (チェックボックス) */
-    'macd_gc':     {{'=':[['f-macd-gc',null,true]]}},
-    'break_20d':   {{'=':[['f-break20',null,true]]}},
-    'break_65d':   {{'=':[['f-break65',null,true]]}},
-    'cf_positive': {{'=':[['f-cf-pos',null,true]]}},
-    'ma25_vs_ma75':{{'>=':[['f-ma-up',null,true]]}},
+    'rsi14':         {{'>=':[['f-rsi-min']],   '<=':[['f-rsi-max']]}},
+    'dev_ma25':      {{'>=':[['f-dm25-min']],  '<=':[['f-dm25-max']]}},
+    'dev_ma75':      {{'>=':[['f-dm75-min']],  '<=':[['f-dm75-max']]}},
+    'dev_ma200':     {{'>=':[['f-dm200-min']], '<=':[['f-dm200-max']]}},
+    'dev_high52w':   {{'>=':[['f-d52h-min']],  '<=':[['f-d52h-max']]}},
+    'dev_low52w':    {{'>=':[['f-d52l-min']],  '<=':[['f-d52l-max']]}},
+    'vol20_ratio':   {{'>=':[['f-vol-min']]}},
+    'vol_ratio_6_25':{{'>=':[['f-vr625-min']], '<=':[['f-vr625-max']]}},
+    'turnover_20d':  {{'>=':[['f-turn-min']],  '<=':[['f-turn-max']]}},
+    'per':           {{'>=':[['f-per-min']],   '<=':[['f-per-max']]}},
+    'pbr':           {{'>=':[['f-pbr-min']],   '<=':[['f-pbr-max']]}},
+    'roe':           {{'>=':[['f-roe-min']],   '<=':[['f-roe-max']]}},
+    'roa':           {{'>=':[['f-roa-min']],   '<=':[['f-roa-max']]}},
+    'div_yield':     {{'>=':[['f-div-min']],   '<=':[['f-div-max']]}},
+    'payout_ratio':  {{'>=':[['f-pout-min']],  '<=':[['f-pout-max']]}},
+    'earnings_yield':{{'>=':[['f-ey-min']],    '<=':[['f-ey-max']]}},
+    'equity_ratio':  {{'>=':[['f-eq-min']],    '<=':[['f-eq-max']]}},
+    'debt_to_equity':{{'>=':[['f-de-min']],    '<=':[['f-de-max']]}},
+    'psr':           {{'>=':[['f-psr-min']],   '<=':[['f-psr-max']]}},
+    'pcfr':          {{'>=':[['f-pcfr-min']],  '<=':[['f-pcfr-max']]}},
+    'beta':          {{'>=':[['f-beta-min']],  '<=':[['f-beta-max']]}},
+    'rev_growth':    {{'>=':[['f-rev-min']]}},
+    'op_growth':     {{'>=':[['f-op-min']]}},
+    'ord_growth':    {{'>=':[['f-ord-min']]}},
+    'eps_growth':    {{'>=':[['f-eps-min']]}},
+    'op_margin':     {{'>=':[['f-opm-min']]}},
+    'ord_margin':    {{'>=':[['f-ordm-min']]}},
+    'roic':          {{'>=':[['f-roic-min']]}},
+    'chg25d':        {{'>=':[['f-chg25-min']], '<=':[['f-chg25-max']]}},
+    'stoch_k':       {{'>=':[['f-stk-min']],   '<=':[['f-stk-max']]}},
+    'volatility_60d':{{'>=':[['f-vol60-min']], '<=':[['f-vol60-max']]}},
+    'dev_ytd_high':  {{'>=':[['f-ytdh-min']]}},
+    'dev_ytd_low':   {{'>=':[['f-ytdl-min']]}},
+    'nikkei_rel_1m': {{'>=':[['f-nkrel-min']], '<=':[['f-nkrel-max']]}},
+    'market_cap':    {{'>=':[['f-cap-min',1e-8]],'<=':[['f-cap-max',1e-8]]}},
+    /* フラグ */
+    'macd_gc':       {{'=':[['f-macd-gc',null,true]]}},
+    'break_20d':     {{'=':[['f-break20',null,true]]}},
+    'break_65d':     {{'=':[['f-break65',null,true]]}},
+    'cf_positive':   {{'=':[['f-cf-pos',null,true]]}},
+    'ma25_vs_ma75':  {{'>=':[['f-ma-up',null,true]]}},
+    'gc_5_25':       {{'=':[['f-gc1',null,true]]}},
+    'gc_75_200':     {{'=':[['f-gc3',null,true]]}},
+    'bb_upper':      {{'=':[['f-bb-up',null,true]]}},
+    'bb_lower':      {{'=':[['f-bb-dn',null,true]]}},
+    'break_ytd_high':{{'=':[['f-ytdh-brk',null,true]]}},
   }};
 
   function clearInputs(){{
@@ -2876,41 +2934,83 @@ def _build_screen_page() -> str:
     if(!passMarket(s))return false;
     function mn(f,id,sc){{var v=_v(id);if(v===null)return true;var sv=s[f];if(sv===null||sv===undefined)return false;return sv>=(sc?v*sc:v);}}
     function mx(f,id,sc){{var v=_v(id);if(v===null)return true;var sv=s[f];if(sv===null||sv===undefined)return false;return sv<=(sc?v*sc:v);}}
+    /* ── テクニカル ── */
     if(!mn('rsi14','f-rsi-min'))return false;
     if(!mx('rsi14','f-rsi-max'))return false;
     if(!mn('dev_ma25','f-dm25-min'))return false;
     if(!mx('dev_ma25','f-dm25-max'))return false;
     if(!mn('dev_ma75','f-dm75-min'))return false;
     if(!mx('dev_ma75','f-dm75-max'))return false;
+    if(!mn('dev_ma200','f-dm200-min'))return false;
+    if(!mx('dev_ma200','f-dm200-max'))return false;
     if(!mn('dev_high52w','f-d52h-min'))return false;
     if(!mx('dev_high52w','f-d52h-max'))return false;
+    if(!mn('dev_low52w','f-d52l-min'))return false;
+    if(!mx('dev_low52w','f-d52l-max'))return false;
     if(!mn('vol20_ratio','f-vol-min'))return false;
+    if(!mn('vol_ratio_6_25','f-vr625-min'))return false;
+    if(!mx('vol_ratio_6_25','f-vr625-max'))return false;
     if(!mn('turnover_20d','f-turn-min'))return false;
     if(!mx('turnover_20d','f-turn-max'))return false;
+    if(!mn('chg25d','f-chg25-min'))return false;
+    if(!mx('chg25d','f-chg25-max'))return false;
+    if(!mn('stoch_k','f-stk-min'))return false;
+    if(!mx('stoch_k','f-stk-max'))return false;
+    if(!mn('volatility_60d','f-vol60-min'))return false;
+    if(!mx('volatility_60d','f-vol60-max'))return false;
+    if(!mn('dev_ytd_high','f-ytdh-min'))return false;
+    if(!mn('dev_ytd_low','f-ytdl-min'))return false;
+    if(!mn('nikkei_rel_1m','f-nkrel-min'))return false;
+    if(!mx('nikkei_rel_1m','f-nkrel-max'))return false;
+    /* ── バリュー/財務 ── */
     if(!mn('per','f-per-min'))return false;
     if(!mx('per','f-per-max'))return false;
     if(!mn('pbr','f-pbr-min'))return false;
     if(!mx('pbr','f-pbr-max'))return false;
     if(!mn('roe','f-roe-min'))return false;
     if(!mx('roe','f-roe-max'))return false;
+    if(!mn('roa','f-roa-min'))return false;
+    if(!mx('roa','f-roa-max'))return false;
     if(!mn('div_yield','f-div-min'))return false;
     if(!mx('div_yield','f-div-max'))return false;
     if(!mn('payout_ratio','f-pout-min'))return false;
     if(!mx('payout_ratio','f-pout-max'))return false;
-    if(!mn('rev_growth','f-rev-min'))return false;
-    if(!mn('op_growth','f-op-min'))return false;
-    if(!mn('eps_growth','f-eps-min'))return false;
-    if(!mn('op_margin','f-opm-min'))return false;
-    if(!mn('roic','f-roic-min'))return false;
+    if(!mn('earnings_yield','f-ey-min'))return false;
+    if(!mx('earnings_yield','f-ey-max'))return false;
+    if(!mn('equity_ratio','f-eq-min'))return false;
+    if(!mx('equity_ratio','f-eq-max'))return false;
+    if(!mn('debt_to_equity','f-de-min'))return false;
+    if(!mx('debt_to_equity','f-de-max'))return false;
+    if(!mn('psr','f-psr-min'))return false;
+    if(!mx('psr','f-psr-max'))return false;
+    if(!mn('pcfr','f-pcfr-min'))return false;
+    if(!mx('pcfr','f-pcfr-max'))return false;
+    if(!mn('beta','f-beta-min'))return false;
+    if(!mx('beta','f-beta-max'))return false;
     if(!mn('market_cap','f-cap-min',1e8))return false;
     if(!mx('market_cap','f-cap-max',1e8))return false;
-    if(!mn('chg25d','f-chg25-min'))return false;
-    if(!mx('chg25d','f-chg25-max'))return false;
-    if(_chk('f-macd-gc')&&s.macd_gc!==1)return false;
-    if(_chk('f-break20')&&s.break_20d!==1)return false;
-    if(_chk('f-break65')&&s.break_65d!==1)return false;
-    if(_chk('f-cf-pos')&&s.cf_positive!==1)return false;
-    if(_chk('f-ma-up')&&(s.ma25_vs_ma75===null||s.ma25_vs_ma75<0))return false;
+    /* ── 成長 ── */
+    if(!mn('rev_growth','f-rev-min'))return false;
+    if(!mn('op_growth','f-op-min'))return false;
+    if(!mn('ord_growth','f-ord-min'))return false;
+    if(!mn('eps_growth','f-eps-min'))return false;
+    if(!mn('op_margin','f-opm-min'))return false;
+    if(!mn('ord_margin','f-ordm-min'))return false;
+    if(!mn('roic','f-roic-min'))return false;
+    /* ── フラグ ── */
+    if(_chk('f-macd-gc')   && s.macd_gc!==1)return false;
+    if(_chk('f-break20')   && s.break_20d!==1)return false;
+    if(_chk('f-break65')   && s.break_65d!==1)return false;
+    if(_chk('f-cf-pos')    && s.cf_positive!==1)return false;
+    if(_chk('f-ma-up')     && (s.ma25_vs_ma75===null||s.ma25_vs_ma75<0))return false;
+    if(_chk('f-gc1')       && s.gc_5_25!==1)return false;
+    if(_chk('f-dc1')       && s.gc_5_25!==0)return false;
+    if(_chk('f-gc3')       && s.gc_75_200!==1)return false;
+    if(_chk('f-dc3')       && s.gc_75_200!==0)return false;
+    if(_chk('f-dc2')       && (s.ma25_vs_ma75===null||s.ma25_vs_ma75>=0))return false;
+    if(_chk('f-bb-up')     && s.bb_upper!==1)return false;
+    if(_chk('f-bb-dn')     && s.bb_lower!==1)return false;
+    if(_chk('f-ytdh-brk')  && s.break_ytd_high!==1)return false;
     return true;
   }}
 
@@ -2973,29 +3073,58 @@ def _build_screen_page() -> str:
 
   /* ── 条件定義 (カテゴリ別) ── */
   var COND_DEFS=[
-    {{cat:'テクニカル',id:'rsi',lbl:'RSI',field:'rsi14',minId:'f-rsi-min',maxId:'f-rsi-max',unit:'',step:1}},
-    {{cat:'テクニカル',id:'dm25',lbl:'MA25乖離',field:'dev_ma25',minId:'f-dm25-min',maxId:'f-dm25-max',unit:'%',step:1}},
-    {{cat:'テクニカル',id:'dm75',lbl:'MA75乖離',field:'dev_ma75',minId:'f-dm75-min',maxId:'f-dm75-max',unit:'%',step:1}},
-    {{cat:'テクニカル',id:'d52h',lbl:'52週高値乖離',field:'dev_high52w',minId:'f-d52h-min',maxId:'f-d52h-max',unit:'%',step:1}},
-    {{cat:'テクニカル',id:'vol',lbl:'出来高比',field:'vol20_ratio',minId:'f-vol-min',unit:'x',step:0.1,minOnly:true}},
-    {{cat:'テクニカル',id:'chg25',lbl:'25日騰落',field:'chg25d',minId:'f-chg25-min',maxId:'f-chg25-max',unit:'%',step:1}},
-    {{cat:'テクニカル',id:'macd_gc',lbl:'MACD-GC',chkId:'f-macd-gc',isFlag:true}},
-    {{cat:'テクニカル',id:'break20',lbl:'20日高値更新',chkId:'f-break20',isFlag:true}},
-    {{cat:'テクニカル',id:'break65',lbl:'65日高値更新',chkId:'f-break65',isFlag:true}},
-    {{cat:'テクニカル',id:'maup',lbl:'MA25>MA75',chkId:'f-ma-up',isFlag:true}},
-    {{cat:'バリュー',id:'per',lbl:'PER',field:'per',minId:'f-per-min',maxId:'f-per-max',unit:'倍',step:0.1}},
-    {{cat:'バリュー',id:'pbr',lbl:'PBR',field:'pbr',minId:'f-pbr-min',maxId:'f-pbr-max',unit:'倍',step:0.1}},
-    {{cat:'バリュー',id:'roe',lbl:'ROE',field:'roe',minId:'f-roe-min',maxId:'f-roe-max',unit:'%',step:1}},
-    {{cat:'バリュー',id:'div',lbl:'配当利回り',field:'div_yield',minId:'f-div-min',maxId:'f-div-max',unit:'%',step:0.1}},
-    {{cat:'バリュー',id:'pout',lbl:'配当性向',field:'payout_ratio',minId:'f-pout-min',maxId:'f-pout-max',unit:'%',step:1}},
-    {{cat:'バリュー',id:'turn',lbl:'売買代金',field:'turnover_20d',minId:'f-turn-min',maxId:'f-turn-max',unit:'億',step:1}},
-    {{cat:'バリュー',id:'cap',lbl:'時価総額',field:'market_cap',minId:'f-cap-min',maxId:'f-cap-max',unit:'億',step:10,scale:1e-8}},
-    {{cat:'成長',id:'rev',lbl:'売上成長',field:'rev_growth',minId:'f-rev-min',unit:'%',step:1,minOnly:true}},
-    {{cat:'成長',id:'op',lbl:'営業益成長',field:'op_growth',minId:'f-op-min',unit:'%',step:1,minOnly:true}},
-    {{cat:'成長',id:'eps',lbl:'EPS成長',field:'eps_growth',minId:'f-eps-min',unit:'%',step:1,minOnly:true}},
-    {{cat:'成長',id:'opm',lbl:'営業利益率',field:'op_margin',minId:'f-opm-min',unit:'%',step:1,minOnly:true}},
-    {{cat:'成長',id:'roic',lbl:'ROIC',field:'roic',minId:'f-roic-min',unit:'%',step:1,minOnly:true}},
-    {{cat:'その他',id:'cf',lbl:'営業CF黒字',chkId:'f-cf-pos',isFlag:true}},
+    /* ── テクニカル ── */
+    {{cat:'テクニカル',id:'rsi',   lbl:'RSI',       field:'rsi14',        minId:'f-rsi-min',  maxId:'f-rsi-max',  unit:'',  step:1}},
+    {{cat:'テクニカル',id:'dm25',  lbl:'MA25乖離',   field:'dev_ma25',     minId:'f-dm25-min', maxId:'f-dm25-max', unit:'%', step:1}},
+    {{cat:'テクニカル',id:'dm75',  lbl:'MA75乖離',   field:'dev_ma75',     minId:'f-dm75-min', maxId:'f-dm75-max', unit:'%', step:1}},
+    {{cat:'テクニカル',id:'dm200', lbl:'MA200乖離',  field:'dev_ma200',    minId:'f-dm200-min',maxId:'f-dm200-max',unit:'%', step:1}},
+    {{cat:'テクニカル',id:'d52h',  lbl:'52週高値乖離',field:'dev_high52w', minId:'f-d52h-min', maxId:'f-d52h-max', unit:'%', step:1}},
+    {{cat:'テクニカル',id:'d52l',  lbl:'52週安値上昇',field:'dev_low52w',  minId:'f-d52l-min', maxId:'f-d52l-max', unit:'%', step:1}},
+    {{cat:'テクニカル',id:'chg25', lbl:'25日騰落',   field:'chg25d',       minId:'f-chg25-min',maxId:'f-chg25-max',unit:'%', step:1}},
+    {{cat:'テクニカル',id:'vol',   lbl:'出来高比(20日)',field:'vol20_ratio',minId:'f-vol-min',  unit:'x', step:0.1, minOnly:true}},
+    {{cat:'テクニカル',id:'vr625', lbl:'出来高比(6/25日)',field:'vol_ratio_6_25',minId:'f-vr625-min',maxId:'f-vr625-max',unit:'x',step:0.1}},
+    {{cat:'テクニカル',id:'stk',   lbl:'ストキャス%K', field:'stoch_k',    minId:'f-stk-min',  maxId:'f-stk-max',  unit:'',  step:1}},
+    {{cat:'テクニカル',id:'vol60', lbl:'60日ボラティリティ',field:'volatility_60d',minId:'f-vol60-min',maxId:'f-vol60-max',unit:'%',step:1}},
+    {{cat:'テクニカル',id:'nkrel', lbl:'対日経1ヶ月超過',field:'nikkei_rel_1m',minId:'f-nkrel-min',maxId:'f-nkrel-max',unit:'%',step:1}},
+    {{cat:'テクニカル',id:'ytdh',  lbl:'年初来高値乖離',field:'dev_ytd_high',minId:'f-ytdh-min',unit:'%',step:1,minOnly:true}},
+    {{cat:'テクニカル',id:'ytdl',  lbl:'年初来安値上昇',field:'dev_ytd_low', minId:'f-ytdl-min',unit:'%',step:1,minOnly:true}},
+    {{cat:'テクニカル',id:'macd_gc', lbl:'MACD-GC',      chkId:'f-macd-gc', isFlag:true}},
+    {{cat:'テクニカル',id:'break20', lbl:'20日高値更新',  chkId:'f-break20', isFlag:true}},
+    {{cat:'テクニカル',id:'break65', lbl:'65日高値更新',  chkId:'f-break65', isFlag:true}},
+    {{cat:'テクニカル',id:'ytdhbrk', lbl:'年初来高値更新',chkId:'f-ytdh-brk',isFlag:true}},
+    {{cat:'テクニカル',id:'maup',  lbl:'GC②(MA25>MA75)',chkId:'f-ma-up',   isFlag:true}},
+    {{cat:'テクニカル',id:'dc2',   lbl:'DC②(MA25<MA75)',chkId:'f-dc2',     isFlag:true}},
+    {{cat:'テクニカル',id:'gc1',   lbl:'GC①(MA5>MA25)', chkId:'f-gc1',    isFlag:true}},
+    {{cat:'テクニカル',id:'dc1',   lbl:'DC①(MA5<MA25)', chkId:'f-dc1',    isFlag:true}},
+    {{cat:'テクニカル',id:'gc3',   lbl:'GC③(MA75>MA200)',chkId:'f-gc3',   isFlag:true}},
+    {{cat:'テクニカル',id:'dc3',   lbl:'DC③(MA75<MA200)',chkId:'f-dc3',   isFlag:true}},
+    {{cat:'テクニカル',id:'bbup',  lbl:'BB+2σ突破',     chkId:'f-bb-up',  isFlag:true}},
+    {{cat:'テクニカル',id:'bbdn',  lbl:'BB-2σ突破',     chkId:'f-bb-dn',  isFlag:true}},
+    /* ── バリュー ── */
+    {{cat:'バリュー',id:'per',  lbl:'PER',       field:'per',           minId:'f-per-min',  maxId:'f-per-max',  unit:'倍', step:0.1}},
+    {{cat:'バリュー',id:'pbr',  lbl:'PBR',       field:'pbr',           minId:'f-pbr-min',  maxId:'f-pbr-max',  unit:'倍', step:0.1}},
+    {{cat:'バリュー',id:'roe',  lbl:'ROE',       field:'roe',           minId:'f-roe-min',  maxId:'f-roe-max',  unit:'%',  step:1}},
+    {{cat:'バリュー',id:'roa',  lbl:'ROA',       field:'roa',           minId:'f-roa-min',  maxId:'f-roa-max',  unit:'%',  step:1}},
+    {{cat:'バリュー',id:'div',  lbl:'配当利回り', field:'div_yield',     minId:'f-div-min',  maxId:'f-div-max',  unit:'%',  step:0.1}},
+    {{cat:'バリュー',id:'pout', lbl:'配当性向',   field:'payout_ratio',  minId:'f-pout-min', maxId:'f-pout-max', unit:'%',  step:1}},
+    {{cat:'バリュー',id:'ey',   lbl:'益利回り',   field:'earnings_yield',minId:'f-ey-min',   maxId:'f-ey-max',   unit:'%',  step:0.1}},
+    {{cat:'バリュー',id:'eq',   lbl:'自己資本比率',field:'equity_ratio',  minId:'f-eq-min',   maxId:'f-eq-max',   unit:'%',  step:1}},
+    {{cat:'バリュー',id:'de',   lbl:'D/Eレシオ',  field:'debt_to_equity',minId:'f-de-min',   maxId:'f-de-max',   unit:'x',  step:0.1}},
+    {{cat:'バリュー',id:'psr',  lbl:'PSR',       field:'psr',           minId:'f-psr-min',  maxId:'f-psr-max',  unit:'倍', step:0.1}},
+    {{cat:'バリュー',id:'pcfr', lbl:'PCFR',      field:'pcfr',          minId:'f-pcfr-min', maxId:'f-pcfr-max', unit:'倍', step:0.1}},
+    {{cat:'バリュー',id:'beta', lbl:'Beta',      field:'beta',          minId:'f-beta-min', maxId:'f-beta-max', unit:'',   step:0.1}},
+    {{cat:'バリュー',id:'turn', lbl:'売買代金(20日)',field:'turnover_20d',minId:'f-turn-min', maxId:'f-turn-max', unit:'億', step:1}},
+    {{cat:'バリュー',id:'cap',  lbl:'時価総額',   field:'market_cap',    minId:'f-cap-min',  maxId:'f-cap-max',  unit:'億', step:10,scale:1e-8}},
+    /* ── 成長 ── */
+    {{cat:'成長',id:'rev',  lbl:'売上成長',    field:'rev_growth', minId:'f-rev-min', unit:'%',step:1,minOnly:true}},
+    {{cat:'成長',id:'op',   lbl:'営業益成長',   field:'op_growth',  minId:'f-op-min',  unit:'%',step:1,minOnly:true}},
+    {{cat:'成長',id:'ord',  lbl:'経常益成長',   field:'ord_growth', minId:'f-ord-min', unit:'%',step:1,minOnly:true}},
+    {{cat:'成長',id:'eps',  lbl:'EPS成長',     field:'eps_growth', minId:'f-eps-min', unit:'%',step:1,minOnly:true}},
+    {{cat:'成長',id:'opm',  lbl:'営業利益率',   field:'op_margin',  minId:'f-opm-min', unit:'%',step:1,minOnly:true}},
+    {{cat:'成長',id:'ordm', lbl:'経常利益率',   field:'ord_margin', minId:'f-ordm-min',unit:'%',step:1,minOnly:true}},
+    {{cat:'成長',id:'roic', lbl:'ROIC',        field:'roic',       minId:'f-roic-min',unit:'%',step:1,minOnly:true}},
+    /* ── その他 ── */
+    {{cat:'その他',id:'cf', lbl:'営業CF黒字',chkId:'f-cf-pos',isFlag:true}},
   ];
   var scPickerCat='テクニカル';
   var scHistCond=null;
@@ -3164,6 +3293,7 @@ def _build_screen_page() -> str:
     var display=document.getElementById('scRangeValDisplay');
     var lblMin=document.getElementById('scRangeLblMin'),lblMax=document.getElementById('scRangeLblMax');
     if(!rMin||!rMax)return;
+    rMin.oninput=null;rMax.oninput=null;
     var curMin=cond.minId?_v(cond.minId):null,curMax=cond.maxId?_v(cond.maxId):null;
     var dec=step<1?1:0;
     function fmt(v){{return parseFloat(v).toFixed(dec)+(cond.unit||'');}}
@@ -4540,16 +4670,27 @@ def api_screen():
         SELECT s.code, s.name, m.name AS market,
                f.per, f.pbr, f.roe, f.div_yield, f.market_cap,
                f.operating_margin, f.payout_ratio,
+               f.roa, f.debt_to_equity, f.beta,
                lp.close, lp.change_pct,
                ps.chg5d, ps.chg25d, ps.chg75d,
-               ps.ma25, ps.ma75,
+               ps.ma25, ps.ma75, ps.ma200,
                ps.dev_ma25, ps.dev_ma75, ps.dev_high52w,
                ps.vol20_ratio, ps.rsi14,
                ps.macd, ps.macd_signal, ps.macd_gc,
                ps.turnover_day, ps.turnover_20d,
                ps.break_20d, ps.break_65d,
                ps.rev_growth, ps.op_growth, ps.eps_growth,
-               ps.roic, ps.cf_positive
+               ps.roic, ps.cf_positive,
+               ps.dev_ma200, ps.dev_low52w,
+               ps.vol_ratio_6_25, ps.volatility_60d,
+               ps.gc_5_25, ps.gc_75_200,
+               ps.bb_upper, ps.bb_lower,
+               ps.stoch_k, ps.stoch_d,
+               ps.ytd_high, ps.ytd_low,
+               ps.break_ytd_high, ps.dev_ytd_high, ps.dev_ytd_low,
+               ps.nikkei_rel_1m,
+               ps.equity_ratio, ps.ord_margin, ps.ord_growth,
+               ps.psr, ps.pcfr
         FROM stocks s
         LEFT JOIN markets m ON s.market_id = m.id
         LEFT JOIN stock_fundamentals f ON s.code = f.code
@@ -4574,48 +4715,76 @@ def api_screen():
 
     results = []
     for r in rows:
-        close = _f(r[10])
-        ma25  = _f(r[15])
-        ma75  = _f(r[16])
+        close = _f(r[13])
+        ma25  = _f(r[18])
+        ma75  = _f(r[19])
+        ma200 = _f(r[20])
+        per   = _f(r[3])
         results.append({
-            "code":         r[0],
-            "name":         r[1] or "",
-            "market":       r[2] or "",
-            "per":          _f(r[3]),
-            "pbr":          _f(r[4]),
-            "roe":          float(r[5]) * 100 if r[5] is not None else None,
-            "div_yield":    _f(r[6]),
-            "market_cap":   int(r[7]) if r[7] else None,
-            "op_margin":    float(r[8]) * 100 if r[8] is not None else None,
-            "payout_ratio": float(r[9]) * 100 if r[9] is not None else None,
-            "close":        close,
-            "change_pct":   _f(r[11]),
-            "chg5d":        _f(r[12]),
-            "chg25d":       _f(r[13]),
-            "chg75d":       _f(r[14]),
-            "ma25":         ma25,
-            "ma75":         ma75,
-            "dev_ma25":     _f(r[17]),
-            "dev_ma75":     _f(r[18]),
-            "dev_high52w":  _f(r[19]),
-            "vol20_ratio":  _f(r[20]),
-            "rsi14":        _f(r[21]),
-            "macd":         _f(r[22]),
-            "macd_signal":  _f(r[23]),
-            "macd_gc":      _i(r[24]),
-            "turnover_day": _f(r[25]),
-            "turnover_20d": _f(r[26]),
-            "break_20d":    _i(r[27]),
-            "break_65d":    _i(r[28]),
-            "rev_growth":   _f(r[29]),
-            "op_growth":    _f(r[30]),
-            "eps_growth":   _f(r[31]),
-            "roic":         _f(r[32]),
-            "cf_positive":  _i(r[33]),
-            # クライアント側計算用（MA比較）
-            "vs_ma25":      (close - ma25) if (close is not None and ma25 is not None) else None,
-            "vs_ma75":      (close - ma75) if (close is not None and ma75 is not None) else None,
-            "ma25_vs_ma75": (ma25 - ma75)  if (ma25 is not None and ma75 is not None)  else None,
+            "code":           r[0],
+            "name":           r[1] or "",
+            "market":         r[2] or "",
+            "per":            per,
+            "pbr":            _f(r[4]),
+            "roe":            float(r[5]) * 100 if r[5] is not None else None,
+            "div_yield":      _f(r[6]),
+            "market_cap":     int(r[7]) if r[7] else None,
+            "op_margin":      float(r[8]) * 100 if r[8] is not None else None,
+            "payout_ratio":   float(r[9]) * 100 if r[9] is not None else None,
+            "roa":            float(r[10]) * 100 if r[10] is not None else None,
+            "debt_to_equity": _f(r[11]),
+            "beta":           _f(r[12]),
+            "close":          close,
+            "change_pct":     _f(r[14]),
+            "chg5d":          _f(r[15]),
+            "chg25d":         _f(r[16]),
+            "chg75d":         _f(r[17]),
+            "ma25":           ma25,
+            "ma75":           ma75,
+            "ma200":          ma200,
+            "dev_ma25":       _f(r[21]),
+            "dev_ma75":       _f(r[22]),
+            "dev_high52w":    _f(r[23]),
+            "vol20_ratio":    _f(r[24]),
+            "rsi14":          _f(r[25]),
+            "macd":           _f(r[26]),
+            "macd_signal":    _f(r[27]),
+            "macd_gc":        _i(r[28]),
+            "turnover_day":   _f(r[29]),
+            "turnover_20d":   _f(r[30]),
+            "break_20d":      _i(r[31]),
+            "break_65d":      _i(r[32]),
+            "rev_growth":     _f(r[33]),
+            "op_growth":      _f(r[34]),
+            "eps_growth":     _f(r[35]),
+            "roic":           _f(r[36]),
+            "cf_positive":    _i(r[37]),
+            "dev_ma200":      _f(r[38]),
+            "dev_low52w":     _f(r[39]),
+            "vol_ratio_6_25": _f(r[40]),
+            "volatility_60d": _f(r[41]),
+            "gc_5_25":        _i(r[42]),
+            "gc_75_200":      _i(r[43]),
+            "bb_upper":       _i(r[44]),
+            "bb_lower":       _i(r[45]),
+            "stoch_k":        _f(r[46]),
+            "stoch_d":        _f(r[47]),
+            "ytd_high":       _f(r[48]),
+            "ytd_low":        _f(r[49]),
+            "break_ytd_high": _i(r[50]),
+            "dev_ytd_high":   _f(r[51]),
+            "dev_ytd_low":    _f(r[52]),
+            "nikkei_rel_1m":  _f(r[53]),
+            "equity_ratio":   _f(r[54]),
+            "ord_margin":     _f(r[55]),
+            "ord_growth":     _f(r[56]),
+            "psr":            _f(r[57]),
+            "pcfr":           _f(r[58]),
+            # クライアント側計算
+            "vs_ma25":        (close - ma25)  if (close is not None and ma25  is not None) else None,
+            "vs_ma75":        (close - ma75)  if (close is not None and ma75  is not None) else None,
+            "ma25_vs_ma75":   (ma25  - ma75)  if (ma25  is not None and ma75  is not None) else None,
+            "earnings_yield": round(100.0 / per, 2) if (per and per > 0) else None,
         })
     import json as _json
     payload = _json.dumps(results, ensure_ascii=False)
