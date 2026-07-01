@@ -2620,37 +2620,37 @@ def _build_screen_page() -> str:
     </table>
 
   <div id="scHiddenInputs">
-    <input id="f-rsi-min" type="number"><input id="f-rsi-max" type="number">
-    <input id="f-dm25-min" type="number"><input id="f-dm25-max" type="number">
-    <input id="f-dm75-min" type="number"><input id="f-dm75-max" type="number">
-    <input id="f-dm200-min" type="number"><input id="f-dm200-max" type="number">
-    <input id="f-d52h-min" type="number"><input id="f-d52h-max" type="number">
-    <input id="f-d52l-min" type="number"><input id="f-d52l-max" type="number">
-    <input id="f-vol-min" type="number">
-    <input id="f-vr625-min" type="number"><input id="f-vr625-max" type="number">
-    <input id="f-turn-min" type="number"><input id="f-turn-max" type="number">
-    <input id="f-chg25-min" type="number"><input id="f-chg25-max" type="number">
-    <input id="f-stk-min" type="number"><input id="f-stk-max" type="number">
-    <input id="f-vol60-min" type="number"><input id="f-vol60-max" type="number">
-    <input id="f-ytdh-min" type="number"><input id="f-ytdl-min" type="number">
-    <input id="f-nkrel-min" type="number"><input id="f-nkrel-max" type="number">
-    <input id="f-per-min" type="number"><input id="f-per-max" type="number">
-    <input id="f-pbr-min" type="number"><input id="f-pbr-max" type="number">
-    <input id="f-roe-min" type="number"><input id="f-roe-max" type="number">
-    <input id="f-roa-min" type="number"><input id="f-roa-max" type="number">
-    <input id="f-div-min" type="number"><input id="f-div-max" type="number">
-    <input id="f-pout-min" type="number"><input id="f-pout-max" type="number">
-    <input id="f-ey-min" type="number"><input id="f-ey-max" type="number">
-    <input id="f-eq-min" type="number"><input id="f-eq-max" type="number">
-    <input id="f-de-min" type="number"><input id="f-de-max" type="number">
-    <input id="f-psr-min" type="number"><input id="f-psr-max" type="number">
-    <input id="f-pcfr-min" type="number"><input id="f-pcfr-max" type="number">
-    <input id="f-beta-min" type="number"><input id="f-beta-max" type="number">
-    <input id="f-rev-min" type="number"><input id="f-op-min" type="number">
-    <input id="f-ord-min" type="number">
-    <input id="f-eps-min" type="number"><input id="f-opm-min" type="number">
-    <input id="f-ordm-min" type="number"><input id="f-roic-min" type="number">
-    <input id="f-cap-min" type="number"><input id="f-cap-max" type="number">
+    <input id="f-rsi-min" type="hidden"><input id="f-rsi-max" type="hidden">
+    <input id="f-dm25-min" type="hidden"><input id="f-dm25-max" type="hidden">
+    <input id="f-dm75-min" type="hidden"><input id="f-dm75-max" type="hidden">
+    <input id="f-dm200-min" type="hidden"><input id="f-dm200-max" type="hidden">
+    <input id="f-d52h-min" type="hidden"><input id="f-d52h-max" type="hidden">
+    <input id="f-d52l-min" type="hidden"><input id="f-d52l-max" type="hidden">
+    <input id="f-vol-min" type="hidden">
+    <input id="f-vr625-min" type="hidden"><input id="f-vr625-max" type="hidden">
+    <input id="f-turn-min" type="hidden"><input id="f-turn-max" type="hidden">
+    <input id="f-chg25-min" type="hidden"><input id="f-chg25-max" type="hidden">
+    <input id="f-stk-min" type="hidden"><input id="f-stk-max" type="hidden">
+    <input id="f-vol60-min" type="hidden"><input id="f-vol60-max" type="hidden">
+    <input id="f-ytdh-min" type="hidden"><input id="f-ytdl-min" type="hidden">
+    <input id="f-nkrel-min" type="hidden"><input id="f-nkrel-max" type="hidden">
+    <input id="f-per-min" type="hidden"><input id="f-per-max" type="hidden">
+    <input id="f-pbr-min" type="hidden"><input id="f-pbr-max" type="hidden">
+    <input id="f-roe-min" type="hidden"><input id="f-roe-max" type="hidden">
+    <input id="f-roa-min" type="hidden"><input id="f-roa-max" type="hidden">
+    <input id="f-div-min" type="hidden"><input id="f-div-max" type="hidden">
+    <input id="f-pout-min" type="hidden"><input id="f-pout-max" type="hidden">
+    <input id="f-ey-min" type="hidden"><input id="f-ey-max" type="hidden">
+    <input id="f-eq-min" type="hidden"><input id="f-eq-max" type="hidden">
+    <input id="f-de-min" type="hidden"><input id="f-de-max" type="hidden">
+    <input id="f-psr-min" type="hidden"><input id="f-psr-max" type="hidden">
+    <input id="f-pcfr-min" type="hidden"><input id="f-pcfr-max" type="hidden">
+    <input id="f-beta-min" type="hidden"><input id="f-beta-max" type="hidden">
+    <input id="f-rev-min" type="hidden"><input id="f-op-min" type="hidden">
+    <input id="f-ord-min" type="hidden">
+    <input id="f-eps-min" type="hidden"><input id="f-opm-min" type="hidden">
+    <input id="f-ordm-min" type="hidden"><input id="f-roic-min" type="hidden">
+    <input id="f-cap-min" type="hidden"><input id="f-cap-max" type="hidden">
     <input id="f-macd-gc" type="checkbox"><input id="f-break20" type="checkbox">
     <input id="f-break65" type="checkbox"><input id="f-cf-pos" type="checkbox">
     <input id="f-ma-up" type="checkbox">
@@ -2776,6 +2776,8 @@ def _build_screen_page() -> str:
     'f-gc1','f-dc1','f-gc3','f-dc3','f-dc2',
     'f-bb-up','f-bb-dn','f-ytdh-brk',
   ];
+  NUM_IDS.forEach(function(id){{var el=document.getElementById(id);if(el)el.value='';}});
+  CHK_IDS.forEach(function(id){{var el=document.getElementById(id);if(el)el.checked=false;}});
 
   /* ── 条件→入力欄マッピング（populateInputs/STRATS用）── */
   var IMAP={{
@@ -3193,6 +3195,8 @@ def _build_screen_page() -> str:
 
   /* ── 条件ピッカー ── */
   function showCondPicker(){{
+    var hw=document.getElementById('scHistWrap');
+    if(hw){{hw.style.display='none';scHistCond=null;}}
     var picker=document.getElementById('scCondPicker');
     var visible=picker.style.display!=='none';
     picker.style.display=visible?'none':'';
@@ -3219,6 +3223,7 @@ def _build_screen_page() -> str:
       }});
       grid.appendChild(item);
     }});
+    renderChips();
   }}
 
   /* ── ヒストグラム ── */
@@ -3273,6 +3278,7 @@ def _build_screen_page() -> str:
     fill.style.width=Math.max(0,Math.min(100,p2-p1))+'%';
   }}
   function showHistPanel(cond){{
+    document.getElementById('scCondPicker').style.display='none';
     scHistCond=cond;
     var wrap=document.getElementById('scHistWrap');wrap.style.display='';
     document.getElementById('scHistTitle').textContent=cond.lbl+(cond.unit?' ('+cond.unit+')':'');
@@ -3306,6 +3312,7 @@ def _build_screen_page() -> str:
       display.textContent='≥ '+fmt(parseFloat(rMin.value));
       updateRangeFill(lo,hi,parseFloat(rMin.value),hi);
       rMin.oninput=function(){{
+        if(document.getElementById('scHistWrap').style.display==='none')return;
         var v=parseFloat(rMin.value);
         display.textContent='≥ '+fmt(v);
         updateRangeFill(lo,hi,v,hi);
@@ -3329,6 +3336,7 @@ def _build_screen_page() -> str:
       }}
       _update();
       rMin.oninput=function(){{
+        if(document.getElementById('scHistWrap').style.display==='none')return;
         if(parseFloat(rMin.value)>parseFloat(rMax.value))rMax.value=rMin.value;
         _update();
         var el=document.getElementById(cond.minId);
@@ -3340,6 +3348,7 @@ def _build_screen_page() -> str:
         renderChips();scheduleRender();
       }};
       rMax.oninput=function(){{
+        if(document.getElementById('scHistWrap').style.display==='none')return;
         if(parseFloat(rMax.value)<parseFloat(rMin.value))rMin.value=rMax.value;
         _update();
         if(cond.maxId){{
@@ -3559,6 +3568,12 @@ def _build_screen_page() -> str:
   }}).catch(function(){{
     document.getElementById('sc-count').textContent='読み込み失敗';
     document.getElementById('sc-tbody').innerHTML='<tr><td colspan="20" style="text-align:center;padding:20px;color:#e84040">データの読み込みに失敗しました。ページをリロードしてください。</td></tr>';
+  }});
+  window.addEventListener('pageshow',function(e){{
+    if(!e.persisted)return;
+    NUM_IDS.forEach(function(id){{var el=document.getElementById(id);if(el)el.value='';}});
+    CHK_IDS.forEach(function(id){{var el=document.getElementById(id);if(el)el.checked=false;}});
+    if(typeof renderChips==='function')renderChips();
   }});
 }})();
 </script>
