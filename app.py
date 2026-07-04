@@ -446,6 +446,7 @@ def _nav(active: str = "") -> str:
     links = [
         ("home",      "/",           "ホーム"),
         ("screen",    "/screen",     "スクリーニング"),
+        ("valuation", "/valuation",  "理論株価"),
         ("rankings",  "/rankings",   "ランキング"),
         ("events",    "/events",     "イベント"),
         ("swing",     "/swing",      "スイング"),
@@ -2501,6 +2502,230 @@ def _build_swing_page() -> str:
 </div>"""
 
     return _page_html("スイング候補", body, active="swing")
+
+
+_VALUATION_CSS = """
+.val-wrap { max-width: 1000px; margin: 0 auto; }
+.val-card { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:16px; margin-bottom:16px; }
+.val-h2 { font-size:16px; font-weight:700; color:#e6edf3; margin:0 0 12px; }
+.val-input-row { display:flex; gap:8px; }
+.val-input { flex:1; background:#0d1117; border:1px solid #30363d; border-radius:8px; color:#e6edf3; font-size:15px; padding:10px 12px; }
+.val-input:focus { outline:none; border-color:#58a6ff; }
+.val-btn { background:#238636; border:none; border-radius:8px; color:#fff; font-size:14px; font-weight:600; padding:0 20px; cursor:pointer; white-space:nowrap; }
+.val-btn:hover { background:#2ea043; }
+.val-result { margin-top:16px; }
+.val-empty { color:#8b949e; font-size:13px; text-align:center; padding:24px 8px; }
+.val-loading { color:#8b949e; font-size:13px; text-align:center; padding:24px; }
+.val-err { color:#e84040; font-size:13px; text-align:center; padding:24px; }
+
+.val-res-name { font-size:17px; font-weight:700; color:#e6edf3; margin-bottom:12px; }
+.val-res-name span { font-family:monospace; font-size:13px; color:#8b949e; margin-left:8px; }
+.val-hero { display:grid; grid-template-columns:1fr 1.3fr 1fr; gap:8px; margin-bottom:14px; }
+.val-hero-box { background:#0d1117; border:1px solid #30363d; border-radius:8px; padding:12px 8px; text-align:center; }
+.val-hero-box.main { border-color:#1f6feb; background:#0d1f33; }
+.val-hero-box .lbl { display:block; font-size:11px; color:#8b949e; margin-bottom:4px; }
+.val-hero-box .v { display:block; font-size:20px; font-weight:700; color:#e6edf3; }
+.val-hero-box .up { display:block; font-size:13px; font-weight:600; margin-top:2px; }
+.val-up { color:#3fb950; }
+.val-dn { color:#f85149; }
+
+.val-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:14px; }
+.val-cell { background:#0d1117; border:1px solid #21262d; border-radius:6px; padding:8px 10px; }
+.val-cell .lbl { display:block; font-size:10px; color:#8b949e; margin-bottom:2px; }
+.val-cell .v { display:block; font-size:14px; font-weight:600; color:#e6edf3; }
+
+.val-judge { margin-bottom:14px; }
+.val-judge-title { font-size:12px; font-weight:600; color:#8b949e; margin-bottom:8px; }
+.val-judge-row { display:flex; align-items:center; gap:8px; font-size:13px; color:#c9d1d9; padding:3px 0; }
+.val-judge-mark { width:18px; text-align:center; font-weight:700; }
+.val-ok { color:#3fb950; font-weight:700; margin-left:4px; }
+.val-ng { color:#f85149; font-weight:700; }
+
+.val-proj-title { font-size:12px; font-weight:600; color:#8b949e; margin-bottom:8px; }
+.val-table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.val-table { width:100%; border-collapse:collapse; font-size:13px; }
+.val-table th { text-align:right; color:#8b949e; font-weight:600; font-size:11px; padding:6px 8px; border-bottom:1px solid #30363d; white-space:nowrap; }
+.val-table th:nth-child(1), .val-table th:nth-child(2) { text-align:left; }
+.val-table td { padding:7px 8px; border-bottom:1px solid #21262d; white-space:nowrap; }
+.val-table tbody tr { cursor:pointer; }
+.val-table tbody tr:hover { background:#1c2128; }
+.val-code { font-family:monospace; font-size:12px; color:#8b949e; }
+.val-name { color:#e6edf3; max-width:160px; overflow:hidden; text-overflow:ellipsis; }
+.val-num { text-align:right; font-variant-numeric:tabular-nums; }
+
+.val-rank-tabs { display:flex; gap:6px; margin-bottom:6px; }
+.val-rank-tab { flex:1; background:#0d1117; border:1px solid #30363d; border-radius:8px; color:#8b949e; font-size:13px; font-weight:600; padding:10px; cursor:pointer; }
+.val-rank-tab.active { border-color:#1f6feb; color:#e6edf3; background:#0d1f33; }
+.val-rank-note { font-size:11px; color:#8b949e; margin:8px 2px 12px; }
+
+@media (max-width:768px) {
+  .val-hero { grid-template-columns:1fr; }
+  .val-grid { grid-template-columns:repeat(2,1fr); }
+  .val-hero-box .v { font-size:18px; }
+}
+"""
+
+_VALUATION_JS = """
+function _fmt(v, dec){ if(v===null||v===undefined) return '—'; return Number(v).toLocaleString('ja-JP',{minimumFractionDigits:dec||0,maximumFractionDigits:dec||0}); }
+function _pct(v){ if(v===null||v===undefined) return '—'; var s=(v>=0?'+':'')+Number(v).toFixed(1)+'%'; return s; }
+
+function switchRank(which){
+  document.querySelectorAll('.val-rank-tab').forEach(function(t){ t.classList.toggle('active', t.dataset.rank===which); });
+  document.getElementById('valRankCheap').style.display  = which==='cheap'  ? '' : 'none';
+  document.getElementById('valRankGrowth').style.display = which==='growth' ? '' : 'none';
+}
+
+function loadCalc(code){
+  code = (code||'').trim();
+  if(!code) return;
+  document.getElementById('valCodeInput').value = code;
+  var box = document.getElementById('valResult');
+  box.innerHTML = '<div class="val-loading">計算中…</div>';
+  window.scrollTo({top:0, behavior:'smooth'});
+  fetch('/api/theoretical/'+encodeURIComponent(code))
+    .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+    .then(function(res){
+      if(!res.ok){
+        box.innerHTML = '<div class="val-err">'+(res.j.error==='not_found'?'この銘柄の理論株価は算出できません（財務データ不足）。':'エラーが発生しました。')+'</div>';
+        return;
+      }
+      box.innerHTML = renderCalc(res.j);
+    })
+    .catch(function(){ box.innerHTML = '<div class="val-err">通信エラー。</div>'; });
+}
+
+function renderCalc(d){
+  var upCls = d.upside_pct>0 ? 'val-up' : 'val-dn';
+  var checks = [
+    ['時価総額30億〜2000億', d.judge_mktcap],
+    ['事業価値比率 90%以下', d.judge_biz],
+    ['現在の上昇余地プラス', d.judge_upper],
+    ['3年後の上昇余地プラス', d.judge_3y],
+    ['投資判断倍率 1.7以上', d.judge_mult_ok]
+  ];
+  var judgeHtml = checks.map(function(c){
+    var ok = c[1];
+    var mark = ok===null ? '<span style="color:#8b949e">—</span>' : (ok ? '<span class="val-ok">○</span>' : '<span class="val-ng">×</span>');
+    return '<div class="val-judge-row"><span class="val-judge-mark">'+mark+'</span>'+c[0]+'</div>';
+  }).join('');
+
+  var projRows = (d.projection||[]).map(function(p){
+    var lbl = p.year===0 ? '現在' : (p.year+'年後');
+    return '<tr><td>'+lbl+'</td><td class="val-num">'+_fmt(p.eps,0)+'</td><td class="val-num">'+_fmt(p.bps,0)+'</td><td class="val-num">'+_fmt(p.theoretical,0)+'</td><td class="val-num">'+_fmt(p.upper,0)+'</td></tr>';
+  }).join('');
+
+  return ''
+    + '<div class="val-res-name">'+ (d.name||'') +'<span>'+ d.code +'</span></div>'
+    + '<div class="val-hero">'
+    +   '<div class="val-hero-box"><span class="lbl">現在株価</span><span class="v">'+_fmt(d.close,0)+'</span></div>'
+    +   '<div class="val-hero-box main"><span class="lbl">理論株価</span><span class="v">'+_fmt(d.theoretical_price,0)+'</span><span class="up '+upCls+'">'+_pct(d.upside_pct)+'</span></div>'
+    +   '<div class="val-hero-box"><span class="lbl">上限株価</span><span class="v">'+_fmt(d.upper_price,0)+'</span><span class="up">'+_pct(d.upper_upside_pct)+'</span></div>'
+    + '</div>'
+    + '<div class="val-grid">'
+    +   _cell('資産価値', _fmt(d.asset_value,0)+'円')
+    +   _cell('事業価値', _fmt(d.business_value,0)+'円')
+    +   _cell('事業価値比率', d.biz_ratio!=null ? (d.biz_ratio*100).toFixed(0)+'%' : '—')
+    +   _cell('EPS(採用)', _fmt(d.eps,0)+'円')
+    +   _cell('BPS', _fmt(d.bps,0)+'円')
+    +   _cell('PBR', d.pbr!=null ? Number(d.pbr).toFixed(2)+'倍' : '—')
+    +   _cell('ROA', d.roa!=null ? (d.roa*100).toFixed(1)+'%' : '—')
+    +   _cell('自己資本比率', d.equity_ratio!=null ? Number(d.equity_ratio).toFixed(1)+'%' : '—')
+    +   _cell('経常増益率', _pct(d.ord_growth))
+    + '</div>'
+    + '<div class="val-judge"><div class="val-judge-title">投資判断（'+(d.pass_all?'<span class="val-ok">オールクリア ○</span>':'一部未達')+'）</div>'+judgeHtml+'</div>'
+    + '<div><div class="val-proj-title">5年推移シミュレーション（経常増益率 '+_pct(d.ord_growth)+' 前提）</div>'
+    +   '<div class="val-table-scroll"><table class="val-table"><thead><tr><th>経過</th><th>EPS</th><th>BPS</th><th>理論株価</th><th>上限株価</th></tr></thead><tbody>'+projRows+'</tbody></table></div></div>';
+}
+
+function _cell(lbl, v){ return '<div class="val-cell"><span class="lbl">'+lbl+'</span><span class="v">'+v+'</span></div>'; }
+"""
+
+
+def _valuation_ranking_rows(order_by: str, limit: int = 60) -> str:
+    """理論株価ランキングの <tr> 群をサーバー側で生成する。
+    order_by: 'theo_ratio'(割安) または 'upside_3y_pct'(成長)。"""
+    import html as _html
+    conn = get_conn()
+    cur  = conn.cursor()
+    # 時価総額100億以上に絞り、極端な外れ値（上昇余地>1000%=データ疑い）を除外
+    cur.execute(f"""
+        SELECT t.code, s.name, t.close, t.theoretical_price,
+               t.upside_pct, t.upside_3y_pct, t.pbr, t.pass_all
+        FROM theoretical_values t
+        LEFT JOIN stocks s ON t.code = s.code
+        WHERE t.market_cap >= 10000000000
+          AND t.upside_pct < 1000
+          AND t.{order_by} IS NOT NULL
+        ORDER BY t.{order_by} DESC
+        LIMIT %s
+    """, (limit,))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    out = []
+    for code, name, close, theo, up, up3y, pbr, pass_all in rows:
+        nm = _html.escape(name or "")
+        up = float(up) if up is not None else 0.0
+        up_cls = "val-up" if up > 0 else "val-dn"
+        up3y_txt = f"{float(up3y):+.1f}%" if up3y is not None else "—"
+        badge = '<span class="val-ok">○</span>' if pass_all else ""
+        out.append(
+            f'<tr onclick="loadCalc(\'{code}\')">'
+            f'<td class="val-code">{code}</td>'
+            f'<td class="val-name">{nm}{badge}</td>'
+            f'<td class="val-num">{float(close):,.0f}</td>'
+            f'<td class="val-num">{float(theo):,.0f}</td>'
+            f'<td class="val-num {up_cls}">{up:+.1f}%</td>'
+            f'<td class="val-num">{up3y_txt}</td>'
+            f'<td class="val-num">{float(pbr):.2f}</td></tr>'
+        )
+    return "".join(out)
+
+
+def _build_valuation_page() -> str:
+    cheap_rows  = _valuation_ranking_rows("theo_ratio")
+    growth_rows = _valuation_ranking_rows("upside_3y_pct")
+    body = f"""<style>{_VALUATION_CSS}</style>
+<div class="val-wrap">
+
+  <div class="val-card val-calc">
+    <div class="val-calc-head">
+      <h2 class="val-h2">🧮 理論株価電卓</h2>
+      <div class="val-input-row">
+        <input id="valCodeInput" class="val-input" type="text" inputmode="numeric"
+               placeholder="銘柄コード（例: 7203）" autocomplete="off">
+        <button class="val-btn" onclick="loadCalc(document.getElementById('valCodeInput').value)">計算</button>
+      </div>
+    </div>
+    <div id="valResult" class="val-result">
+      <div class="val-empty">銘柄コードを入力するか、下のランキングから銘柄を選んでください。</div>
+    </div>
+  </div>
+
+  <div class="val-card">
+    <div class="val-rank-tabs">
+      <button class="val-rank-tab active" data-rank="cheap" onclick="switchRank('cheap')">💎 割安ランキング</button>
+      <button class="val-rank-tab" data-rank="growth" onclick="switchRank('growth')">📈 成長ランキング</button>
+    </div>
+    <div class="val-rank-note">時価総額100億以上。行をタップで上の電卓に読込。<span class="val-ok">○</span>=投資判断オールクリア</div>
+    <div id="valRankCheap" class="val-rank-panel">
+      <div class="val-table-scroll"><table class="val-table">
+        <thead><tr><th>コード</th><th>銘柄名</th><th>現在</th><th>理論</th><th>上昇余地</th><th>3年後</th><th>PBR</th></tr></thead>
+        <tbody>{cheap_rows}</tbody>
+      </table></div>
+    </div>
+    <div id="valRankGrowth" class="val-rank-panel" style="display:none">
+      <div class="val-table-scroll"><table class="val-table">
+        <thead><tr><th>コード</th><th>銘柄名</th><th>現在</th><th>理論</th><th>上昇余地</th><th>3年後</th><th>PBR</th></tr></thead>
+        <tbody>{growth_rows}</tbody>
+      </table></div>
+    </div>
+  </div>
+
+</div>
+<script>{_VALUATION_JS}</script>"""
+    return _page_html("理論株価", body, active="valuation")
 
 
 def _build_screen_page() -> str:
@@ -4823,6 +5048,38 @@ def screen():
     html = _get(key)
     if not html:
         html = _build_screen_page()
+        _set(key, html)
+    return html
+
+
+@app.route("/api/theoretical/<code>")
+def api_theoretical(code):
+    """1銘柄の理論株価一式を返す。What-if 用に eps/roa/equity_ratio/ord_growth/
+    price をクエリパラメータで上書き可能。"""
+    from compute_theoretical import compute_for_code
+    overrides = {}
+    for key in ("eps", "roa", "equity_ratio", "ord_growth", "price", "bps"):
+        v = request.args.get(key, "").strip()
+        if v != "":
+            try:
+                overrides[key] = float(v)
+            except ValueError:
+                pass
+    try:
+        res = compute_for_code(code, overrides or None)
+    except Exception as e:
+        return _json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"}
+    if res is None:
+        return _json.dumps({"error": "not_found"}), 404, {"Content-Type": "application/json"}
+    return _json.dumps(res, ensure_ascii=False), 200, {"Content-Type": "application/json"}
+
+
+@app.route("/valuation")
+def valuation():
+    key  = "valuation_page"
+    html = _get(key)
+    if not html:
+        html = _build_valuation_page()
         _set(key, html)
     return html
 

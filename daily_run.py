@@ -213,6 +213,18 @@ def run(init: bool = False, rankings_only: bool = False):
             print(f"  エラー: {e}")
             _log("price_stats", "failed", error=str(e))
 
+    # 理論株価（はっしゃん式）を計算 → theoretical_values に保存
+    # price_stats と stock_fundamentals の最新値に依存するため、その後に実行する
+    if not rankings_only:
+        print("\n[理論株価] 資産価値・事業価値・理論株価・投資判断を計算中...")
+        try:
+            from compute_theoretical import run as compute_theoretical
+            n = compute_theoretical()
+            _log("theoretical_values", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("theoretical_values", "failed", error=str(e))
+
     # スイングトレード候補のスコアリング → DB 保存 → LINE 通知
     if not rankings_only:
         print("\n[スイング] 候補スコアリング & DB 保存 & LINE 通知...")
