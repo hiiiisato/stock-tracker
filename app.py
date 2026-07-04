@@ -2606,6 +2606,7 @@ function loadCalc(code, opts){
   box.innerHTML = '<div class="val-loading">計算中…</div>';
   if(!opts.noScroll) window.scrollTo({top:0, behavior:'smooth'});
   fetchTheoretical(code, {}, function(ok, d){
+    if(valCurrentCode !== code) return; // 別銘柄へ切替済みなら古いレスポンスは破棄
     if(!ok){
       box.innerHTML = '<div class="val-err">'+(d&&d.error==='not_found'?'この銘柄の理論株価は算出できません（財務データ不足）。':'エラーが発生しました。')+'</div>';
       return;
@@ -2742,6 +2743,7 @@ function onWhatIfInput(key, dec, unit){
   document.getElementById('valSliderVal_'+key).textContent = v.toFixed(dec)+unit;
   valSliderVals[key] = v;
   if(valDebounceT) clearTimeout(valDebounceT);
+  var reqCode = valCurrentCode;
   valDebounceT = setTimeout(function(){
     var overrides = {
       eps: valSliderVals.eps,
@@ -2749,8 +2751,8 @@ function onWhatIfInput(key, dec, unit){
       equity_ratio: valSliderVals.equity_ratio,
       ord_growth: valSliderVals.ord_growth
     };
-    fetchTheoretical(valCurrentCode, overrides, function(ok, d){
-      if(!ok) return;
+    fetchTheoretical(reqCode, overrides, function(ok, d){
+      if(!ok || valCurrentCode !== reqCode) return; // 銘柄切替済み・失敗時は反映しない
       document.getElementById('valCalcBody').innerHTML = renderCalc(d);
       drawProjectionChart(d);
     });
