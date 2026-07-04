@@ -2776,8 +2776,8 @@ def _build_screen_page() -> str:
     'f-gc1','f-dc1','f-gc3','f-dc3','f-dc2',
     'f-bb-up','f-bb-dn','f-ytdh-brk',
   ];
-  NUM_IDS.forEach(function(id){{var el=document.getElementById(id);if(el)el.value='';}});
-  CHK_IDS.forEach(function(id){{var el=document.getElementById(id);if(el)el.checked=false;}});
+  var _cmin={{}},_cmax={{}},_cflg={{}};
+  var _minIdMap={{}},_maxIdMap={{}},_chkIdMap={{}};
 
   /* ── 条件→入力欄マッピング（populateInputs/STRATS用）── */
   var IMAP={{
@@ -2830,26 +2830,31 @@ def _build_screen_page() -> str:
   }};
 
   function clearInputs(){{
-    NUM_IDS.forEach(function(id){{var e=document.getElementById(id);if(e){{e.value='';e.classList.remove('active');}}}});
-    CHK_IDS.forEach(function(id){{var e=document.getElementById(id);if(e)e.checked=false;}});
+    _cmin={{}};_cmax={{}};_cflg={{}};
     var hw=document.getElementById('scHistWrap');if(hw)hw.style.display='none';
     scHistCond=null;
     if(typeof renderChips==='function')renderChips();
   }}
 
   function populateInputs(stratIdx){{
-    clearInputs();
-    if(stratIdx<0||stratIdx>14)return;
-    STRATS[stratIdx].conds.forEach(function(c){{
-      var fm=IMAP[c.f];if(!fm)return;
-      var arr=fm[c.op];if(!arr)return;
-      arr.forEach(function(m){{
-        var el=document.getElementById(m[0]);if(!el)return;
-        var scale=m[1],chk=m[2];
-        if(chk){{el.checked=(c.val===1);}}
-        else{{el.value=scale?Math.round(c.val*scale):c.val;el.classList.add('active');}}
+    _cmin={{}};_cmax={{}};_cflg={{}};
+    var hw=document.getElementById('scHistWrap');if(hw)hw.style.display='none';scHistCond=null;
+    if(stratIdx>=0&&stratIdx<=14){{
+      STRATS[stratIdx].conds.forEach(function(c){{
+        var fm=IMAP[c.f];if(!fm)return;
+        var arr=fm[c.op];if(!arr)return;
+        arr.forEach(function(m){{
+          var iid=m[0],scale=m[1],isChk=m[2];
+          if(isChk){{var cid=_chkIdMap[iid];if(cid!==undefined)_cflg[cid]=(c.val===1);}}
+          else{{
+            var val=scale?Math.round(c.val*scale):c.val;
+            var cid=_minIdMap[iid];
+            if(cid!==undefined){{_cmin[cid]=val;}}
+            else{{cid=_maxIdMap[iid];if(cid!==undefined)_cmax[cid]=val;}}
+          }}
+        }});
       }});
-    }});
+    }}
     if(typeof renderChips==='function')renderChips();
   }}
 
@@ -2857,16 +2862,18 @@ def _build_screen_page() -> str:
     var fm=IMAP[cond.f];if(!fm)return;
     var arr=fm[cond.op];if(!arr)return;
     arr.forEach(function(m){{
-      var el=document.getElementById(m[0]);if(!el)return;
-      var scale=m[1],chk=m[2];
-      if(chk){{el.checked=!el.checked;}}
-      else{{
+      var iid=m[0],scale=m[1],isChk=m[2];
+      if(isChk){{
+        var cid=_chkIdMap[iid];
+        if(cid!==undefined){{if(_cflg[cid])delete _cflg[cid];else _cflg[cid]=true;}}
+      }}else{{
         var dv=scale?Math.round(cond.val*scale):cond.val;
-        if(String(el.value)===String(dv)){{el.value='';el.classList.remove('active');}}
-        else{{el.value=dv;el.classList.add('active');}}
+        var cid=_minIdMap[iid];
+        if(cid!==undefined){{if(_cmin[cid]===dv)delete _cmin[cid];else _cmin[cid]=dv;}}
+        else{{cid=_maxIdMap[iid];if(cid!==undefined){{if(_cmax[cid]===dv)delete _cmax[cid];else _cmax[cid]=dv;}}}}
       }}
     }});
-    render();
+    renderChips();render();
   }}
 
   var stocks=[],sortCol='market_cap',sortDir=-1,curStrat=-1;
@@ -2918,8 +2925,8 @@ def _build_screen_page() -> str:
     return v!==null&&v!==undefined?String(v):dash;
   }}
 
-  function _v(id){{var el=document.getElementById(id);return el&&el.value!==''?parseFloat(el.value):null;}}
-  function _chk(id){{var el=document.getElementById(id);return el&&el.checked;}}
+  function _v(id){{var cid=_minIdMap[id];if(cid!==undefined)return _cmin[cid]!==undefined?_cmin[cid]:null;cid=_maxIdMap[id];if(cid!==undefined)return _cmax[cid]!==undefined?_cmax[cid]:null;return null;}}
+  function _chk(id){{var cid=_chkIdMap[id];return cid!==undefined&&!!_cflg[cid];}}
 
   function passMarket(s){{
     var mkts=Array.from(document.querySelectorAll('.sc-mkt-chk:checked')).map(function(e){{return e.value;}});
@@ -3128,6 +3135,11 @@ def _build_screen_page() -> str:
     /* ── その他 ── */
     {{cat:'その他',id:'cf', lbl:'営業CF黒字',chkId:'f-cf-pos',isFlag:true}},
   ];
+  COND_DEFS.forEach(function(c){{
+    if(c.minId)_minIdMap[c.minId]=c.id;
+    if(c.maxId)_maxIdMap[c.maxId]=c.id;
+    if(c.chkId)_chkIdMap[c.chkId]=c.id;
+  }});
   var scPickerCat='テクニカル';
   var scHistCond=null;
   var _histData=null;
@@ -3135,8 +3147,8 @@ def _build_screen_page() -> str:
   /* ── ヘルパー ── */
   function getCondDef(id){{return COND_DEFS.find(function(d){{return d.id===id;}});}}
   function isCondActive(cond){{
-    if(cond.isFlag){{var el=document.getElementById(cond.chkId);return!!(el&&el.checked);}}
-    return(cond.minId&&_v(cond.minId)!==null)||(cond.maxId&&_v(cond.maxId)!==null);
+    if(cond.isFlag)return!!_cflg[cond.id];
+    return _cmin[cond.id]!==undefined||_cmax[cond.id]!==undefined;
   }}
   function getCondLabel(cond){{
     if(cond.isFlag)return cond.lbl+' ✓';
@@ -3149,11 +3161,8 @@ def _build_screen_page() -> str:
     return cond.lbl;
   }}
   function removeCond(cond){{
-    if(cond.isFlag){{var el=document.getElementById(cond.chkId);if(el)el.checked=false;}}
-    else{{
-      if(cond.minId){{var e=document.getElementById(cond.minId);if(e){{e.value='';e.classList.remove('active');}}}}
-      if(cond.maxId){{var e=document.getElementById(cond.maxId);if(e){{e.value='';e.classList.remove('active');}}}}
-    }}
+    if(cond.isFlag)delete _cflg[cond.id];
+    else{{delete _cmin[cond.id];delete _cmax[cond.id];}}
     if(scHistCond&&scHistCond.id===cond.id){{
       document.getElementById('scHistWrap').style.display='none';scHistCond=null;
     }}
@@ -3212,9 +3221,7 @@ def _build_screen_page() -> str:
       item.dataset.condId=cond.id;item.textContent=cond.lbl;
       item.addEventListener('click',function(){{
         if(cond.isFlag){{
-          var el=document.getElementById(cond.chkId);
-          if(el)el.checked=!el.checked;
-          item.classList.toggle('active-cond',el&&el.checked);
+          if(_cflg[cond.id])delete _cflg[cond.id];else _cflg[cond.id]=true;
           renderChips();scheduleRender();
         }}else{{
           showHistPanel(cond);
@@ -3316,11 +3323,7 @@ def _build_screen_page() -> str:
         var v=parseFloat(rMin.value);
         display.textContent='≥ '+fmt(v);
         updateRangeFill(lo,hi,v,hi);
-        var el=document.getElementById(cond.minId);
-        if(el){{
-          if(v<=lo){{el.value='';el.classList.remove('active');}}
-          else{{el.value=v;el.classList.add('active');}}
-        }}
+        if(v<=lo)delete _cmin[cond.id];else _cmin[cond.id]=v;
         drawHistBars(_histData,cond);renderChips();scheduleRender();
       }};
     }}else{{
@@ -3339,12 +3342,8 @@ def _build_screen_page() -> str:
         if(document.getElementById('scHistWrap').style.display==='none')return;
         if(parseFloat(rMin.value)>parseFloat(rMax.value))rMax.value=rMin.value;
         _update();
-        var el=document.getElementById(cond.minId);
-        if(el){{
-          var v=parseFloat(rMin.value);
-          if(v<=lo){{el.value='';el.classList.remove('active');}}
-          else{{el.value=v;el.classList.add('active');}}
-        }}
+        var v=parseFloat(rMin.value);
+        if(v<=lo)delete _cmin[cond.id];else _cmin[cond.id]=v;
         renderChips();scheduleRender();
       }};
       rMax.oninput=function(){{
@@ -3352,12 +3351,8 @@ def _build_screen_page() -> str:
         if(parseFloat(rMax.value)<parseFloat(rMin.value))rMin.value=rMax.value;
         _update();
         if(cond.maxId){{
-          var el=document.getElementById(cond.maxId);
-          if(el){{
-            var v=parseFloat(rMax.value);
-            if(v>=hi){{el.value='';el.classList.remove('active');}}
-            else{{el.value=v;el.classList.add('active');}}
-          }}
+          var v=parseFloat(rMax.value);
+          if(v>=hi)delete _cmax[cond.id];else _cmax[cond.id]=v;
         }}
         renderChips();scheduleRender();
       }};
@@ -3571,8 +3566,7 @@ def _build_screen_page() -> str:
   }});
   window.addEventListener('pageshow',function(e){{
     if(!e.persisted)return;
-    NUM_IDS.forEach(function(id){{var el=document.getElementById(id);if(el)el.value='';}});
-    CHK_IDS.forEach(function(id){{var el=document.getElementById(id);if(el)el.checked=false;}});
+    _cmin={{}};_cmax={{}};_cflg={{}};
     if(typeof renderChips==='function')renderChips();
   }});
 }})();
