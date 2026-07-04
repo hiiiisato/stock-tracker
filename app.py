@@ -2563,11 +2563,29 @@ _VALUATION_CSS = """
   .val-grid { grid-template-columns:repeat(2,1fr); }
   .val-hero-box .v { font-size:18px; }
 }
+
+/* ── What-if パネル ── */
+.val-whatif { margin-top:18px; padding-top:16px; border-top:1px solid #21262d; }
+.val-whatif-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.val-whatif-title { font-size:12px; font-weight:600; color:#8b949e; }
+.val-reset-btn { background:none; border:1px solid #30363d; border-radius:6px; color:#8b949e; font-size:11px; padding:4px 10px; cursor:pointer; }
+.val-reset-btn:hover { color:#e6edf3; border-color:#484f58; }
+.val-slider-row { margin-bottom:14px; }
+.val-slider-lbl { display:flex; justify-content:space-between; font-size:12px; color:#c9d1d9; margin-bottom:4px; }
+.val-slider-lbl b { color:#58a6ff; font-variant-numeric:tabular-nums; }
+.val-slider { width:100%; accent-color:#58a6ff; }
+.val-chart-box { margin:14px 0; background:#0d1117; border:1px solid #21262d; border-radius:8px; padding:8px; }
 """
 
 _VALUATION_JS = """
 function _fmt(v, dec){ if(v===null||v===undefined) return '—'; return Number(v).toLocaleString('ja-JP',{minimumFractionDigits:dec||0,maximumFractionDigits:dec||0}); }
 function _pct(v){ if(v===null||v===undefined) return '—'; var s=(v>=0?'+':'')+Number(v).toFixed(1)+'%'; return s; }
+
+/* What-if 状態は DOM ではなく JS 変数で保持する（bfcache 等に影響されないため） */
+var valCurrentCode = null;
+var valBase = null;       // 上書き無しの初回計算結果（スライダーの基準値・レンジに使う）
+var valSliderVals = {};   // 現在のスライダー値 {eps, roa, equity_ratio, ord_growth}
+var valDebounceT = null;
 
 function switchRank(which){
   document.querySelectorAll('.val-rank-tab').forEach(function(t){ t.classList.toggle('active', t.dataset.rank===which); });
@@ -2579,19 +2597,37 @@ function loadCalc(code){
   code = (code||'').trim();
   if(!code) return;
   document.getElementById('valCodeInput').value = code;
+  valCurrentCode = code;
+  valBase = null;
+  valSliderVals = {};
   var box = document.getElementById('valResult');
   box.innerHTML = '<div class="val-loading">計算中…</div>';
   window.scrollTo({top:0, behavior:'smooth'});
-  fetch('/api/theoretical/'+encodeURIComponent(code))
+  fetchTheoretical(code, {}, function(ok, d){
+    if(!ok){
+      box.innerHTML = '<div class="val-err">'+(d&&d.error==='not_found'?'この銘柄の理論株価は算出できません（財務データ不足）。':'エラーが発生しました。')+'</div>';
+      return;
+    }
+    valBase = d;
+    valSliderVals = {eps:d.eps, roa:d.roa*100, equity_ratio:d.equity_ratio, ord_growth:d.ord_growth};
+    box.innerHTML = ''
+      + '<div class="val-res-name">'+ (d.name||'') +'<span>'+ d.code +'</span></div>'
+      + '<div id="valCalcBody"></div>'
+      + '<div id="valChart" class="val-chart-box"></div>'
+      + renderWhatIfPanel(d);
+    document.getElementById('valCalcBody').innerHTML = renderCalc(d);
+    drawProjectionChart(d);
+    initWhatIfSliders();
+  });
+}
+
+function fetchTheoretical(code, overrides, cb){
+  var qs = Object.keys(overrides).map(function(k){ return k+'='+encodeURIComponent(overrides[k]); }).join('&');
+  var url = '/api/theoretical/'+encodeURIComponent(code) + (qs ? '?'+qs : '');
+  fetch(url)
     .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
-    .then(function(res){
-      if(!res.ok){
-        box.innerHTML = '<div class="val-err">'+(res.j.error==='not_found'?'この銘柄の理論株価は算出できません（財務データ不足）。':'エラーが発生しました。')+'</div>';
-        return;
-      }
-      box.innerHTML = renderCalc(res.j);
-    })
-    .catch(function(){ box.innerHTML = '<div class="val-err">通信エラー。</div>'; });
+    .then(function(res){ cb(res.ok, res.j); })
+    .catch(function(){ cb(false, null); });
 }
 
 function renderCalc(d){
@@ -2615,7 +2651,6 @@ function renderCalc(d){
   }).join('');
 
   return ''
-    + '<div class="val-res-name">'+ (d.name||'') +'<span>'+ d.code +'</span></div>'
     + '<div class="val-hero">'
     +   '<div class="val-hero-box"><span class="lbl">現在株価</span><span class="v">'+_fmt(d.close,0)+'</span></div>'
     +   '<div class="val-hero-box main"><span class="lbl">理論株価</span><span class="v">'+_fmt(d.theoretical_price,0)+'</span><span class="up '+upCls+'">'+_pct(d.upside_pct)+'</span></div>'
@@ -2638,6 +2673,101 @@ function renderCalc(d){
 }
 
 function _cell(lbl, v){ return '<div class="val-cell"><span class="lbl">'+lbl+'</span><span class="v">'+v+'</span></div>'; }
+
+/* ── 5年推移グラフ（Plotly）── */
+function drawProjectionChart(d){
+  var proj = d.projection || [];
+  var xs = proj.map(function(p){ return p.year===0 ? '現在' : (p.year+'年後'); });
+  var theo  = proj.map(function(p){ return p.theoretical; });
+  var upper = proj.map(function(p){ return p.upper; });
+  var price = xs.map(function(){ return d.close; });
+  var traces = [
+    {x:xs, y:price, name:'現在株価', mode:'lines', line:{color:'#8b949e', width:1.5, dash:'dot'}},
+    {x:xs, y:theo,  name:'理論株価', mode:'lines+markers', line:{color:'#58a6ff', width:2.5}},
+    {x:xs, y:upper, name:'上限株価', mode:'lines+markers', line:{color:'#3fb950', width:2, dash:'dash'}}
+  ];
+  var layout = {
+    height:260, margin:{l:50,r:12,t:12,b:32},
+    paper_bgcolor:'#0d1117', plot_bgcolor:'#0d1117',
+    font:{color:'#8b949e', size:11},
+    xaxis:{gridcolor:'#21262d'}, yaxis:{gridcolor:'#21262d', tickformat:','},
+    legend:{orientation:'h', y:-0.18, font:{size:11}}
+  };
+  Plotly.newPlot('valChart', traces, layout, {responsive:true, displayModeBar:false});
+}
+
+/* ── What-if パネル ── */
+var VAL_SLIDER_FIELDS = [
+  {key:'eps',          label:'EPS（会社予想, 円）',  unit:'円',  dec:0},
+  {key:'roa',          label:'ROA',                 unit:'%',   dec:1},
+  {key:'equity_ratio', label:'自己資本比率',         unit:'%',   dec:1},
+  {key:'ord_growth',   label:'経常増益率',           unit:'%/年', dec:1}
+];
+
+function _sliderRange(key, base){
+  if(key==='eps'){
+    var b = Math.max(base, 1);
+    return {min:0, max:Math.round(b*3), step:Math.max(1, Math.round(b/50))};
+  }
+  if(key==='roa') return {min:-10, max:40, step:0.5};
+  if(key==='equity_ratio') return {min:0, max:95, step:1};
+  if(key==='ord_growth') return {min:-50, max:50, step:1};
+}
+
+function renderWhatIfPanel(d){
+  var rows = VAL_SLIDER_FIELDS.map(function(f){
+    var base = f.key==='roa' ? d.roa*100 : d[f.key];
+    var r = _sliderRange(f.key, base||0);
+    return ''
+      + '<div class="val-slider-row">'
+      +   '<div class="val-slider-lbl"><span>'+f.label+'</span><b id="valSliderVal_'+f.key+'">'+Number(base).toFixed(f.dec)+f.unit+'</b></div>'
+      +   '<input type="range" class="val-slider" id="valSlider_'+f.key+'" min="'+r.min+'" max="'+r.max+'" step="'+r.step+'" value="'+base+'" oninput="onWhatIfInput(\\''+f.key+'\\','+f.dec+',\\''+f.unit+'\\')">'
+      + '</div>';
+  }).join('');
+  return ''
+    + '<div class="val-whatif">'
+    +   '<div class="val-whatif-head"><span class="val-whatif-title">🔧 What-if シミュレーション（数値を動かして再計算）</span>'
+    +     '<button class="val-reset-btn" onclick="resetWhatIf()">元に戻す</button></div>'
+    +   rows
+    + '</div>';
+}
+
+function initWhatIfSliders(){ /* スライダーは renderWhatIfPanel で値設定済み。追加初期化は不要 */ }
+
+function onWhatIfInput(key, dec, unit){
+  var el = document.getElementById('valSlider_'+key);
+  var v = parseFloat(el.value);
+  document.getElementById('valSliderVal_'+key).textContent = v.toFixed(dec)+unit;
+  valSliderVals[key] = v;
+  if(valDebounceT) clearTimeout(valDebounceT);
+  valDebounceT = setTimeout(function(){
+    var overrides = {
+      eps: valSliderVals.eps,
+      roa: valSliderVals.roa,
+      equity_ratio: valSliderVals.equity_ratio,
+      ord_growth: valSliderVals.ord_growth
+    };
+    fetchTheoretical(valCurrentCode, overrides, function(ok, d){
+      if(!ok) return;
+      document.getElementById('valCalcBody').innerHTML = renderCalc(d);
+      drawProjectionChart(d);
+    });
+  }, 300);
+}
+
+function resetWhatIf(){
+  if(!valBase) return;
+  valSliderVals = {eps:valBase.eps, roa:valBase.roa*100, equity_ratio:valBase.equity_ratio, ord_growth:valBase.ord_growth};
+  VAL_SLIDER_FIELDS.forEach(function(f){
+    var base = f.key==='roa' ? valBase.roa*100 : valBase[f.key];
+    var el = document.getElementById('valSlider_'+f.key);
+    if(el) el.value = base;
+    var lbl = document.getElementById('valSliderVal_'+f.key);
+    if(lbl) lbl.textContent = Number(base).toFixed(f.dec)+f.unit;
+  });
+  document.getElementById('valCalcBody').innerHTML = renderCalc(valBase);
+  drawProjectionChart(valBase);
+}
 """
 
 
@@ -2687,6 +2817,7 @@ def _build_valuation_page() -> str:
     cheap_rows  = _valuation_ranking_rows("theo_ratio")
     growth_rows = _valuation_ranking_rows("upside_3y_pct")
     body = f"""<style>{_VALUATION_CSS}</style>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <div class="val-wrap">
 
   <div class="val-card val-calc">
