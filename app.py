@@ -2593,16 +2593,18 @@ function switchRank(which){
   document.getElementById('valRankGrowth').style.display = which==='growth' ? '' : 'none';
 }
 
-function loadCalc(code){
+function loadCalc(code, opts){
   code = (code||'').trim();
   if(!code) return;
-  document.getElementById('valCodeInput').value = code;
+  opts = opts || {};
+  var codeInput = document.getElementById('valCodeInput');
+  if(codeInput) codeInput.value = code;
   valCurrentCode = code;
   valBase = null;
   valSliderVals = {};
   var box = document.getElementById('valResult');
   box.innerHTML = '<div class="val-loading">計算中…</div>';
-  window.scrollTo({top:0, behavior:'smooth'});
+  if(!opts.noScroll) window.scrollTo({top:0, behavior:'smooth'});
   fetchTheoretical(code, {}, function(ok, d){
     if(!ok){
       box.innerHTML = '<div class="val-err">'+(d&&d.error==='not_found'?'この銘柄の理論株価は算出できません（財務データ不足）。':'エラーが発生しました。')+'</div>';
@@ -2886,6 +2888,7 @@ def _build_screen_page() -> str:
       <button class="sc-cp-tab active" data-cat="テクニカル">テクニカル</button>
       <button class="sc-cp-tab" data-cat="バリュー">バリュー</button>
       <button class="sc-cp-tab" data-cat="成長">成長</button>
+      <button class="sc-cp-tab" data-cat="理論株価">理論株価</button>
       <button class="sc-cp-tab" data-cat="その他">その他</button>
     </div>
     <div class="sc-cond-grid" id="scCondGrid"></div>
@@ -3362,6 +3365,10 @@ def _build_screen_page() -> str:
     if(!mn('op_margin','f-opm-min'))return false;
     if(!mn('ord_margin','f-ordm-min'))return false;
     if(!mn('roic','f-roic-min'))return false;
+    /* ── 理論株価 ── */
+    if(!mn('theo_ratio','f-theoratio-min'))return false;
+    if(!mn('upside_3y_pct','f-theo3y-min'))return false;
+    if(_chk('f-theopass') && s.theo_pass_all!==1)return false;
     /* ── フラグ ── */
     if(_chk('f-macd-gc')   && s.macd_gc!==1)return false;
     if(_chk('f-break20')   && s.break_20d!==1)return false;
@@ -3488,6 +3495,10 @@ def _build_screen_page() -> str:
     {{cat:'成長',id:'opm',  lbl:'営業利益率',   field:'op_margin',  minId:'f-opm-min', unit:'%',step:1,minOnly:true}},
     {{cat:'成長',id:'ordm', lbl:'経常利益率',   field:'ord_margin', minId:'f-ordm-min',unit:'%',step:1,minOnly:true}},
     {{cat:'成長',id:'roic', lbl:'ROIC',        field:'roic',       minId:'f-roic-min',unit:'%',step:1,minOnly:true}},
+    /* ── 理論株価 ── */
+    {{cat:'理論株価',id:'theoratio', lbl:'理論株価倍率', field:'theo_ratio',     minId:'f-theoratio-min', unit:'倍', step:0.1, minOnly:true}},
+    {{cat:'理論株価',id:'theo3y',    lbl:'3年後上昇余地', field:'upside_3y_pct',  minId:'f-theo3y-min',    unit:'%',  step:5,   minOnly:true}},
+    {{cat:'理論株価',id:'theopass',  lbl:'投資判断オールクリア', chkId:'f-theopass', isFlag:true}},
     /* ── その他 ── */
     {{cat:'その他',id:'cf', lbl:'営業CF黒字',chkId:'f-cf-pos',isFlag:true}},
   ];
@@ -4944,6 +4955,7 @@ function renderFinTable(d){
 <div class="pg-tabs">
   <button class="pg-tab active" data-tab="overview">概要</button>
   <button class="pg-tab" data-tab="financials">業績・財務</button>
+  <button class="pg-tab" data-tab="valuation">理論株価</button>
 </div>
 
 <div id="tab-overview" class="pg-panel active">
@@ -5030,7 +5042,29 @@ function renderFinTable(d){
 {_fin_data_script}
 {_fin_logic_script}
 
-</div><!-- /tab-financials -->"""
+</div><!-- /tab-financials -->
+
+<div id="tab-valuation" class="pg-panel">
+<style>{_VALUATION_CSS}</style>
+<div id="valResult" class="val-result">
+  <div class="val-loading">計算中…</div>
+</div>
+<script>{_VALUATION_JS}</script>
+<script>
+(function(){{
+  document.querySelectorAll('.pg-tab').forEach(function(btn){{
+    if(btn.dataset.tab==='valuation'){{
+      btn.addEventListener('click', function(){{
+        if(!window._valStockLoaded){{
+          window._valStockLoaded = true;
+          loadCalc('{s_code}', {{noScroll:true}});
+        }}
+      }});
+    }}
+  }});
+}})();
+</script>
+</div><!-- /tab-valuation -->"""
 
     return _page_html(f"{s_name_esc}（{s_code}）", body, active="")
 
@@ -5071,7 +5105,8 @@ def api_screen():
                ps.break_ytd_high, ps.dev_ytd_high, ps.dev_ytd_low,
                ps.nikkei_rel_1m,
                ps.equity_ratio, ps.ord_margin, ps.ord_growth,
-               ps.psr, ps.pcfr
+               ps.psr, ps.pcfr,
+               tv.theo_ratio, tv.upside_3y_pct, tv.pass_all
         FROM stocks s
         LEFT JOIN markets m ON s.market_id = m.id
         LEFT JOIN stock_fundamentals f ON s.code = f.code
@@ -5082,6 +5117,7 @@ def api_screen():
               ON dp.code = mx.code AND dp.date = mx.max_date
         ) lp ON s.code = lp.code
         LEFT JOIN price_stats ps ON s.code = ps.code
+        LEFT JOIN theoretical_values tv ON s.code = tv.code
         WHERE s.is_active = TRUE
           AND (f.per IS NOT NULL OR f.pbr IS NOT NULL OR f.roe IS NOT NULL
                OR f.div_yield IS NOT NULL OR ps.chg25d IS NOT NULL)
@@ -5161,6 +5197,9 @@ def api_screen():
             "ord_growth":     _f(r[56]),
             "psr":            _f(r[57]),
             "pcfr":           _f(r[58]),
+            "theo_ratio":     _f(r[59]),
+            "upside_3y_pct":  _f(r[60]),
+            "theo_pass_all":  _i(r[61]),
             # クライアント側計算
             "vs_ma25":        (close - ma25)  if (close is not None and ma25  is not None) else None,
             "vs_ma75":        (close - ma75)  if (close is not None and ma75  is not None) else None,
