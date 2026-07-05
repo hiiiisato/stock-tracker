@@ -79,3 +79,26 @@ services:
         sync: false
       - key: EDINETDB_API_KEY
         sync: false
+
+  - type: cron
+    name: fund-watch-monthly
+    env: python
+    # 毎月 5日・15日・25日 の 6:00 JST（UTC 21:00 前日）に実行。
+    # ファンド各社の月次レポート発行タイミングがバラバラなため月3回チェックし、
+    # 既に取り込み済みの月は fund_watch.py 内でスキップされる（重複コストなし）。
+    schedule: "0 21 4,14,24 * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python fund_watch.py
+    envVars:
+      - key: TIDB_HOST
+        sync: false
+      - key: TIDB_PORT
+        value: "4000"
+      - key: TIDB_DATABASE
+        value: stock_tracker
+      - key: TIDB_USER
+        sync: false
+      - key: TIDB_PASSWORD
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

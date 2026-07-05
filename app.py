@@ -449,6 +449,7 @@ def _nav(active: str = "") -> str:
         ("valuation", "/valuation",  "理論株価"),
         ("rankings",  "/rankings",   "ランキング"),
         ("events",    "/events",     "イベント"),
+        ("funds",     "/funds",      "ファンドウォッチ"),
         ("swing",     "/swing",      "スイング"),
         ("watchlist", "/watchlist",  "ウォッチリスト"),
     ]
@@ -2899,6 +2900,162 @@ def _valuation_ranking_rows(order_by: str, limit: int = 60) -> str:
             f'<td class="val-num">{float(pbr):.2f}</td></tr>'
         )
     return "".join(out)
+
+
+_FUND_CSS = """
+.fw-wrap { max-width: 1100px; margin: 0 auto; }
+.fw-intro { font-size:12px; color:#8b949e; margin-bottom:16px; line-height:1.6; }
+.fw-common-box { background:#0d1f33; border:1px solid #1f6feb55; border-radius:10px; padding:14px 16px; margin-bottom:18px; }
+.fw-common-title { font-size:13px; font-weight:700; color:#58a6ff; margin-bottom:8px; }
+.fw-common-chip { display:inline-flex; align-items:center; gap:5px; background:#161b22; border:1px solid #30363d; border-radius:14px; padding:5px 12px; margin:3px 4px 3px 0; font-size:12px; color:#e6edf3; }
+.fw-common-chip b { color:#3fb950; }
+.fw-common-empty { font-size:12px; color:#6e7681; }
+.fw-card { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:16px; margin-bottom:16px; }
+.fw-card-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px; flex-wrap:wrap; gap:6px; }
+.fw-fund-name { font-size:16px; font-weight:700; color:#e6edf3; }
+.fw-fund-company { font-size:11px; color:#8b949e; }
+.fw-report-date { font-size:11px; color:#484f58; }
+.fw-section-title { font-size:11px; font-weight:600; color:#8b949e; text-transform:uppercase; letter-spacing:0.5px; margin:14px 0 6px; }
+.fw-view-text { font-size:13px; color:#c9d1d9; line-height:1.7; background:#0d1117; border:1px solid #21262d; border-radius:6px; padding:10px 12px; }
+.fw-holdings-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:6px; }
+.fw-holding { display:flex; align-items:baseline; gap:6px; background:#0d1117; border:1px solid #21262d; border-radius:6px; padding:6px 10px; font-size:12px; }
+.fw-holding .rank { color:#484f58; font-size:10px; width:14px; }
+.fw-holding .code { font-family:monospace; color:#8b949e; }
+.fw-holding a { color:#e6edf3; text-decoration:none; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fw-holding a:hover { color:#58a6ff; }
+.fw-holding .weight { color:#3fb950; font-weight:600; font-variant-numeric:tabular-nums; }
+.fw-holding.has-reason { border-color:#30363d; }
+.fw-reason-toggle { font-size:10px; color:#58a6ff; cursor:pointer; margin-left:4px; }
+.fw-reason-box { grid-column:1 / -1; font-size:12px; color:#8b949e; background:#0d1117; border-left:2px solid #3fb950; padding:6px 10px; margin:-2px 0 4px; display:none; }
+.fw-reason-box.open { display:block; }
+.fw-extra-box { margin-top:6px; font-size:12px; color:#8b949e; background:#131a24; border:1px dashed #30363d; border-radius:6px; padding:8px 10px; }
+.fw-extra-box b { color:#e6edf3; }
+.fw-empty { text-align:center; color:#8b949e; font-size:13px; padding:24px; }
+@media (max-width:768px) {
+  .fw-holdings-grid { grid-template-columns:1fr; }
+  .fw-card { padding:12px; }
+}
+"""
+
+_FUND_JS = """
+function fwToggleReason(id){
+  var el = document.getElementById(id);
+  if(el) el.classList.toggle('open');
+}
+"""
+
+
+def _build_funds_page() -> str:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT fr.fund_key, fm.fund_name, fm.company, fr.report_date,
+               fr.holdings_json, fr.extra_stocks_json, fr.macro_view, fr.strategy
+        FROM fund_reports fr
+        JOIN fund_master fm ON fr.fund_key = fm.fund_key
+        JOIN (
+            SELECT fund_key, MAX(report_date) AS max_date FROM fund_reports GROUP BY fund_key
+        ) latest ON fr.fund_key = latest.fund_key AND fr.report_date = latest.max_date
+        ORDER BY fm.fund_name
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    import html as _html
+
+    if not rows:
+        body = f"""<div class="fw-wrap"><style>{_FUND_CSS}</style>
+<div class="fw-empty">まだファンドレポートが取り込まれていません。月次バッチの実行をお待ちください。</div>
+</div>"""
+        return _page_html("ファンドウォッチ", body, active="funds")
+
+    # 複数ファンドで共通して組入れている銘柄を検出（示唆の核）
+    holdings_by_fund = {}
+    for fund_key, _n, _c, _d, hj, _e, _m, _s in rows:
+        try:
+            holdings_by_fund[fund_key] = _json.loads(hj) if hj else []
+        except Exception:
+            holdings_by_fund[fund_key] = []
+    code_to_funds = {}
+    code_to_name = {}
+    for fund_key, holdings in holdings_by_fund.items():
+        for h in holdings:
+            code = h.get("code")
+            if not code:
+                continue
+            code_to_funds.setdefault(code, set()).add(fund_key)
+            code_to_name[code] = h.get("name", code)
+    common = {c: funds for c, funds in code_to_funds.items() if len(funds) >= 2}
+
+    if common:
+        chips = "".join(
+            f'<span class="fw-common-chip"><a href="/stock/{c}" style="color:inherit;text-decoration:none">'
+            f'{_html.escape(code_to_name[c])}({c})</a> <b>{len(funds)}ファンドが保有</b></span>'
+            for c, funds in sorted(common.items(), key=lambda x: -len(x[1]))
+        )
+        common_html = f'<div class="fw-common-box"><div class="fw-common-title">複数ファンドが注目する銘柄</div>{chips}</div>'
+    else:
+        common_html = '<div class="fw-common-box"><div class="fw-common-title">複数ファンドが注目する銘柄</div><div class="fw-common-empty">今月は複数ファンドで共通する組入銘柄はありませんでした。</div></div>'
+
+    cards = []
+    for fund_key, fund_name, company, report_date, hj, ej, macro_view, strategy in rows:
+        holdings = holdings_by_fund.get(fund_key, [])
+        try:
+            extra = _json.loads(ej) if ej else []
+        except Exception:
+            extra = []
+
+        holding_html = []
+        for i, h in enumerate(holdings):
+            code = _html.escape(str(h.get("code", "")))
+            name = _html.escape(h.get("name", ""))
+            weight = h.get("weight_pct")
+            weight_txt = f"{weight:.1f}%" if isinstance(weight, (int, float)) else "—"
+            reason = h.get("reason")
+            box_id = f"fw_{fund_key}_{i}"
+            reason_toggle = f'<span class="fw-reason-toggle" onclick="fwToggleReason(\'{box_id}\')">詳細</span>' if reason else ""
+            holding_html.append(
+                f'<div class="fw-holding{" has-reason" if reason else ""}">'
+                f'<span class="rank">{i+1}</span>'
+                f'<span class="code">{code}</span>'
+                f'<a href="/stock/{code}" title="{name}">{name}</a>'
+                f'<span class="weight">{weight_txt}</span>{reason_toggle}</div>'
+            )
+            if reason:
+                holding_html.append(f'<div class="fw-reason-box" id="{box_id}">{_html.escape(reason)}</div>')
+
+        extra_html = ""
+        if extra:
+            items = "<br>".join(
+                f'<b><a href="/stock/{_html.escape(str(e.get("code","")))}" style="color:inherit">{_html.escape(e.get("name",""))}({_html.escape(str(e.get("code","")))})</a></b>: {_html.escape(e.get("reason",""))}'
+                for e in extra
+            )
+            extra_html = f'<div class="fw-extra-box">📌 組入上位圏外だが今月紹介された銘柄<br>{items}</div>'
+
+        cards.append(f"""
+<div class="fw-card">
+  <div class="fw-card-head">
+    <div><span class="fw-fund-name">{_html.escape(fund_name)}</span> <span class="fw-fund-company">{_html.escape(company or "")}</span></div>
+    <span class="fw-report-date">基準日: {report_date}</span>
+  </div>
+  <div class="fw-section-title">組入上位銘柄</div>
+  <div class="fw-holdings-grid">{"".join(holding_html)}</div>
+  {extra_html}
+  <div class="fw-section-title">マクロ環境・相場観</div>
+  <div class="fw-view-text">{_html.escape(macro_view or "—")}</div>
+  <div class="fw-section-title">今後の投資戦略</div>
+  <div class="fw-view-text">{_html.escape(strategy or "—")}</div>
+</div>""")
+
+    body = f"""<div class="fw-wrap">
+<style>{_FUND_CSS}</style>
+<div class="fw-intro">中小型・成長株ファンド等の月次運用レポートを毎月自動で取り込み、AIが「組入銘柄とその理由」「マクロ環境」「今後の投資戦略」を要約しています。レポート原文の著作権は各運用会社に帰属するため、全文は掲載せず要約のみを表示しています。</div>
+{common_html}
+{"".join(cards)}
+</div>
+<script>{_FUND_JS}</script>"""
+    return _page_html("ファンドウォッチ", body, active="funds")
 
 
 def _build_valuation_page() -> str:
@@ -5735,6 +5892,16 @@ def valuation():
     html = _get(key)
     if not html:
         html = _build_valuation_page()
+        _set(key, html)
+    return html
+
+
+@app.route("/funds")
+def funds():
+    key  = "funds_page"
+    html = _get(key)
+    if not html:
+        html = _build_funds_page()
         _set(key, html)
     return html
 
