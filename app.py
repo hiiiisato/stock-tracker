@@ -2274,14 +2274,20 @@ input.sc-range-input::-moz-range-thumb {
 .sc-bt-note { font-size:11px; color:#d29922; margin-bottom:8px; }
 .sc-bt-result { margin-top:6px; }
 .sc-bt-loading { color:#8b949e; font-size:13px; padding:16px; text-align:center; }
-.sc-bt-summary { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px; }
-.sc-bt-bench-row { margin-top:-4px; }
-.sc-bt-bench-row .sc-bt-stat { background:#131a24; border-color:#30363d; }
-.sc-bt-bench-row .lbl { color:#6e7681; }
+.sc-bt-summary { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:8px; }
 .sc-bt-stat { background:#0d1117; border:1px solid #21262d; border-radius:6px; padding:10px; text-align:center; }
 .sc-bt-stat .lbl { display:block; font-size:10px; color:#8b949e; margin-bottom:3px; }
 .sc-bt-stat .v { display:block; font-size:17px; font-weight:700; color:#e6edf3; }
 .sc-bt-stat .v.up { color:#3fb950; } .sc-bt-stat .v.dn { color:#f85149; }
+.sc-bt-vs { display:block; font-size:10px; margin-top:3px; font-weight:600; }
+.sc-bt-vs.up { color:#3fb950; } .sc-bt-vs.dn { color:#f85149; }
+/* 優位性バナー: 個人投資家が最初に見る結論（勝ち/負け） */
+.sc-bt-verdict { font-size:14px; font-weight:700; text-align:center; padding:12px 10px; border-radius:8px; margin-bottom:12px; }
+.sc-bt-verdict.up { background:#0d1f13; border:1px solid #2ea04355; color:#3fb950; }
+.sc-bt-verdict.dn { background:#2a1215; border:1px solid #f8514955; color:#f85149; }
+.sc-bt-verdict b { font-size:16px; }
+.sc-bt-verdict-sub { display:block; font-size:11px; font-weight:400; color:#8b949e; margin-top:4px; }
+.sc-bt-bench-note { font-size:11px; color:#6e7681; margin-bottom:10px; }
 .sc-bt-sub2 { font-size:11px; color:#8b949e; margin-bottom:10px; line-height:1.7; }
 .sc-bt-chart { background:#0d1117; border:1px solid #21262d; border-radius:6px; padding:6px; }
 .sc-bt-chart-title { font-size:11px; font-weight:600; color:#8b949e; margin:12px 0 4px; }
@@ -2312,6 +2318,9 @@ input.sc-range-input::-moz-range-thumb {
   .sc-bt-stat { padding:8px 4px; }
   .sc-bt-stat .v { font-size:15px; }
   .sc-bt-stat .lbl { font-size:9px; }
+  .sc-bt-vs { font-size:9px; }
+  .sc-bt-verdict { font-size:13px; padding:10px 8px; }
+  .sc-bt-verdict b { font-size:14px; }
 }
 """
 
@@ -4119,21 +4128,34 @@ def _build_screen_page() -> str:
     var excessAvg=hasBench?avg-bench:null;
     var excessMed=hasBench?med-bench:null;
     var winVsBench=hasBench?rs.filter(function(r){{return r>bench;}}).length/n*100:null;
-    function stat(lbl,val,cls){{ return '<div class="sc-bt-stat"><span class="lbl">'+lbl+'</span><span class="v '+(cls||'')+'">'+val+'</span></div>'; }}
+    function stat(lbl,val,cls,vs){{
+      return '<div class="sc-bt-stat"><span class="lbl">'+lbl+'</span><span class="v '+(cls||'')+'">'+val+'</span>'
+        + (vs?'<span class="sc-bt-vs">'+vs+'</span>':'') + '</div>';
+    }}
+    function vsBadge(diff){{
+      if(diff===null||diff===undefined) return '';
+      var cls=diff>=0?'up':'dn', arrow=diff>=0?'▲':'▼';
+      return '<span class="'+cls+'">'+arrow+' TOPIX比 '+(diff>=0?'+':'')+diff.toFixed(1)+'pt</span>';
+    }}
     var avgCls=avg>=0?'up':'dn';
-    var html='<div class="sc-bt-summary">'
-      + stat('平均リターン', btFmtPct(avg), avgCls)
-      + stat('中央値', btFmtPct(med), med>=0?'up':'dn')
-      + stat('勝率', win.toFixed(0)+'%', '')
+    var html='';
+    // 優位性バナー: 個人投資家が最初に見る「勝っているか負けているか」の結論
+    if(hasBench){{
+      var beat = excessAvg>=0;
+      html+='<div class="sc-bt-verdict '+(beat?'up':'dn')+'">'
+        + (beat?'この条件はTOPIXを <b>+'+excessAvg.toFixed(1)+'pt</b> 上回っています'
+               :'この条件はTOPIXを <b>'+excessAvg.toFixed(1)+'pt</b> 下回っています')
+        + '<span class="sc-bt-verdict-sub">('+winVsBench.toFixed(0)+'%の銘柄がTOPIXの騰落率を上回った)</span>'
+        + '</div>';
+    }}
+    html+='<div class="sc-bt-summary">'
+      + stat('平均リターン', btFmtPct(avg), avgCls, hasBench?vsBadge(excessAvg):null)
+      + stat('中央値', btFmtPct(med), med>=0?'up':'dn', hasBench?vsBadge(excessMed):null)
+      + stat('勝率', win.toFixed(0)+'%', '', hasBench?('対TOPIX '+winVsBench.toFixed(0)+'%'):null)
       + stat('対象銘柄', n+'銘柄', '')
       + '</div>';
     if(hasBench){{
-      html+='<div class="sc-bt-summary sc-bt-bench-row">'
-        + stat('TOPIX(ベンチマーク)', btFmtPct(bench), bench>=0?'up':'dn')
-        + stat('超過リターン(平均)', btFmtPct(excessAvg), excessAvg>=0?'up':'dn')
-        + stat('超過リターン(中央値)', btFmtPct(excessMed), excessMed>=0?'up':'dn')
-        + stat('対TOPIX勝率', winVsBench.toFixed(0)+'%', '')
-        + '</div>';
+      html+='<div class="sc-bt-bench-note">参考: TOPIX(ベンチマーク) '+btFmtPct(bench)+'</div>';
     }}
     html+='<div class="sc-bt-sub2">'
       + '最高: '+best.code+' '+btFmtPct(best.r)+' ／ 最低: '+worst.code+' '+btFmtPct(worst.r)
