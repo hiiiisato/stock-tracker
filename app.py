@@ -2275,12 +2275,30 @@ input.sc-range-input::-moz-range-thumb {
 .sc-bt-result { margin-top:6px; }
 .sc-bt-loading { color:#8b949e; font-size:13px; padding:16px; text-align:center; }
 .sc-bt-summary { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px; }
+.sc-bt-bench-row { margin-top:-4px; }
+.sc-bt-bench-row .sc-bt-stat { background:#131a24; border-color:#30363d; }
+.sc-bt-bench-row .lbl { color:#6e7681; }
 .sc-bt-stat { background:#0d1117; border:1px solid #21262d; border-radius:6px; padding:10px; text-align:center; }
 .sc-bt-stat .lbl { display:block; font-size:10px; color:#8b949e; margin-bottom:3px; }
 .sc-bt-stat .v { display:block; font-size:17px; font-weight:700; color:#e6edf3; }
 .sc-bt-stat .v.up { color:#3fb950; } .sc-bt-stat .v.dn { color:#f85149; }
 .sc-bt-sub2 { font-size:11px; color:#8b949e; margin-bottom:10px; line-height:1.7; }
 .sc-bt-chart { background:#0d1117; border:1px solid #21262d; border-radius:6px; padding:6px; }
+.sc-bt-list-title { font-size:12px; font-weight:600; color:#8b949e; margin:16px 0 8px; display:flex; align-items:center; justify-content:space-between; }
+.sc-bt-list-wrap { max-height:420px; overflow-y:auto; border:1px solid #21262d; border-radius:6px; }
+.sc-bt-table { width:100%; border-collapse:collapse; font-size:13px; }
+.sc-bt-table th { position:sticky; top:0; background:#161b22; color:#8b949e; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; padding:7px 10px; border-bottom:1px solid #30363d; white-space:nowrap; cursor:pointer; user-select:none; z-index:1; }
+.sc-bt-table th:hover { color:#c9d1d9; }
+.sc-bt-table th.sort-asc::after { content:' ↑'; color:#58a6ff; }
+.sc-bt-table th.sort-desc::after { content:' ↓'; color:#58a6ff; }
+.sc-bt-table td { padding:6px 10px; border-bottom:1px solid #21262d; white-space:nowrap; }
+.sc-bt-table tbody tr:hover { background:#1c2128; }
+.sc-bt-table .code { font-family:monospace; color:#8b949e; font-size:12px; }
+.sc-bt-table .name a { color:#e6edf3; text-decoration:none; }
+.sc-bt-table .name a:hover { color:#58a6ff; }
+.sc-bt-table .ret { text-align:right; font-variant-numeric:tabular-nums; font-weight:600; }
+.sc-bt-table .ret.up { color:#3fb950; } .sc-bt-table .ret.dn { color:#f85149; }
+.sc-bt-table .delisted-tag { font-size:10px; color:#d29922; margin-left:6px; }
 @media (max-width:768px){ .sc-bt-summary { grid-template-columns:repeat(2,1fr); } }
 """
 
@@ -3983,6 +4001,8 @@ def _build_screen_page() -> str:
 
   /* ── バックテスト ── */
   var btDatesLoaded=false;
+  var btLastVals=[];       // 直近実行結果（銘柄別）。ソート再描画に使う。DOMではなくJS変数で保持。
+  var btSortCol='r', btSortDir=-1;
   function btFmtPct(v){{ if(v===null||v===undefined) return '—'; return (v>=0?'+':'')+v.toFixed(1)+'%'; }}
   function initBacktest(){{
     var toggle=document.getElementById('scBtToggle');
@@ -4042,8 +4062,9 @@ def _build_screen_page() -> str:
       matched.forEach(function(s){{
         var r=rets[s.code];
         if(r===undefined||r===null) return;
-        vals.push({{code:s.code, name:s.name, r:r}});
-        if(delSet[s.code]) delN++;
+        var delisted=!!delSet[s.code];
+        vals.push({{code:s.code, name:s.name, r:r, delisted:delisted}});
+        if(delisted) delN++;
         if(best===null||r>best.r) best={{code:s.code,name:s.name,r:r}};
         if(worst===null||r<worst.r) worst={{code:s.code,name:s.name,r:r}};
       }});
@@ -4063,7 +4084,10 @@ def _build_screen_page() -> str:
     var avg=rs.reduce(function(a,b){{return a+b;}},0)/n;
     var med=n%2?rs[(n-1)/2]:(rs[n/2-1]+rs[n/2])/2;
     var win=rs.filter(function(r){{return r>0;}}).length/n*100;
-    var excess=(bench!==null&&bench!==undefined)?avg-bench:null;
+    var hasBench=(bench!==null&&bench!==undefined);
+    var excessAvg=hasBench?avg-bench:null;
+    var excessMed=hasBench?med-bench:null;
+    var winVsBench=hasBench?rs.filter(function(r){{return r>bench;}}).length/n*100:null;
     function stat(lbl,val,cls){{ return '<div class="sc-bt-stat"><span class="lbl">'+lbl+'</span><span class="v '+(cls||'')+'">'+val+'</span></div>'; }}
     var avgCls=avg>=0?'up':'dn';
     var html='<div class="sc-bt-summary">'
@@ -4072,14 +4096,27 @@ def _build_screen_page() -> str:
       + stat('勝率', win.toFixed(0)+'%', '')
       + stat('対象銘柄', n+'銘柄', '')
       + '</div>';
+    if(hasBench){{
+      html+='<div class="sc-bt-summary sc-bt-bench-row">'
+        + stat('TOPIX(ベンチマーク)', btFmtPct(bench), bench>=0?'up':'dn')
+        + stat('超過リターン(平均)', btFmtPct(excessAvg), excessAvg>=0?'up':'dn')
+        + stat('超過リターン(中央値)', btFmtPct(excessMed), excessMed>=0?'up':'dn')
+        + stat('対TOPIX勝率', winVsBench.toFixed(0)+'%', '')
+        + '</div>';
+    }}
     html+='<div class="sc-bt-sub2">'
-      + 'ベンチマーク(TOPIX): <b>'+btFmtPct(bench)+'</b>'
-      + (excess!==null?' ／ 超過リターン: <b class="'+(excess>=0?'sc-flag-on':'')+'" style="color:'+(excess>=0?'#3fb950':'#f85149')+'">'+btFmtPct(excess)+'</b>':'')
-      + '<br>最高: '+best.code+' '+btFmtPct(best.r)+' ／ 最低: '+worst.code+' '+btFmtPct(worst.r)
+      + '最高: '+best.code+' '+btFmtPct(best.r)+' ／ 最低: '+worst.code+' '+btFmtPct(worst.r)
       + (delN>0?' ／ うち上場廃止 '+delN+'銘柄（最終値で算入）':'')
       + '<br><span style="color:#484f58">期間: '+(d1)+' → '+(d2)+'（合致'+matchedN+'銘柄中'+n+'銘柄で株価取得）</span>'
       + '</div>';
     html+='<div class="sc-bt-chart" id="scBtChart" style="height:220px"></div>';
+    html+='<div class="sc-bt-list-title"><span>銘柄別成績（'+n+'銘柄）</span><span style="color:#484f58;font-weight:400">列見出しクリックで並び替え</span></div>';
+    html+='<div class="sc-bt-list-wrap"><table class="sc-bt-table" id="scBtTable">'
+      + '<thead><tr>'
+      +   '<th data-col="code">コード</th>'
+      +   '<th data-col="name">銘柄名</th>'
+      +   '<th data-col="r">リターン</th>'
+      + '</tr></thead><tbody id="scBtTbody"></tbody></table></div>';
     res.innerHTML=html;
     // 分布ヒストグラム
     try{{
@@ -4093,6 +4130,43 @@ def _build_screen_page() -> str:
         shapes:[{{type:'line', x0:0,x1:0,y0:0,y1:1,yref:'paper', line:{{color:'#8b949e',width:1,dash:'dot'}}}}]
       }}, {{responsive:true, displayModeBar:false}});
     }}catch(e){{}}
+    // 銘柄別成績テーブル
+    btLastVals=vals;
+    btSortCol='r'; btSortDir=-1;
+    renderBtTable();
+    document.querySelectorAll('#scBtTable th').forEach(function(th){{
+      th.addEventListener('click', function(){{
+        var col=th.dataset.col;
+        if(btSortCol===col) btSortDir=-btSortDir;
+        else {{ btSortCol=col; btSortDir=(col==='r')?-1:1; }}
+        renderBtTable();
+      }});
+    }});
+  }}
+  function _escBtName(s){{ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+  function renderBtTable(){{
+    var tbody=document.getElementById('scBtTbody');
+    if(!tbody) return;
+    var col=btSortCol, dir=btSortDir;
+    var sorted=btLastVals.slice().sort(function(a,b){{
+      var av=a[col], bv=b[col];
+      if(col==='r') return dir*((av||0)-(bv||0));
+      av=(av||'').toString(); bv=(bv||'').toString();
+      return dir*(av<bv?-1:(av>bv?1:0));
+    }});
+    tbody.innerHTML=sorted.map(function(v){{
+      var cls=v.r>=0?'up':'dn';
+      return '<tr>'
+        + '<td class="code">'+v.code+'</td>'
+        + '<td class="name"><a href="/stock/'+v.code+'" target="_blank">'+_escBtName(v.name)+'</a>'
+          + (v.delisted?'<span class="delisted-tag">廃止</span>':'') + '</td>'
+        + '<td class="ret '+cls+'">'+btFmtPct(v.r)+'</td>'
+        + '</tr>';
+    }}).join('');
+    document.querySelectorAll('#scBtTable th').forEach(function(th){{
+      th.classList.remove('sort-asc','sort-desc');
+      if(th.dataset.col===col) th.classList.add(dir>0?'sort-asc':'sort-desc');
+    }});
   }}
   initBacktest();
 

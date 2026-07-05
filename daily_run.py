@@ -25,35 +25,6 @@ from market_indices import fetch_and_store as update_market_indices, ensure_tabl
 from research_strategy import RESEARCH_THRESHOLD_PCT
 
 
-def _detect_split_candidates(target_date: date) -> list[str]:
-    """
-    当日の前日比 -30% 未満（生close比較）の銘柄を株式分割候補として返す。
-    split_backfill.run_for_codes() のインプットになる。
-    """
-    conn = get_conn()
-    cur  = conn.cursor()
-    # 前日の最新日（取引日）を取得して、今日との生close比を計算
-    cur.execute("""
-        SELECT today.code
-        FROM daily_prices today
-        JOIN daily_prices prev
-          ON today.code = prev.code
-         AND prev.date = (
-               SELECT MAX(d.date) FROM daily_prices d
-               WHERE d.code = today.code AND d.date < %s
-             )
-        WHERE today.date = %s
-          AND today.close IS NOT NULL
-          AND prev.close IS NOT NULL
-          AND prev.close > 0
-          AND today.close / prev.close < 0.70
-    """, (target_date, target_date))
-    codes = [r[0] for r in cur.fetchall()]
-    cur.close()
-    conn.close()
-    return codes
-
-
 def _log(fetch_type: str, status: str, rows: int = 0, error: str = None):
     """ログを記録する。毎回新しい接続を使い、長時間処理後の接続切れを防ぐ。"""
     try:
@@ -131,23 +102,20 @@ def run(init: bool = False, rankings_only: bool = False):
             traceback.print_exc()
             _log("prices", "failed", error=str(e))
 
-    # 3.5. 株式分割 自動検知・バックフィル
+    # 3.5. 株式分割・併合 対応（JPX公式 J-Quants ベース）
+    #   - 直近窓の新規分割を Yahoo splits で暫定検知し、該当銘柄の adj_close を再計算。
+    #   - 週次で J-Quants 公式(AdjC)に同期して確定・上書き（splits.run_daily 内は日次の暫定のみ）。
+    #   価格急変ヒューリスティックは値幅制限撤廃等で誤判定するため廃止。
     if not rankings_only:
-        print("\n[分割検知] 前日比 -30% 未満の銘柄を確認中...")
+        print("\n[分割対応] 直近窓の新規分割を確認中（J-Quants/Yahoo）...")
         try:
-            from split_backfill import run_for_codes as split_backfill_codes
-            target_date = date.today()
-            split_candidates = _detect_split_candidates(target_date)
-            if split_candidates:
-                print(f"  分割候補: {split_candidates}")
-                n_split = split_backfill_codes(split_candidates)
-                _log("split_auto_backfill", "done", len(split_candidates))
-            else:
-                print("  分割候補なし。")
+            from splits import run_daily as splits_run_daily
+            n_changed = splits_run_daily()
+            _log("splits_daily", "done", n_changed)
         except Exception as e:
             print(f"  エラー: {e}")
             traceback.print_exc()
-            _log("split_auto_backfill", "failed", error=str(e))
+            _log("splits_daily", "failed", error=str(e))
 
     # 4. 配当・財務・ファンダメンタルズ更新（毎週月曜のみ）
     if datetime.now().weekday() == 0 and not rankings_only:
