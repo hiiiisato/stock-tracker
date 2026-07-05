@@ -24,6 +24,7 @@ import sys
 import json
 import time
 from datetime import date, datetime
+from urllib.parse import urljoin
 
 import requests
 from dotenv import load_dotenv
@@ -35,19 +36,25 @@ load_dotenv()
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = "gemini-2.5-flash"
 PDF_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-PAGES_TO_USE = 4  # レポート冒頭何ページ分をGeminiに渡すか（組入銘柄〜銘柄紹介まで）
+PAGES_TO_USE = 4  # レポート冒頭何ページ分をGeminiに渡すか（url_mode=template のデフォルト。page_range指定時は無視）
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ファンドマスタ（Phase1: SBI系2ファンドのみ。追加は fund_master に INSERT するだけ）
+# ファンドマスタ（追加は fund_master に INSERT するだけ、ではなく FUND_DEFS に追記）
 # ─────────────────────────────────────────────────────────────────────────────
-# url_template は {yymm} (例: 2607) を埋め込んで月次PDFのURLを組み立てる。
-# 運用会社ごとにサイト構造が異なるため、ファンド追加時はこのパターン調査が必要。
+# url_mode:
+#   "template" : url_template の {yymm} (例: 2607) を埋め込んで直近数ヶ月のURLを順に試行（SBI系）
+#   "scrape"   : report_page_url を取得し、pdf_pattern に一致する最新リンクを抽出（結い2101等、
+#                PDFファイル名が規則的でなくURL予測できないファンド向け）
+# page_range: Geminiに渡すページ範囲 (start, end) 0-indexで [start, end)。
+#             未指定ならtemplateモードは先頭 PAGES_TO_USE ページを使う。
+#             レイアウトが崩れて文字化けする表紙ページ等はここで除外する。
 FUND_DEFS = [
     {
         "fund_key": "jnext",
         "fund_name": "SBI中小型成長株ファンド ジェイネクスト",
         "company": "SBIアセットマネジメント",
+        "url_mode": "template",
         "report_page_url": "https://www.sbiam.co.jp/fund/report/sa_2005020103.html",
         "url_template": "https://www.sbiam.co.jp/fund/pdf/89311052_jnext_mr_{yymm}.pdf",
     },
@@ -55,8 +62,46 @@ FUND_DEFS = [
         "fund_key": "jrevive",
         "fund_name": "SBI中小型割安成長株ファンド ジェイリバイブ",
         "company": "SBIアセットマネジメント",
+        "url_mode": "template",
         "report_page_url": "https://www.sbiam.co.jp/fund/report/sa_2006073104.html",
         "url_template": "https://www.sbiam.co.jp/fund/pdf/89311067_jrevive_mr_{yymm}.pdf",
+    },
+    {
+        "fund_key": "yui2101",
+        "fund_name": "結い2101",
+        "company": "鎌倉投信",
+        "url_mode": "scrape",
+        "report_page_url": "https://www.kamakuraim.jp/about-yui2101/monthly-report/",
+        "pdf_pattern": r"_files/[\w\-]+/yuidayori\d{6}\.pdf",
+        "page_range": (1, 6),  # 表紙(縦書きで文字化け)を除いた2〜6ページ目。組入上位10銘柄・市況解説を含む
+    },
+    {
+        "fund_key": "obune_japan",
+        "fund_name": "農林中金〈パートナーズ〉おおぶねJAPAN",
+        "company": "農林中金バリューインベストメンツ",
+        "url_mode": "template",
+        "report_page_url": "https://www.nvic.co.jp/fund/obune_japan/",
+        # {yymm}=対象期間、{uy4}/{um2}=公開月(期間の翌月)。例: 2026年5月分は2026/06にuploadされる。
+        "url_template": "https://www.nvic.co.jp/wp/wp-content/uploads/{uy4}/{um2}/id200001_report1_{yymm}.pdf",
+        "page_range": (3, 7),  # 運用実績・組入資産の状況(組入上位10銘柄)・CIOコメント・当月の運用コメント(市況動向)
+    },
+    {
+        "fund_key": "senko_japan",
+        "fund_name": "厳選ジャパン",
+        "company": "アセットマネジメントOne",
+        "url_mode": "direct",  # 固定URLが常に最新月のPDFを指す（日付を含まない）
+        "report_page_url": "https://www.am-one.co.jp/fund/summary/118591/",
+        "pdf_url": "https://www.am-one.co.jp/fund/pdf/118591/118591_mr.pdf",
+        "page_range": (0, 3),  # 運用実績・組入上位10銘柄・マーケット動向とファンドの動き/今後の見通し
+    },
+    {
+        "fund_key": "saikou",
+        "fund_name": "fundnoteTOB企業価値ジャッジファンド（匠のファンド さいこう）",
+        "company": "fundnote",
+        "url_mode": "template",
+        "report_page_url": "https://www.fundnote.co.jp/fund/saikou/",
+        "url_template": "https://www.fundnote.co.jp/wp-content/uploads/fund-reports/fund_saikou_report_{y4}_{m2}.pdf",
+        "page_range": (0, 2),  # 市場動向・運用状況・見通し(p1)、組入上位10銘柄+個別コメント(p2)
     },
 ]
 
@@ -100,7 +145,7 @@ def sync_fund_master():
     """FUND_DEFS を fund_master に反映（新規追加・URL更新）。"""
     ensure_tables()
     conn = get_conn(); cur = conn.cursor()
-    rows = [(f["fund_key"], f["fund_name"], f["company"], f["report_page_url"], f["url_template"])
+    rows = [(f["fund_key"], f["fund_name"], f["company"], f["report_page_url"], f.get("url_template", ""))
             for f in FUND_DEFS]
     bulk_upsert(cur, "fund_master",
                 ["fund_key", "fund_name", "company", "report_page_url", "url_template"],
@@ -110,21 +155,25 @@ def sync_fund_master():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PDF取得（URLパターンから直近数ヶ月を試行）
+# PDF取得
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _try_fetch_pdf(url_template: str, yymm: str) -> bytes | None:
-    url = url_template.format(yymm=yymm)
+def _try_fetch_pdf(url_template: str, yy: int, mm: int) -> bytes | None:
+    # yymm = 対象期間の2桁年月(例: 2605)。y4/m2 = 対象期間の4桁年/2桁月(例: 2026/05、fundnote等)。
+    # uy4/um2 = 公開月(期間の翌月、例: 2026/06、NVIC等)。テンプレートに無いプレースホルダは無視される。
+    uy, um = (yy, mm + 1) if mm < 12 else (yy + 1, 1)
+    yymm = f"{yy % 100:02d}{mm:02d}"
+    url = url_template.format(yymm=yymm, y4=f"{yy:04d}", m2=f"{mm:02d}", uy4=f"{uy:04d}", um2=f"{um:02d}")
     try:
         r = requests.get(url, headers=PDF_HEADERS, timeout=20)
         if r.status_code == 200 and r.content[:4] == b"%PDF":
-            return r.content
+            return r.content, url
     except Exception:
         pass
     return None
 
 
-def find_latest_report_pdf(url_template: str, months_back: int = 3) -> tuple[bytes, str, date] | None:
+def _find_latest_report_pdf_by_template(url_template: str, months_back: int = 3) -> tuple[bytes, str, date] | None:
     """直近 months_back ヶ月分を新しい順に試し、最初に見つかったPDFを返す。
     戻り値: (pdf_bytes, url, report_date(月末近似)) または None。"""
     today = date.today()
@@ -135,26 +184,78 @@ def find_latest_report_pdf(url_template: str, months_back: int = 3) -> tuple[byt
         while mm <= 0:
             mm += 12
             yy -= 1
-        yymm = f"{yy % 100:02d}{mm:02d}"
-        content = _try_fetch_pdf(url_template, yymm)
-        if content:
-            url = url_template.format(yymm=yymm)
+        found = _try_fetch_pdf(url_template, yy, mm)
+        if found:
+            content, url = found
             # report_date は月末近似（正確な基準日はPDF本文からGeminiが抽出する）
             rd = date(yy, mm, 1)
             return content, url, rd
     return None
 
 
+def _find_latest_report_pdf_by_scrape(page_url: str, pdf_pattern: str) -> tuple[bytes, str, date] | None:
+    """一覧ページのHTMLを取得し、pdf_pattern に一致する最初の(最新の)リンクを辿る。
+    <base href> があればそれを起点に相対パスを解決する（無ければ page_url 自体を起点にする）。"""
+    try:
+        r = requests.get(page_url, headers=PDF_HEADERS, timeout=20)
+        r.raise_for_status()
+        html = r.text
+    except Exception:
+        return None
+
+    m = re.search(pdf_pattern, html)
+    if not m:
+        return None
+
+    base_m = re.search(r'<base\s+href=["\']([^"\']+)["\']', html, re.I)
+    base = base_m.group(1) if base_m else page_url
+    pdf_url = urljoin(base, m.group(0))
+
+    try:
+        rp = requests.get(pdf_url, headers=PDF_HEADERS, timeout=20)
+        if rp.status_code == 200 and rp.content[:4] == b"%PDF":
+            return rp.content, pdf_url, date.today().replace(day=1)
+    except Exception:
+        pass
+    return None
+
+
+def _find_latest_report_pdf_direct(pdf_url: str) -> tuple[bytes, str, date] | None:
+    """固定URLが常に最新の月次レポートを指すサイト向け（URL自体に日付が入らない）。"""
+    try:
+        r = requests.get(pdf_url, headers=PDF_HEADERS, timeout=20)
+        if r.status_code == 200 and r.content[:4] == b"%PDF":
+            return r.content, pdf_url, date.today().replace(day=1)
+    except Exception:
+        pass
+    return None
+
+
+def find_latest_report_pdf(fund: dict, months_back: int = 3) -> tuple[bytes, str, date] | None:
+    mode = fund.get("url_mode", "template")
+    if mode == "scrape":
+        return _find_latest_report_pdf_by_scrape(fund["report_page_url"], fund["pdf_pattern"])
+    if mode == "direct":
+        return _find_latest_report_pdf_direct(fund["pdf_url"])
+    return _find_latest_report_pdf_by_template(fund["url_template"], months_back)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PDFテキスト抽出
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _extract_pdf_text(pdf_bytes: bytes, max_pages: int = PAGES_TO_USE) -> str:
+def _extract_pdf_text(pdf_bytes: bytes, page_range: tuple[int, int] | None = None,
+                       max_pages: int = PAGES_TO_USE) -> str:
     import io
     import pdfplumber
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        n = min(max_pages, len(pdf.pages))
-        texts = [pdf.pages[i].extract_text() or "" for i in range(n)]
+        n_total = len(pdf.pages)
+        if page_range:
+            start, end = page_range
+            idxs = range(max(0, start), min(end, n_total))
+        else:
+            idxs = range(min(max_pages, n_total))
+        texts = [pdf.pages[i].extract_text() or "" for i in idxs]
     return "\n\n".join(texts)
 
 
@@ -167,24 +268,26 @@ def _build_prompt(fund_name: str, report_text: str) -> str:
 このテキストから、個人投資家向けの示唆を以下のJSON形式で抽出してください。
 
 重要な注意点:
-- 「組入銘柄のご紹介」等の見出しで個別銘柄が紹介されている場合、そこに明記されている銘柄名・証券コードを一字一句そのまま転記すること。他の銘柄と混同しないこと。紹介されている銘柄が複数あれば全て拾うこと。
-- その銘柄が「組入上位10銘柄」の一覧にも含まれる場合は、その銘柄のreasonフィールドに紹介文の内容を要約して入れる。含まれない場合(圏外の銘柄)はholdings配列には追加せず、別途extra_mentioned_stocks配列に入れる。
+- 「組入上位10銘柄」等の一覧表がある場合、そこに明記された証券コード・銘柄名・比率(weight_pct)を一字一句正確に転記すること。
+- 「組入銘柄のご紹介」「投資先の「いい会社」紹介」等の特集記事コーナーで個別銘柄が深く紹介されている場合、その銘柄名・証券コード(記載があれば)を正確に拾うこと。複数あれば全て拾うこと。
+- 特集記事で紹介された銘柄が「組入上位10銘柄」の一覧にも含まれる場合、その銘柄のreasonフィールドには一覧表の短い説明ではなく特集記事本文の要約を優先して入れる。一覧に含まれない場合(圏外の銘柄)はholdings配列には追加せず、別途extra_mentioned_stocks配列に入れる。証券コードが本文になければcodeはnullにする。
 - 数値や固有名詞を創作しないこと。テキストに書かれていないことは書かない。
+- ファンドによっては「当月の市場動向・マクロ環境」を独立した見出しで解説しない場合がある。その場合でも基準価額の増減理由や個別銘柄の株価変動理由などから市場環境に関する記述が読み取れればそれを要約する。全く読み取れない場合のみmacro_viewを空文字列にする。
 
 出力形式(JSON):
 {{
   "report_date": "レポートの基準日(YYYY-MM-DD形式)",
   "holdings": [
-    {{"code": "証券コード", "name": "銘柄名", "weight_pct": 比率(数値), "reason": "紹介コーナーでの言及があればその要約。無ければnull"}}
+    {{"code": "証券コード", "name": "銘柄名", "weight_pct": 比率(数値、無ければnull), "reason": "紹介コーナーでの言及があればその要約。無ければnull"}}
   ],
   "extra_mentioned_stocks": [
-    {{"code": "証券コード", "name": "銘柄名", "reason": "要約"}}
+    {{"code": "証券コードまたはnull", "name": "銘柄名", "reason": "要約"}}
   ],
-  "macro_view": "当月の市場動向・マクロ環境の要約(200字程度)",
+  "macro_view": "当月の市場動向・マクロ環境の要約(200字程度、無ければ空文字列)",
   "strategy": "今後の投資戦略・銘柄選別方針の要約(150字程度)"
 }}
 
-組入銘柄は上位10銘柄をすべて含めてください。extra_mentioned_stocksは無ければ空配列[]にしてください。
+組入銘柄の一覧表がある場合はそこに載っている銘柄をすべて含めてください。extra_mentioned_stocksは無ければ空配列[]にしてください。
 JSON以外の文字は一切出力しないでください。
 
 --- レポート本文 ---
@@ -210,14 +313,15 @@ def _call_gemini(prompt: str) -> dict | None:
 # 1ファンド処理
 # ─────────────────────────────────────────────────────────────────────────────
 
-def process_fund(fund_key: str, fund_name: str, url_template: str, force: bool = False) -> str:
+def process_fund(fund: dict, force: bool = False) -> str:
     """最新レポートを取得・解析・保存する。戻り値は状態文字列。"""
-    found = find_latest_report_pdf(url_template)
+    fund_key, fund_name = fund["fund_key"], fund["fund_name"]
+    found = find_latest_report_pdf(fund)
     if not found:
         return "not_found"
     pdf_bytes, pdf_url, _approx_date = found
 
-    text = _extract_pdf_text(pdf_bytes)
+    text = _extract_pdf_text(pdf_bytes, page_range=fund.get("page_range"))
     if not text.strip():
         return "no_text"
 
@@ -269,7 +373,7 @@ def run(target_key: str | None = None, force: bool = False):
     results = {}
     for f in targets:
         print(f"  [{f['fund_key']}] {f['fund_name']} を確認中...")
-        status = process_fund(f["fund_key"], f["fund_name"], f["url_template"], force=force)
+        status = process_fund(f, force=force)
         results[f["fund_key"]] = status
         print(f"    → {status}")
         time.sleep(5)  # Gemini無料枠 RPM対策

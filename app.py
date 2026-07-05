@@ -3008,18 +3008,20 @@ def _build_funds_page() -> str:
 
         holding_html = []
         for i, h in enumerate(holdings):
-            code = _html.escape(str(h.get("code", "")))
+            code = h.get("code") or ""
+            code_esc = _html.escape(str(code))
             name = _html.escape(h.get("name", ""))
             weight = h.get("weight_pct")
             weight_txt = f"{weight:.1f}%" if isinstance(weight, (int, float)) else "—"
             reason = h.get("reason")
             box_id = f"fw_{fund_key}_{i}"
             reason_toggle = f'<span class="fw-reason-toggle" onclick="fwToggleReason(\'{box_id}\')">詳細</span>' if reason else ""
+            name_html = f'<a href="/stock/{code_esc}" title="{name}">{name}</a>' if code else f'<span title="{name}">{name}</span>'
             holding_html.append(
                 f'<div class="fw-holding{" has-reason" if reason else ""}">'
                 f'<span class="rank">{i+1}</span>'
-                f'<span class="code">{code}</span>'
-                f'<a href="/stock/{code}" title="{name}">{name}</a>'
+                f'<span class="code">{code_esc}</span>'
+                f'{name_html}'
                 f'<span class="weight">{weight_txt}</span>{reason_toggle}</div>'
             )
             if reason:
@@ -3027,10 +3029,13 @@ def _build_funds_page() -> str:
 
         extra_html = ""
         if extra:
-            items = "<br>".join(
-                f'<b><a href="/stock/{_html.escape(str(e.get("code","")))}" style="color:inherit">{_html.escape(e.get("name",""))}({_html.escape(str(e.get("code","")))})</a></b>: {_html.escape(e.get("reason",""))}'
-                for e in extra
-            )
+            def _extra_item(e):
+                code = e.get("code") or ""
+                name = _html.escape(e.get("name", ""))
+                label = f'{name}({_html.escape(str(code))})' if code else name
+                title = f'<a href="/stock/{_html.escape(str(code))}" style="color:inherit">{label}</a>' if code else label
+                return f'<b>{title}</b>: {_html.escape(e.get("reason",""))}'
+            items = "<br>".join(_extra_item(e) for e in extra)
             extra_html = f'<div class="fw-extra-box">📌 組入上位圏外だが今月紹介された銘柄<br>{items}</div>'
 
         cards.append(f"""
