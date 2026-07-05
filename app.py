@@ -2586,6 +2586,9 @@ _VALUATION_CSS = """
 .val-ng { color:#f85149; font-weight:700; }
 
 .val-proj-title { font-size:12px; font-weight:600; color:#8b949e; margin-bottom:8px; }
+.val-growth-note { font-size:12px; color:#c9d1d9; background:#0d1117; border:1px solid #21262d; border-radius:6px; padding:8px 10px; margin-bottom:14px; }
+.val-growth-note b { color:#58a6ff; }
+.val-growth-help { display:block; font-size:10px; color:#6e7681; margin-top:3px; }
 .val-table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
 .val-table { width:100%; border-collapse:collapse; font-size:13px; }
 .val-table th { text-align:right; color:#8b949e; font-weight:600; font-size:11px; padding:6px 8px; border-bottom:1px solid #30363d; white-space:nowrap; }
@@ -2694,8 +2697,11 @@ function renderCalc(d){
 
   var projRows = (d.projection||[]).map(function(p){
     var lbl = p.year===0 ? '現在' : (p.year+'年後');
-    return '<tr><td>'+lbl+'</td><td class="val-num">'+_fmt(p.eps,0)+'</td><td class="val-num">'+_fmt(p.bps,0)+'</td><td class="val-num">'+_fmt(p.theoretical,0)+'</td><td class="val-num">'+_fmt(p.upper,0)+'</td></tr>';
+    var g = p.year===0 ? '—' : ((p.growth>=0?'+':'')+Number(p.growth).toFixed(1)+'%');
+    return '<tr><td>'+lbl+'</td><td class="val-num">'+g+'</td><td class="val-num">'+_fmt(p.eps,0)+'</td><td class="val-num">'+_fmt(p.bps,0)+'</td><td class="val-num">'+_fmt(p.theoretical,0)+'</td><td class="val-num">'+_fmt(p.upper,0)+'</td></tr>';
   }).join('');
+  var GROWTH_LABEL = {blend:'予想→過去3年平均', forecast:'会社予想', cagr3y:'過去3年平均', yoy:'前年比', none:'横ばい(データ不足)'};
+  var gBasis = GROWTH_LABEL[d.growth_basis] || d.growth_basis || '—';
 
   return ''
     + '<div class="val-hero">'
@@ -2707,16 +2713,19 @@ function renderCalc(d){
     +   _cell('資産価値', _fmt(d.asset_value,0)+'円')
     +   _cell('事業価値', _fmt(d.business_value,0)+'円')
     +   _cell('事業価値比率', d.biz_ratio!=null ? (d.biz_ratio*100).toFixed(0)+'%' : '—')
+    +   _cell('想定フェアPER', d.fair_per!=null ? Number(d.fair_per).toFixed(1)+'倍' : '—')
     +   _cell('EPS(採用)', _fmt(d.eps,0)+'円')
     +   _cell('BPS', _fmt(d.bps,0)+'円')
     +   _cell('PBR', d.pbr!=null ? Number(d.pbr).toFixed(2)+'倍' : '—')
     +   _cell('ROA', d.roa!=null ? (d.roa*100).toFixed(1)+'%' : '—')
     +   _cell('自己資本比率', d.equity_ratio!=null ? Number(d.equity_ratio).toFixed(1)+'%' : '—')
-    +   _cell('経常増益率', _pct(d.ord_growth))
     + '</div>'
+    + '<div class="val-growth-note">📈 成長率の前提: <b>'+gBasis+'</b>'
+    +   '（1年目 '+_pct(d.growth_y1)+' → 長期 '+_pct(d.growth_lr)+'）'
+    +   '<span class="val-growth-help">1年目は会社予想、以降は過去3年平均へ徐々に回帰させて試算</span></div>'
     + '<div class="val-judge"><div class="val-judge-title">投資判断（'+(d.pass_all?'<span class="val-ok">オールクリア ○</span>':'一部未達')+'）</div>'+judgeHtml+'</div>'
-    + '<div><div class="val-proj-title">5年推移シミュレーション（経常増益率 '+_pct(d.ord_growth)+' 前提）</div>'
-    +   '<div class="val-table-scroll"><table class="val-table"><thead><tr><th>経過</th><th>EPS</th><th>BPS</th><th>理論株価</th><th>上限株価</th></tr></thead><tbody>'+projRows+'</tbody></table></div></div>';
+    + '<div><div class="val-proj-title">5年推移シミュレーション</div>'
+    +   '<div class="val-table-scroll"><table class="val-table"><thead><tr><th>経過</th><th>成長率</th><th>EPS</th><th>BPS</th><th>理論株価</th><th>上限株価</th></tr></thead><tbody>'+projRows+'</tbody></table></div></div>';
 }
 
 function _cell(lbl, v){ return '<div class="val-cell"><span class="lbl">'+lbl+'</span><span class="v">'+v+'</span></div>'; }
