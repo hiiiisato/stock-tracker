@@ -225,6 +225,19 @@ def run(init: bool = False, rankings_only: bool = False):
             print(f"  エラー: {e}")
             _log("theoretical_values", "failed", error=str(e))
 
+    # バックテスト用の週次スナップショット（直近週）を追記
+    # price_stats_history に当週の全指標(PIT補正済)を upsert。過去分は
+    # compute_stats_history.py --backfill で一度だけ生成済み。
+    if not rankings_only:
+        print("\n[週次スナップショット] バックテスト用 price_stats_history を追記中...")
+        try:
+            from compute_stats_history import run as compute_stats_history
+            n = compute_stats_history(latest_only=True)
+            _log("price_stats_history", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("price_stats_history", "failed", error=str(e))
+
     # スイングトレード候補のスコアリング → DB 保存 → LINE 通知
     if not rankings_only:
         print("\n[スイング] 候補スコアリング & DB 保存 & LINE 通知...")

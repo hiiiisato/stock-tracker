@@ -2256,6 +2256,32 @@ input.sc-range-input::-moz-range-thumb {
   .sc-table th, .sc-table td { padding:6px 6px; }
   .cg-grid { grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); }
 }
+
+/* ── バックテスト ── */
+.sc-backtest { background:#161b22; border:1px solid #30363d; border-radius:8px; margin-bottom:8px; overflow:hidden; }
+.sc-bt-head { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; cursor:pointer; font-size:14px; font-weight:600; color:#e6edf3; user-select:none; }
+.sc-bt-head:hover { background:#1c2128; }
+.sc-bt-sub { font-size:11px; font-weight:400; color:#8b949e; margin-left:6px; }
+.sc-bt-caret { color:#8b949e; font-size:11px; transition:transform 0.15s; }
+.sc-bt-caret.open { transform:rotate(180deg); }
+.sc-bt-body { padding:0 14px 14px; border-top:1px solid #21262d; }
+.sc-bt-controls { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin:12px 0; }
+.sc-bt-lbl { display:flex; flex-direction:column; gap:3px; font-size:11px; color:#8b949e; }
+.sc-bt-sel { background:#0d1117; border:1px solid #30363d; border-radius:6px; color:#e6edf3; font-size:13px; padding:7px 10px; min-width:130px; }
+.sc-bt-run { background:#238636; border:none; border-radius:6px; color:#fff; font-size:13px; font-weight:600; padding:8px 18px; cursor:pointer; }
+.sc-bt-run:hover { background:#2ea043; }
+.sc-bt-run:disabled { background:#30363d; color:#8b949e; cursor:default; }
+.sc-bt-note { font-size:11px; color:#d29922; margin-bottom:8px; }
+.sc-bt-result { margin-top:6px; }
+.sc-bt-loading { color:#8b949e; font-size:13px; padding:16px; text-align:center; }
+.sc-bt-summary { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px; }
+.sc-bt-stat { background:#0d1117; border:1px solid #21262d; border-radius:6px; padding:10px; text-align:center; }
+.sc-bt-stat .lbl { display:block; font-size:10px; color:#8b949e; margin-bottom:3px; }
+.sc-bt-stat .v { display:block; font-size:17px; font-weight:700; color:#e6edf3; }
+.sc-bt-stat .v.up { color:#3fb950; } .sc-bt-stat .v.dn { color:#f85149; }
+.sc-bt-sub2 { font-size:11px; color:#8b949e; margin-bottom:10px; line-height:1.7; }
+.sc-bt-chart { background:#0d1117; border:1px solid #21262d; border-radius:6px; padding:6px; }
+@media (max-width:768px){ .sc-bt-summary { grid-template-columns:repeat(2,1fr); } }
 """
 
 # 会社概要キャッシュ（24h）
@@ -2915,6 +2941,22 @@ def _build_screen_page() -> str:
     <div class="sc-hist-actions">
       <button class="sc-hist-reset-btn" id="scHistReset">この条件を削除</button>
       <button class="sc-hist-done-btn" id="scHistDone">確定して閉じる</button>
+    </div>
+  </div>
+
+  <div class="sc-backtest" id="scBacktest">
+    <div class="sc-bt-head" id="scBtToggle">
+      <span>📈 バックテスト <span class="sc-bt-sub">現在の条件で過去2時点間のリターンを検証</span></span>
+      <span class="sc-bt-caret" id="scBtCaret">▼</span>
+    </div>
+    <div class="sc-bt-body" id="scBtBody" style="display:none">
+      <div class="sc-bt-controls">
+        <label class="sc-bt-lbl">開始<select id="scBtStart" class="sc-bt-sel"></select></label>
+        <label class="sc-bt-lbl">終了<select id="scBtEnd" class="sc-bt-sel"></select></label>
+        <button id="scBtRun" class="sc-bt-run">▶ 実行</button>
+      </div>
+      <div class="sc-bt-note" id="scBtNote"></div>
+      <div id="scBtResult" class="sc-bt-result"></div>
     </div>
   </div>
 
@@ -3938,6 +3980,122 @@ def _build_screen_page() -> str:
     _cmin={{}};_cmax={{}};_cflg={{}};
     if(typeof renderChips==='function')renderChips();
   }});
+
+  /* ── バックテスト ── */
+  var btDatesLoaded=false;
+  function btFmtPct(v){{ if(v===null||v===undefined) return '—'; return (v>=0?'+':'')+v.toFixed(1)+'%'; }}
+  function initBacktest(){{
+    var toggle=document.getElementById('scBtToggle');
+    var body=document.getElementById('scBtBody');
+    var caret=document.getElementById('scBtCaret');
+    if(!toggle) return;
+    toggle.addEventListener('click',function(){{
+      var open=body.style.display!=='none';
+      body.style.display=open?'none':'';
+      caret.classList.toggle('open',!open);
+      if(!open && !btDatesLoaded) loadBtDates();
+    }});
+    document.getElementById('scBtRun').addEventListener('click',runBacktest);
+  }}
+  function loadBtDates(){{
+    fetch('/api/backtest_dates').then(function(r){{return r.json();}}).then(function(dates){{
+      btDatesLoaded=true;
+      var s=document.getElementById('scBtStart'), e=document.getElementById('scBtEnd');
+      if(!dates.length){{ document.getElementById('scBtNote').textContent='過去スナップショットがまだありません。'; return; }}
+      dates.forEach(function(d){{
+        s.appendChild(new Option(d,d)); e.appendChild(new Option(d,d));
+      }});
+      // 既定: 開始=6ヶ月前あたり, 終了=最新
+      s.value=dates[Math.max(0, dates.length-27)];
+      e.value=dates[dates.length-1];
+    }}).catch(function(){{ document.getElementById('scBtNote').textContent='日付の取得に失敗しました。'; }});
+  }}
+  function runBacktest(){{
+    var d1=document.getElementById('scBtStart').value, d2=document.getElementById('scBtEnd').value;
+    var note=document.getElementById('scBtNote'), res=document.getElementById('scBtResult');
+    if(!d1||!d2){{ note.textContent='開始日・終了日を選んでください。'; return; }}
+    if(d1>=d2){{ note.textContent='開始日は終了日より前にしてください。'; return; }}
+    // 理論株価系の条件は過去データが無いため一時的に外す
+    var theoActive=(_cmin['theoratio']!==undefined||_cmin['theo3y']!==undefined||_cflg['theopass']);
+    note.textContent=theoActive?'※ 理論株価系の条件は過去データが無いため、バックテストでは無視されます。':'';
+    res.innerHTML='<div class="sc-bt-loading">計算中…（'+d1+' → '+d2+'）</div>';
+    document.getElementById('scBtRun').disabled=true;
+
+    Promise.all([
+      fetch('/api/screen_asof?date='+d1).then(function(r){{return r.json();}}),
+      fetch('/api/backtest?d1='+d1+'&d2='+d2).then(function(r){{return r.json();}})
+    ]).then(function(arr){{
+      document.getElementById('scBtRun').disabled=false;
+      var snap=arr[0], bt=arr[1];
+      if(bt.error){{ res.innerHTML='<div class="sc-bt-loading">エラー: '+bt.error+'</div>'; return; }}
+      // 理論条件を一時退避してD1時点で合致銘柄を判定
+      var saved={{a:_cmin['theoratio'],b:_cmin['theo3y'],c:_cflg['theopass']}};
+      delete _cmin['theoratio']; delete _cmin['theo3y']; delete _cflg['theopass'];
+      var matched=(snap.stocks||[]).filter(function(s){{return passFilter(s);}});
+      if(saved.a!==undefined)_cmin['theoratio']=saved.a;
+      if(saved.b!==undefined)_cmin['theo3y']=saved.b;
+      if(saved.c)_cflg['theopass']=saved.c;
+
+      var rets=bt.returns||{{}};
+      var vals=[], best=null, worst=null, delN=0;
+      var delSet={{}}; (bt.delisted||[]).forEach(function(c){{delSet[c]=1;}});
+      matched.forEach(function(s){{
+        var r=rets[s.code];
+        if(r===undefined||r===null) return;
+        vals.push({{code:s.code, name:s.name, r:r}});
+        if(delSet[s.code]) delN++;
+        if(best===null||r>best.r) best={{code:s.code,name:s.name,r:r}};
+        if(worst===null||r<worst.r) worst={{code:s.code,name:s.name,r:r}};
+      }});
+      renderBtResult(res, vals, best, worst, delN, bt.benchmark_pct, snap.snapshot_date, bt.d1, bt.d2, matched.length);
+    }}).catch(function(){{
+      document.getElementById('scBtRun').disabled=false;
+      res.innerHTML='<div class="sc-bt-loading">通信エラー。</div>';
+    }});
+  }}
+  function renderBtResult(res, vals, best, worst, delN, bench, snapDate, d1, d2, matchedN){{
+    if(!vals.length){{
+      res.innerHTML='<div class="sc-bt-loading">条件に合致する銘柄が過去時点(' + (snapDate||d1) + ')にありませんでした。</div>';
+      return;
+    }}
+    var rs=vals.map(function(v){{return v.r;}}).sort(function(a,b){{return a-b;}});
+    var n=rs.length;
+    var avg=rs.reduce(function(a,b){{return a+b;}},0)/n;
+    var med=n%2?rs[(n-1)/2]:(rs[n/2-1]+rs[n/2])/2;
+    var win=rs.filter(function(r){{return r>0;}}).length/n*100;
+    var excess=(bench!==null&&bench!==undefined)?avg-bench:null;
+    function stat(lbl,val,cls){{ return '<div class="sc-bt-stat"><span class="lbl">'+lbl+'</span><span class="v '+(cls||'')+'">'+val+'</span></div>'; }}
+    var avgCls=avg>=0?'up':'dn';
+    var html='<div class="sc-bt-summary">'
+      + stat('平均リターン', btFmtPct(avg), avgCls)
+      + stat('中央値', btFmtPct(med), med>=0?'up':'dn')
+      + stat('勝率', win.toFixed(0)+'%', '')
+      + stat('対象銘柄', n+'銘柄', '')
+      + '</div>';
+    html+='<div class="sc-bt-sub2">'
+      + 'ベンチマーク(TOPIX): <b>'+btFmtPct(bench)+'</b>'
+      + (excess!==null?' ／ 超過リターン: <b class="'+(excess>=0?'sc-flag-on':'')+'" style="color:'+(excess>=0?'#3fb950':'#f85149')+'">'+btFmtPct(excess)+'</b>':'')
+      + '<br>最高: '+best.code+' '+btFmtPct(best.r)+' ／ 最低: '+worst.code+' '+btFmtPct(worst.r)
+      + (delN>0?' ／ うち上場廃止 '+delN+'銘柄（最終値で算入）':'')
+      + '<br><span style="color:#484f58">期間: '+(d1)+' → '+(d2)+'（合致'+matchedN+'銘柄中'+n+'銘柄で株価取得）</span>'
+      + '</div>';
+    html+='<div class="sc-bt-chart" id="scBtChart" style="height:220px"></div>';
+    res.innerHTML=html;
+    // 分布ヒストグラム
+    try{{
+      Plotly.newPlot('scBtChart', [{{
+        x: rs, type:'histogram', marker:{{color:'#58a6ff'}}, nbinsx:30
+      }}], {{
+        height:220, margin:{{l:40,r:10,t:10,b:30}},
+        paper_bgcolor:'#0d1117', plot_bgcolor:'#0d1117', font:{{color:'#8b949e',size:11}},
+        xaxis:{{title:'リターン(%)', gridcolor:'#21262d', zerolinecolor:'#484f58'}},
+        yaxis:{{title:'銘柄数', gridcolor:'#21262d'}},
+        shapes:[{{type:'line', x0:0,x1:0,y0:0,y1:1,yref:'paper', line:{{color:'#8b949e',width:1,dash:'dot'}}}}]
+      }}, {{responsive:true, displayModeBar:false}});
+    }}catch(e){{}}
+  }}
+  initBacktest();
+
 }})();
 </script>
 """, active="screen")
@@ -5222,6 +5380,177 @@ def screen():
         html = _build_screen_page()
         _set(key, html)
     return html
+
+
+# ─── バックテスト ────────────────────────────────────────────────────────────
+
+@app.route("/api/backtest_dates")
+def api_backtest_dates():
+    """バックテストで選択可能な週次スナップショット日の一覧。"""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history ORDER BY snapshot_date")
+    dates = [str(r[0]) for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return _json.dumps(dates), 200, {"Content-Type": "application/json"}
+
+
+@app.route("/api/screen_asof")
+def api_screen_asof():
+    """指定日に最も近い週次スナップショットを /api/screen と同一スキーマで返す。
+    クライアント側で既存 passFilter() をそのまま実行して合致銘柄を判定する。"""
+    from compute_stats_history import HISTORY_COLS
+    req_date = request.args.get("date", "").strip()
+    key = f"screen_asof_{req_date}"
+    cached = _get(key)
+    if cached:
+        return cached, 200, {"Content-Type": "application/json"}
+
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history ORDER BY snapshot_date")
+    dates = [r[0] for r in cur.fetchall()]
+    if not dates:
+        cur.close(); conn.close()
+        return _json.dumps({"snapshot_date": None, "stocks": []}), 200, {"Content-Type": "application/json"}
+    try:
+        target = date.fromisoformat(req_date) if req_date else dates[-1]
+    except ValueError:
+        target = dates[-1]
+    snap = min(dates, key=lambda d: abs((d - target).days))
+
+    cols = HISTORY_COLS
+    col_list = ", ".join("h.`" + c + "`" for c in cols)
+    cur.execute(f"""
+        SELECT {col_list}, s.name
+        FROM price_stats_history h JOIN stocks s ON h.code = s.code
+        WHERE h.snapshot_date = %s
+    """, (snap,))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+
+    idx = {c: i for i, c in enumerate(cols)}
+    name_i = len(cols)
+
+    def _f(v): return float(v) if v is not None else None
+    def _i(v): return int(v) if v is not None else 0
+
+    results = []
+    for r in rows:
+        def gv(c): return r[idx[c]]
+        close = _f(gv("close")); ma25 = _f(gv("ma25")); ma75 = _f(gv("ma75")); per = _f(gv("per"))
+        results.append({
+            "code": gv("code"), "name": r[name_i] or "", "market": gv("market") or "",
+            "per": per, "pbr": _f(gv("pbr")), "roe": _f(gv("roe")), "div_yield": _f(gv("div_yield")),
+            "market_cap": int(gv("market_cap")) if gv("market_cap") else None,
+            "op_margin": _f(gv("op_margin")), "payout_ratio": _f(gv("payout_ratio")),
+            "roa": _f(gv("roa")), "debt_to_equity": _f(gv("debt_to_equity")), "beta": _f(gv("beta")),
+            "close": close, "change_pct": None,
+            "chg5d": _f(gv("chg5d")), "chg25d": _f(gv("chg25d")), "chg75d": _f(gv("chg75d")),
+            "ma25": ma25, "ma75": ma75, "ma200": _f(gv("ma200")),
+            "dev_ma25": _f(gv("dev_ma25")), "dev_ma75": _f(gv("dev_ma75")), "dev_high52w": _f(gv("dev_high52w")),
+            "vol20_ratio": _f(gv("vol20_ratio")), "rsi14": _f(gv("rsi14")),
+            "macd": _f(gv("macd")), "macd_signal": _f(gv("macd_signal")), "macd_gc": _i(gv("macd_gc")),
+            "turnover_day": _f(gv("turnover_day")), "turnover_20d": _f(gv("turnover_20d")),
+            "break_20d": _i(gv("break_20d")), "break_65d": _i(gv("break_65d")),
+            "rev_growth": _f(gv("rev_growth")), "op_growth": _f(gv("op_growth")), "eps_growth": _f(gv("eps_growth")),
+            "roic": _f(gv("roic")), "cf_positive": _i(gv("cf_positive")),
+            "dev_ma200": _f(gv("dev_ma200")), "dev_low52w": _f(gv("dev_low52w")),
+            "vol_ratio_6_25": _f(gv("vol_ratio_6_25")), "volatility_60d": _f(gv("volatility_60d")),
+            "gc_5_25": _i(gv("gc_5_25")), "gc_75_200": _i(gv("gc_75_200")),
+            "bb_upper": _i(gv("bb_upper")), "bb_lower": _i(gv("bb_lower")),
+            "stoch_k": _f(gv("stoch_k")), "stoch_d": _f(gv("stoch_d")),
+            "ytd_high": _f(gv("ytd_high")), "ytd_low": _f(gv("ytd_low")),
+            "break_ytd_high": _i(gv("break_ytd_high")), "dev_ytd_high": _f(gv("dev_ytd_high")), "dev_ytd_low": _f(gv("dev_ytd_low")),
+            "nikkei_rel_1m": _f(gv("nikkei_rel_1m")),
+            "equity_ratio": _f(gv("equity_ratio")), "ord_margin": _f(gv("ord_margin")), "ord_growth": _f(gv("ord_growth")),
+            "psr": _f(gv("psr")), "pcfr": _f(gv("pcfr")),
+            "vs_ma25": (close - ma25) if (close is not None and ma25 is not None) else None,
+            "vs_ma75": (close - ma75) if (close is not None and ma75 is not None) else None,
+            "ma25_vs_ma75": (ma25 - ma75) if (ma25 is not None and ma75 is not None) else None,
+            "earnings_yield": round(100.0 / per, 2) if (per and per > 0) else None,
+            # 理論株価系は過去復元不可のため無効化（バックテスト対象外）
+            "theo_ratio": None, "upside_3y_pct": None, "theo_pass_all": 0,
+        })
+
+    payload = _json.dumps({"snapshot_date": str(snap), "stocks": results}, ensure_ascii=False)
+    _set(key, payload)
+    return payload, 200, {"Content-Type": "application/json"}
+
+
+def _prices_asof(cur, dt, lookback_days=40):
+    """各銘柄の date<=dt における最新 adj_close を {code:(adj, date)} で返す。"""
+    frm = (date.fromisoformat(dt) - timedelta(days=lookback_days)).isoformat()
+    cur.execute("""
+        SELECT code, adj_close, dt FROM (
+            SELECT code, COALESCE(adj_close, close) AS adj_close, date AS dt,
+                   ROW_NUMBER() OVER (PARTITION BY code ORDER BY date DESC) AS rn
+            FROM daily_prices
+            WHERE date <= %s AND date >= %s AND close IS NOT NULL AND close > 0
+        ) t WHERE rn = 1
+    """, (dt, frm))
+    return {r[0]: (float(r[1]), r[2]) for r in cur.fetchall()}
+
+
+@app.route("/api/backtest")
+def api_backtest():
+    """d1→d2 の各銘柄リターン(%)、ベンチマーク(TOPIX ETF 1306)、廃止銘柄を返す。
+    合致銘柄の絞り込みはクライアント側(passFilter)で行い、ここは全銘柄のリターンを返す。"""
+    d1 = request.args.get("d1", "").strip()
+    d2 = request.args.get("d2", "").strip()
+    try:
+        _d1 = date.fromisoformat(d1); _d2 = date.fromisoformat(d2)
+    except ValueError:
+        return _json.dumps({"error": "bad_date"}), 400, {"Content-Type": "application/json"}
+    if _d1 >= _d2:
+        return _json.dumps({"error": "d1_ge_d2"}), 400, {"Content-Type": "application/json"}
+
+    key = f"backtest_{d1}_{d2}"
+    cached = _get(key)
+    if cached:
+        return cached, 200, {"Content-Type": "application/json"}
+
+    conn = get_conn(); cur = conn.cursor()
+    p1 = _prices_asof(cur, d1)
+    p2 = _prices_asof(cur, d2)
+
+    # d1にあってd2に無い＝d1〜d2で上場廃止 → 最終取引価格を出口にする（生存バイアス回避）
+    missing = [c for c in p1 if c not in p2]
+    delisted = []
+    if missing:
+        ph = ",".join(["%s"] * len(missing))
+        cur.execute(f"""
+            SELECT code, adj_close FROM (
+                SELECT code, COALESCE(adj_close, close) AS adj_close,
+                       ROW_NUMBER() OVER (PARTITION BY code ORDER BY date DESC) AS rn
+                FROM daily_prices
+                WHERE code IN ({ph}) AND date <= %s AND close IS NOT NULL AND close > 0
+            ) t WHERE rn = 1
+        """, missing + [d2])
+        for code, adj in cur.fetchall():
+            p2[code] = (float(adj), None)
+            delisted.append(code)
+
+    returns = {}
+    for code, (a1, _) in p1.items():
+        ex = p2.get(code)
+        if not ex or a1 <= 0:
+            continue
+        returns[code] = round((ex[0] / a1 - 1) * 100, 2)
+
+    # ベンチマーク: TOPIX ETF 1306
+    bench_pct = None
+    b1 = p1.get("1306"); b2 = p2.get("1306")
+    if b1 and b2 and b1[0] > 0:
+        bench_pct = round((b2[0] / b1[0] - 1) * 100, 2)
+    cur.close(); conn.close()
+
+    payload = _json.dumps({
+        "d1": d1, "d2": d2,
+        "returns": returns,
+        "benchmark_pct": bench_pct,
+        "delisted": delisted,
+    })
+    _set(key, payload)
+    return payload, 200, {"Content-Type": "application/json"}
 
 
 @app.route("/api/theoretical/<code>")

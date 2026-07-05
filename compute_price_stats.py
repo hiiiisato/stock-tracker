@@ -370,6 +370,187 @@ def _load_financials() -> dict[str, dict]:
     return result
 
 
+# STAT_COLS: price_stats の code/updated_at を除いた統計量カラム（順序厳守）。
+STAT_COLS = [
+    "close",
+    "chg5d", "chg25d", "chg75d", "chg126d",
+    "ma5", "ma25", "ma50", "ma75", "ma200", "ma200_slope",
+    "dev_ma25", "dev_ma75",
+    "vol_ratio", "vol20_ratio",
+    "high52w", "low52w", "dev_high52w",
+    "rsi14",
+    "macd", "macd_signal", "macd_hist", "macd_gc",
+    "turnover_day", "turnover_20d",
+    "high20d", "high65d",
+    "break_20d", "break_65d",
+    "rev_growth", "op_growth", "eps_growth", "roic", "cf_positive",
+    "dev_ma200", "dev_low52w",
+    "vol_ratio_6_25", "volatility_60d",
+    "gc_5_25", "gc_75_200",
+    "bb_upper", "bb_lower",
+    "stoch_k", "stoch_d",
+    "ytd_high", "ytd_low",
+    "break_ytd_high", "dev_ytd_high", "dev_ytd_low",
+    "nikkei_rel_1m",
+    "equity_ratio", "ord_margin", "ord_growth", "psr", "pcfr",
+]
+
+
+def compute_stock_stats(prices, w52_pair, ytd_pair, nikkei_1m_chg, fm):
+    """1銘柄分の price_stats 統計量を STAT_COLS 順のタプルで返す（code/日付は含まない）。
+    prices: (date, adj_close, high, low, volume, raw_close) の昇順リスト（as-of 日まで）。
+    データ不足(<5本)なら None。run(日次) と compute_stats_history(バックテスト) で共有する。"""
+    import math
+    n = len(prices)
+    if n < 5:
+        return None
+
+    closes    = [p[1] for p in prices]   # adj_close（指標計算用）
+    highs     = [p[2] for p in prices]
+    lows      = [p[3] for p in prices]
+    vols      = [p[4] for p in prices]
+    raw_cls   = [p[5] for p in prices]   # 生終値（売買代金計算用）
+    last      = closes[-1]
+    last_hi   = highs[-1]
+    last_raw  = raw_cls[-1]
+
+    ma5   = sum(closes[-5:])   / 5   if n >= 5   else None
+    ma25  = sum(closes[-25:])  / 25  if n >= 25  else None
+    ma50  = sum(closes[-50:])  / 50  if n >= 50  else None
+    ma75  = sum(closes[-75:])  / 75  if n >= 75  else None
+    ma200 = sum(closes[-200:]) / 200 if n >= 200 else None
+
+    ma200_slope = None
+    if n >= 220 and ma200 is not None:
+        ma200_20d = sum(closes[-220:-20]) / 200
+        if ma200_20d and ma200_20d > 0:
+            ma200_slope = (ma200 - ma200_20d) / ma200_20d * 100
+
+    dev_ma25  = (last - ma25)  / ma25  * 100 if ma25  else None
+    dev_ma75  = (last - ma75)  / ma75  * 100 if ma75  else None
+    dev_ma200 = (last - ma200) / ma200 * 100 if ma200 else None
+
+    def chg_nd(n_days):
+        if n <= n_days:
+            return None
+        past = closes[-(n_days + 1)]
+        return (last / past - 1) * 100 if past else None
+
+    chg5d   = chg_nd(5)
+    chg25d  = chg_nd(25)
+    chg75d  = chg_nd(75)
+    chg126d = chg_nd(126)
+
+    vol_ratio = None
+    vol_ratio_6_25 = None
+    if n >= 25:
+        avg6  = sum(vols[-6:])  / 6
+        avg25 = sum(vols[-25:]) / 25
+        vol_ratio = avg6 / avg25 if avg25 else None
+        vol_ratio_6_25 = avg6 / avg25 if avg25 else None
+
+    vol20_ratio = None
+    if n >= 20 and vols[-1] > 0:
+        avg20 = sum(vols[-20:]) / 20
+        vol20_ratio = vols[-1] / avg20 if avg20 else None
+
+    high52, low52 = w52_pair
+    dev_high52w = (last / high52 - 1) * 100 if (high52 and high52 > 0) else None
+    dev_low52w  = (last / low52  - 1) * 100 if (low52  and low52  > 0) else None
+
+    ytd_hi, ytd_lo = ytd_pair
+    break_ytd_high = 0
+    dev_ytd_high   = None
+    dev_ytd_low    = None
+    if ytd_hi:
+        dev_ytd_high   = (last / ytd_hi - 1) * 100
+        break_ytd_high = 1 if last >= ytd_hi * 0.9999 else 0
+    if ytd_lo:
+        dev_ytd_low = (last / ytd_lo - 1) * 100
+
+    rsi14 = _rsi(closes)
+    stoch_k, stoch_d = _stoch_calc(closes, highs, lows)
+
+    bb_upper = bb_lower = 0
+    if n >= 25:
+        ma25_ser = closes[-25:]
+        bb_mean  = sum(ma25_ser) / 25
+        bb_std   = math.sqrt(sum((v - bb_mean) ** 2 for v in ma25_ser) / 25)
+        bb_upper = 1 if last >= bb_mean + 2 * bb_std else 0
+        bb_lower = 1 if last <= bb_mean - 2 * bb_std else 0
+
+    volatility_60d = _volatility_60d(closes)
+
+    gc_5_25   = (1 if (ma5  is not None and ma25  is not None and ma5  > ma25)  else 0)
+    gc_75_200 = (1 if (ma75 is not None and ma200 is not None and ma75 > ma200) else 0)
+
+    macd, macd_signal, macd_hist, macd_gc = _macd_calc(closes)
+
+    turnover_day  = last_raw * vols[-1] / 1e8 if vols[-1] else None
+    turnover_20d  = None
+    if n >= 20:
+        t20 = [raw_cls[i] * vols[i] / 1e8 for i in range(-20, 0) if vols[i]]
+        if t20:
+            turnover_20d = sum(t20) / len(t20)
+
+    high20d = max(highs[-20:]) if n >= 20 else None
+    high65d = max(highs[-65:]) if n >= 65 else None
+
+    break_20d = 0
+    if n >= 21:
+        prev_high20 = max(highs[-21:-1])
+        break_20d = 1 if last_hi >= prev_high20 else 0
+
+    break_65d = 0
+    if n >= 66:
+        prev_high65 = max(highs[-66:-1])
+        break_65d = 1 if last_hi >= prev_high65 else 0
+
+    fm = fm or {}
+    rev_growth   = fm.get("rev_growth")
+    op_growth    = fm.get("op_growth")
+    ord_growth   = fm.get("ord_growth")
+    eps_growth   = fm.get("eps_growth")
+    roic         = fm.get("roic")
+    cf_positive  = fm.get("cf_positive", 0)
+    equity_ratio = fm.get("equity_ratio")
+    ord_margin   = fm.get("ord_margin")
+
+    cfo_ps = fm.get("cfo_per_share")
+    rev_ps = fm.get("rev_per_share")
+    pcfr = _round(last_raw / cfo_ps, 1) if (cfo_ps and cfo_ps > 0) else None
+    psr  = _round(last_raw / rev_ps,  2) if (rev_ps  and rev_ps  > 0) else None
+
+    nikkei_rel_1m = None
+    if nikkei_1m_chg is not None and chg25d is not None:
+        nikkei_rel_1m = _round(chg25d - nikkei_1m_chg)
+
+    return (
+        _round(last_raw, 2),
+        _round(chg5d), _round(chg25d), _round(chg75d), _round(chg126d),
+        _round(ma5, 4), _round(ma25, 4), _round(ma50, 4),
+        _round(ma75, 4), _round(ma200, 4), _round(ma200_slope, 4),
+        _round(dev_ma25), _round(dev_ma75),
+        _round(vol_ratio), _round(vol20_ratio),
+        _round(high52, 2), _round(low52, 2), _round(dev_high52w),
+        _round(rsi14, 2),
+        _round(macd, 4), _round(macd_signal, 4), _round(macd_hist, 4), macd_gc,
+        _round(turnover_day, 2), _round(turnover_20d, 2),
+        _round(high20d, 2), _round(high65d, 2),
+        break_20d, break_65d,
+        rev_growth, op_growth, eps_growth, roic, cf_positive,
+        _round(dev_ma200), _round(dev_low52w),
+        _round(vol_ratio_6_25), _round(volatility_60d),
+        gc_5_25, gc_75_200,
+        bb_upper, bb_lower,
+        _round(stoch_k), _round(stoch_d),
+        _round(ytd_hi, 2), _round(ytd_lo, 2),
+        break_ytd_high, _round(dev_ytd_high), _round(dev_ytd_low),
+        nikkei_rel_1m,
+        equity_ratio, ord_margin, ord_growth, psr, pcfr,
+    )
+
+
 def run() -> int:
     _ensure_table()
 
@@ -441,210 +622,25 @@ def run() -> int:
     # ─── 財務指標取得 ─────────────────────────────────────────────────────────
     fin_metrics = _load_financials()
 
-    # ─── 指標計算 ─────────────────────────────────────────────────────────────
+    # ─── 指標計算（compute_stock_stats に集約。日次とバックフィルで共有）──────────
     rows = []
     today = str(date.today())
-
     for code, prices in data.items():
-        n = len(prices)
-        if n < 5:
+        stat = compute_stock_stats(
+            prices,
+            w52.get(code, (None, None)),
+            ytd_map.get(code, (None, None)),
+            nikkei_1m_chg,
+            fin_metrics.get(code, {}),
+        )
+        if stat is None:
             continue
-
-        closes    = [p[1] for p in prices]   # adj_close（指標計算用）
-        highs     = [p[2] for p in prices]   # high
-        lows      = [p[3] for p in prices]   # low
-        vols      = [p[4] for p in prices]
-        raw_cls   = [p[5] for p in prices]   # 生終値（売買代金計算用）
-        last      = closes[-1]
-        last_hi   = highs[-1]
-        last_raw  = raw_cls[-1]
-
-        # ─ 移動平均 ─
-        ma5   = sum(closes[-5:])   / 5   if n >= 5   else None
-        ma25  = sum(closes[-25:])  / 25  if n >= 25  else None
-        ma50  = sum(closes[-50:])  / 50  if n >= 50  else None
-        ma75  = sum(closes[-75:])  / 75  if n >= 75  else None
-        ma200 = sum(closes[-200:]) / 200 if n >= 200 else None
-
-        ma200_slope = None
-        if n >= 220 and ma200 is not None:
-            ma200_20d = sum(closes[-220:-20]) / 200
-            if ma200_20d and ma200_20d > 0:
-                ma200_slope = (ma200 - ma200_20d) / ma200_20d * 100
-
-        # ─ 乖離率 ─
-        dev_ma25  = (last - ma25)  / ma25  * 100 if ma25  else None
-        dev_ma75  = (last - ma75)  / ma75  * 100 if ma75  else None
-        dev_ma200 = (last - ma200) / ma200 * 100 if ma200 else None
-
-        # ─ N日騰落率 ─
-        def chg_nd(n_days):
-            if n <= n_days:
-                return None
-            past = closes[-(n_days + 1)]
-            return (last / past - 1) * 100 if past else None
-
-        chg5d   = chg_nd(5)
-        chg25d  = chg_nd(25)
-        chg75d  = chg_nd(75)
-        chg126d = chg_nd(126)
-
-        # ─ 出来高比率 ─
-        vol_ratio = None
-        vol_ratio_6_25 = None
-        if n >= 25:
-            avg6  = sum(vols[-6:])  / 6
-            avg25 = sum(vols[-25:]) / 25
-            vol_ratio = avg6 / avg25 if avg25 else None  # 旧 vol_ratio は avg5/avg25 だったが avg6 に統一
-            vol_ratio_6_25 = avg6 / avg25 if avg25 else None
-
-        vol20_ratio = None
-        if n >= 20 and vols[-1] > 0:
-            avg20 = sum(vols[-20:]) / 20
-            vol20_ratio = vols[-1] / avg20 if avg20 else None
-
-        # ─ 52週高値・安値 ─
-        high52, low52 = w52.get(code, (None, None))
-        dev_high52w = (last / high52 - 1) * 100 if (high52 and high52 > 0) else None
-        dev_low52w  = (last / low52  - 1) * 100 if (low52  and low52  > 0) else None
-
-        # ─ 年初来高値・安値 ─
-        ytd_hi, ytd_lo = ytd_map.get(code, (None, None))
-        break_ytd_high = 0
-        dev_ytd_high   = None
-        dev_ytd_low    = None
-        if ytd_hi:
-            dev_ytd_high   = (last / ytd_hi - 1) * 100
-            break_ytd_high = 1 if last >= ytd_hi * 0.9999 else 0
-        if ytd_lo:
-            dev_ytd_low = (last / ytd_lo - 1) * 100
-
-        # ─ RSI14 ─
-        rsi14 = _rsi(closes)
-
-        # ─ ストキャスティクス(14,3) ─
-        stoch_k, stoch_d = _stoch_calc(closes, highs, lows)
-
-        # ─ ボリンジャーバンド(25,2σ) ─
-        bb_upper = bb_lower = 0
-        if n >= 25:
-            import math
-            ma25_ser = closes[-25:]
-            bb_mean  = sum(ma25_ser) / 25
-            bb_std   = math.sqrt(sum((v - bb_mean) ** 2 for v in ma25_ser) / 25)
-            bb_upper = 1 if last >= bb_mean + 2 * bb_std else 0
-            bb_lower = 1 if last <= bb_mean - 2 * bb_std else 0
-
-        # ─ 60日ボラティリティ（年率%）─
-        volatility_60d = _volatility_60d(closes)
-
-        # ─ ゴールデンクロス状態フラグ ─
-        gc_5_25   = (1 if (ma5  is not None and ma25  is not None and ma5  > ma25)  else 0)
-        gc_75_200 = (1 if (ma75 is not None and ma200 is not None and ma75 > ma200) else 0)
-
-        # ─ MACD(12,26,9) ─
-        macd, macd_signal, macd_hist, macd_gc = _macd_calc(closes)
-
-        # ─ 売買代金（実際の売買金額なので生値×出来高を使う）─
-        turnover_day  = last_raw * vols[-1] / 1e8 if vols[-1] else None
-        turnover_20d  = None
-        if n >= 20:
-            t20 = [raw_cls[i] * vols[i] / 1e8 for i in range(-20, 0) if vols[i]]
-            if t20:
-                turnover_20d = sum(t20) / len(t20)
-
-        # ─ 20日高値・65日高値 ─
-        high20d = max(highs[-20:]) if n >= 20 else None
-        high65d = max(highs[-65:]) if n >= 65 else None
-
-        # ─ 高値更新フラグ（当日の高値が直前N日の最高値以上） ─
-        break_20d = 0
-        if n >= 21:
-            prev_high20 = max(highs[-21:-1])
-            break_20d = 1 if last_hi >= prev_high20 else 0
-
-        break_65d = 0
-        if n >= 66:
-            prev_high65 = max(highs[-66:-1])
-            break_65d = 1 if last_hi >= prev_high65 else 0
-
-        # ─ 財務指標（financials + stock_fundamentals）─
-        fm = fin_metrics.get(code, {})
-        rev_growth   = fm.get("rev_growth")
-        op_growth    = fm.get("op_growth")
-        ord_growth   = fm.get("ord_growth")
-        eps_growth   = fm.get("eps_growth")
-        roic         = fm.get("roic")
-        cf_positive  = fm.get("cf_positive", 0)
-        equity_ratio = fm.get("equity_ratio")
-        ord_margin   = fm.get("ord_margin")
-
-        # PSR・PCFR は当日終値で動的計算
-        cfo_ps = fm.get("cfo_per_share")
-        rev_ps = fm.get("rev_per_share")
-        pcfr = _round(last_raw / cfo_ps, 1) if (cfo_ps and cfo_ps > 0) else None
-        psr  = _round(last_raw / rev_ps,  2) if (rev_ps  and rev_ps  > 0) else None
-
-        # ─ 対日経1ヶ月相対パフォーマンス ─
-        nikkei_rel_1m = None
-        if nikkei_1m_chg is not None and chg25d is not None:
-            nikkei_rel_1m = _round(chg25d - nikkei_1m_chg)
-
-        rows.append((
-            code, today, _round(last_raw, 2),
-            _round(chg5d), _round(chg25d), _round(chg75d), _round(chg126d),
-            _round(ma5, 4), _round(ma25, 4), _round(ma50, 4),
-            _round(ma75, 4), _round(ma200, 4), _round(ma200_slope, 4),
-            _round(dev_ma25), _round(dev_ma75),
-            _round(vol_ratio), _round(vol20_ratio),
-            _round(high52, 2), _round(low52, 2), _round(dev_high52w),
-            _round(rsi14, 2),
-            _round(macd, 4), _round(macd_signal, 4), _round(macd_hist, 4), macd_gc,
-            _round(turnover_day, 2), _round(turnover_20d, 2),
-            _round(high20d, 2), _round(high65d, 2),
-            break_20d, break_65d,
-            rev_growth, op_growth, eps_growth, roic, cf_positive,
-            # ─ 追加テクニカル ─
-            _round(dev_ma200), _round(dev_low52w),
-            _round(vol_ratio_6_25), _round(volatility_60d),
-            gc_5_25, gc_75_200,
-            bb_upper, bb_lower,
-            _round(stoch_k), _round(stoch_d),
-            _round(ytd_hi, 2), _round(ytd_lo, 2),
-            break_ytd_high, _round(dev_ytd_high), _round(dev_ytd_low),
-            nikkei_rel_1m,
-            # ─ 追加財務 ─
-            equity_ratio, ord_margin, ord_growth, psr, pcfr,
-        ))
+        rows.append((code, today) + stat)
 
     # ─── DB 保存 ──────────────────────────────────────────────────────────────
     conn = get_conn()
     cur  = conn.cursor()
-    all_cols = [
-        "code", "updated_at", "close",
-        "chg5d", "chg25d", "chg75d", "chg126d",
-        "ma5", "ma25", "ma50", "ma75", "ma200", "ma200_slope",
-        "dev_ma25", "dev_ma75",
-        "vol_ratio", "vol20_ratio",
-        "high52w", "low52w", "dev_high52w",
-        "rsi14",
-        "macd", "macd_signal", "macd_hist", "macd_gc",
-        "turnover_day", "turnover_20d",
-        "high20d", "high65d",
-        "break_20d", "break_65d",
-        "rev_growth", "op_growth", "eps_growth", "roic", "cf_positive",
-        # 追加テクニカル
-        "dev_ma200", "dev_low52w",
-        "vol_ratio_6_25", "volatility_60d",
-        "gc_5_25", "gc_75_200",
-        "bb_upper", "bb_lower",
-        "stoch_k", "stoch_d",
-        "ytd_high", "ytd_low",
-        "break_ytd_high", "dev_ytd_high", "dev_ytd_low",
-        "nikkei_rel_1m",
-        # 追加財務
-        "equity_ratio", "ord_margin", "ord_growth", "psr", "pcfr",
-    ]
+    all_cols = ["code", "updated_at"] + STAT_COLS
     bulk_upsert(cur, "price_stats", all_cols, rows,
                 update_cols=[c for c in all_cols if c != "code"])
     conn.commit()
