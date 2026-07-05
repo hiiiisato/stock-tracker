@@ -14,7 +14,7 @@ YAHOO_HEADERS   = {"User-Agent": "Mozilla/5.0 (compatible; stock-tracker/1.0)"}
 
 def update_stock_master() -> int:
     """銘柄マスタを最新状態に更新。新規上場・廃止・情報変更を反映する。"""
-    r = requests.get(f"{JQUANTS_BASE_URL}/equities/master", headers=JQUANTS_HEADERS)
+    r = requests.get(f"{JQUANTS_BASE_URL}/equities/master", headers=JQUANTS_HEADERS, timeout=60)
     r.raise_for_status()
     data = r.json()["data"]
 
@@ -195,7 +195,7 @@ def update_trading_calendar(date_from: date = None, date_to: date = None) -> int
         "date_from": date_from.strftime("%Y-%m-%d"),
         "date_to":   date_to.strftime("%Y-%m-%d"),
     }
-    r = requests.get(f"{JQUANTS_BASE_URL}/markets/calendar", headers=JQUANTS_HEADERS, params=params)
+    r = requests.get(f"{JQUANTS_BASE_URL}/markets/calendar", headers=JQUANTS_HEADERS, params=params, timeout=60)
     r.raise_for_status()
     data = r.json()["data"]
 

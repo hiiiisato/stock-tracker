@@ -14,6 +14,7 @@ Routes:
   GET /health               ヘルスチェック（Render 死活監視用）
 """
 
+import re
 import time
 import threading
 import json as _json
@@ -23,7 +24,7 @@ import requests as _requests
 from bs4 import BeautifulSoup as _BS
 from flask import Flask, abort, redirect, request, jsonify
 
-from config import get_conn
+from config import get_conn, db
 from theme_report import generate_report
 
 app = Flask(__name__)
@@ -6139,20 +6140,20 @@ def watchlist_page():
     return _build_watchlist_page()
 
 
+def _valid_code(code: str) -> bool:
+    """銘柄コードの形式検証（4〜5桁の英数字。例: 7203, 285A, 1306）"""
+    return bool(re.fullmatch(r"[0-9A-Z]{4,5}", code))
+
+
 @app.route("/watchlist/add", methods=["POST"])
 def watchlist_add():
     code = request.form.get("code", "").strip().upper()
     next_url = request.form.get("next", "/watchlist")
-    if not code:
+    if not _valid_code(code):
         return redirect(next_url)
     try:
-        conn = get_conn()
-        cur  = conn.cursor()
-        cur.execute(
-            "INSERT IGNORE INTO watchlist (code) VALUES (%s)", (code,)
-        )
-        conn.commit()
-        cur.close(); conn.close()
+        with db() as cur:
+            cur.execute("INSERT IGNORE INTO watchlist (code) VALUES (%s)", (code,))
         _bust_prefix("home_")
     except Exception as e:
         print(f"[watchlist_add] error: {e}")
@@ -6161,14 +6162,11 @@ def watchlist_add():
 
 @app.route("/watchlist/remove", methods=["POST"])
 def watchlist_remove():
-    code = request.form.get("code", "").strip()
-    if code:
+    code = request.form.get("code", "").strip().upper()
+    if _valid_code(code):
         try:
-            conn = get_conn()
-            cur  = conn.cursor()
-            cur.execute("DELETE FROM watchlist WHERE code = %s", (code,))
-            conn.commit()
-            cur.close(); conn.close()
+            with db() as cur:
+                cur.execute("DELETE FROM watchlist WHERE code = %s", (code,))
             _bust_prefix("home_")
         except Exception as e:
             print(f"[watchlist_remove] error: {e}")
@@ -6179,16 +6177,15 @@ def watchlist_remove():
 def memo_add():
     code    = request.form.get("code", "").strip().upper()
     content = request.form.get("content", "").strip()
-    if code and content:
+    if not _valid_code(code):
+        return redirect("/")
+    if content:
         try:
-            conn = get_conn()
-            cur  = conn.cursor()
-            cur.execute(
-                "INSERT INTO stock_memos (code, content) VALUES (%s, %s)",
-                (code, content)
-            )
-            conn.commit()
-            cur.close(); conn.close()
+            with db() as cur:
+                cur.execute(
+                    "INSERT INTO stock_memos (code, content) VALUES (%s, %s)",
+                    (code, content)
+                )
             _bust_prefix(f"stock_{code}")
         except Exception as e:
             print(f"[memo_add] error: {e}")
@@ -6199,13 +6196,12 @@ def memo_add():
 def memo_delete():
     memo_id = request.form.get("id", "").strip()
     code    = request.form.get("code", "").strip().upper()
-    if memo_id and code:
+    if not _valid_code(code):
+        return redirect("/")
+    if memo_id.isdigit():
         try:
-            conn = get_conn()
-            cur  = conn.cursor()
-            cur.execute("DELETE FROM stock_memos WHERE id = %s", (memo_id,))
-            conn.commit()
-            cur.close(); conn.close()
+            with db() as cur:
+                cur.execute("DELETE FROM stock_memos WHERE id = %s", (memo_id,))
             _bust_prefix(f"stock_{code}")
         except Exception as e:
             print(f"[memo_delete] error: {e}")

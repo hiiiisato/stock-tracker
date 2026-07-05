@@ -1,4 +1,6 @@
 import os
+from contextlib import contextmanager
+
 import pymysql
 from dotenv import load_dotenv
 
@@ -44,6 +46,22 @@ DB_CONFIG = dict(
 
 def get_conn():
     return pymysql.connect(**DB_CONFIG)
+
+
+@contextmanager
+def db():
+    """`with db() as cur:` — 例外時も必ず rollback + close する安全な接続。
+    正常終了時は自動で commit。常駐プロセス(app.py)の接続リーク防止に使う。"""
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        cur = conn.cursor()
+        yield cur
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def bulk_upsert(cur, table, columns, rows, update_cols=None, batch_size=500):
