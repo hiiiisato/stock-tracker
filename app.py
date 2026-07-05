@@ -2284,6 +2284,7 @@ input.sc-range-input::-moz-range-thumb {
 .sc-bt-stat .v.up { color:#3fb950; } .sc-bt-stat .v.dn { color:#f85149; }
 .sc-bt-sub2 { font-size:11px; color:#8b949e; margin-bottom:10px; line-height:1.7; }
 .sc-bt-chart { background:#0d1117; border:1px solid #21262d; border-radius:6px; padding:6px; }
+.sc-bt-chart-title { font-size:11px; font-weight:600; color:#8b949e; margin:12px 0 4px; }
 .sc-bt-list-title { font-size:12px; font-weight:600; color:#8b949e; margin:16px 0 8px; display:flex; align-items:center; justify-content:space-between; }
 .sc-bt-list-wrap { max-height:420px; overflow-y:auto; border:1px solid #21262d; border-radius:6px; }
 .sc-bt-table { width:100%; border-collapse:collapse; font-size:13px; }
@@ -2299,7 +2300,19 @@ input.sc-range-input::-moz-range-thumb {
 .sc-bt-table .ret { text-align:right; font-variant-numeric:tabular-nums; font-weight:600; }
 .sc-bt-table .ret.up { color:#3fb950; } .sc-bt-table .ret.dn { color:#f85149; }
 .sc-bt-table .delisted-tag { font-size:10px; color:#d29922; margin-left:6px; }
-@media (max-width:768px){ .sc-bt-summary { grid-template-columns:repeat(2,1fr); } }
+@media (max-width:768px){
+  .sc-bt-summary { grid-template-columns:repeat(2,1fr); }
+  .sc-bt-head { font-size:13px; padding:10px 12px; }
+  .sc-bt-sub { display:none; }
+  .sc-bt-body { padding:0 10px 12px; }
+  .sc-bt-controls { gap:6px; }
+  .sc-bt-lbl { flex:1 1 42%; }
+  .sc-bt-sel { min-width:0; width:100%; font-size:16px; }
+  .sc-bt-run { flex:1 1 100%; padding:10px; font-size:15px; }
+  .sc-bt-stat { padding:8px 4px; }
+  .sc-bt-stat .v { font-size:15px; }
+  .sc-bt-stat .lbl { font-size:9px; }
+}
 """
 
 # 会社概要キャッシュ（24h）
@@ -2606,9 +2619,18 @@ _VALUATION_CSS = """
 .val-rank-note { font-size:11px; color:#8b949e; margin:8px 2px 12px; }
 
 @media (max-width:768px) {
-  .val-hero { grid-template-columns:1fr; }
+  .val-wrap { max-width:100%; }
+  .val-card { padding:12px; border-radius:8px; }
+  /* ヒーローは 現在/上限 を横並び、理論株価(main)を全幅で目立たせる */
+  .val-hero { grid-template-columns:1fr 1fr; gap:6px; }
+  .val-hero-box.main { grid-column:1 / -1; order:-1; }
+  .val-hero-box { padding:10px 6px; }
+  .val-hero-box .v { font-size:19px; }
+  .val-hero-box.main .v { font-size:26px; }
   .val-grid { grid-template-columns:repeat(2,1fr); }
-  .val-hero-box .v { font-size:18px; }
+  .val-res-name { font-size:15px; }
+  .val-rank-tab { font-size:12px; padding:9px 4px; }
+  .val-input { font-size:16px; }  /* iOSのズーム防止(16px以上) */
 }
 
 /* ── What-if パネル ── */
@@ -4118,7 +4140,10 @@ def _build_screen_page() -> str:
       + (delN>0?' ／ うち上場廃止 '+delN+'銘柄（最終値で算入）':'')
       + '<br><span style="color:#484f58">期間: '+(d1)+' → '+(d2)+'（合致'+matchedN+'銘柄中'+n+'銘柄で株価取得）</span>'
       + '</div>';
-    html+='<div class="sc-bt-chart" id="scBtChart" style="height:220px"></div>';
+    html+='<div class="sc-bt-chart-title">リターン分布</div>';
+    html+='<div class="sc-bt-chart" id="scBtChart" style="height:200px"></div>';
+    html+='<div class="sc-bt-chart-title">銘柄別リターン（上位・下位）</div>';
+    html+='<div class="sc-bt-chart" id="scBtBarChart"></div>';
     html+='<div class="sc-bt-list-title"><span>銘柄別成績（'+n+'銘柄）</span><span style="color:#484f58;font-weight:400">列見出しクリックで並び替え</span></div>';
     html+='<div class="sc-bt-list-wrap"><table class="sc-bt-table" id="scBtTable">'
       + '<thead><tr>'
@@ -4137,6 +4162,30 @@ def _build_screen_page() -> str:
         xaxis:{{title:'リターン(%)', gridcolor:'#21262d', zerolinecolor:'#484f58'}},
         yaxis:{{title:'銘柄数', gridcolor:'#21262d'}},
         shapes:[{{type:'line', x0:0,x1:0,y0:0,y1:1,yref:'paper', line:{{color:'#8b949e',width:1,dash:'dot'}}}}]
+      }}, {{responsive:true, displayModeBar:false}});
+    }}catch(e){{}}
+    // 銘柄別リターン 横棒グラフ（上位・下位）
+    try{{
+      var srt=vals.slice().sort(function(a,b){{return b.r-a.r;}});
+      var topN=Math.min(12, Math.ceil(srt.length/2));
+      var picked;
+      if(srt.length<=24){{ picked=srt.slice(); }}
+      else {{ picked=srt.slice(0,topN).concat(srt.slice(srt.length-topN)); }}
+      // Plotlyのhorizontal barは下から上に積むので、昇順に並べると上が最大になる
+      picked.sort(function(a,b){{return a.r-b.r;}});
+      var labels=picked.map(function(v){{ var nm=(v.name||'').slice(0,10); return v.code+' '+nm; }});
+      var vs=picked.map(function(v){{return v.r;}});
+      var colors=picked.map(function(v){{return v.r>=0?'#3fb950':'#f85149';}});
+      var barH=Math.max(200, picked.length*22+60);
+      document.getElementById('scBtBarChart').style.height=barH+'px';
+      Plotly.newPlot('scBtBarChart', [{{
+        type:'bar', orientation:'h', x:vs, y:labels, marker:{{color:colors}},
+        hovertemplate:'%{{y}}<br>%{{x:.1f}}%<extra></extra>'
+      }}], {{
+        height:barH, margin:{{l:110,r:14,t:6,b:28}},
+        paper_bgcolor:'#0d1117', plot_bgcolor:'#0d1117', font:{{color:'#8b949e',size:10}},
+        xaxis:{{title:'リターン(%)', gridcolor:'#21262d', zerolinecolor:'#484f58'}},
+        yaxis:{{gridcolor:'#21262d', automargin:true}}
       }}, {{responsive:true, displayModeBar:false}});
     }}catch(e){{}}
     // 銘柄別成績テーブル
