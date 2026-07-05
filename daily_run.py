@@ -9,7 +9,7 @@
 """
 import sys
 import traceback
-from datetime import datetime, date
+from datetime import datetime
 from config import get_conn
 from master import update_stock_master, update_trading_calendar
 from prices_yahoo import fetch_and_store_yahoo

@@ -10,7 +10,6 @@ Yahoo Finance quoteSummary API から EPS/BPS/株数/ROE 等を取得する。
 import time
 import sys
 import requests
-from datetime import datetime
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import get_conn

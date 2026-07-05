@@ -4,7 +4,7 @@
 """
 import time
 import requests
-from datetime import date, datetime
+from datetime import datetime
 from typing import List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import get_conn, bulk_upsert

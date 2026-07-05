@@ -5,7 +5,6 @@ crumb認証が必要なため、セッションを使い回す。
 """
 import time
 import requests
-from datetime import datetime
 from typing import List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import get_conn, bulk_upsert

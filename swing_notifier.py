@@ -44,7 +44,6 @@ def _format_message(candidates: list[dict]) -> str:
         close = s.get("close") or 0
         name  = (s.get("name") or s["code"])[:10]
         rs    = s.get("rs") or 0
-        vol_r = s.get("vol20_ratio") or 0
         rsi_v = s.get("rsi14") or 0
         dev_h = s.get("dev_high52w") or 0
 

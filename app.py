@@ -22,7 +22,6 @@ from datetime import date, timedelta, datetime
 import requests as _requests
 from bs4 import BeautifulSoup as _BS
 from flask import Flask, abort, redirect, request, jsonify
-import plotly.graph_objects as go
 
 from config import get_conn
 from theme_report import generate_report
@@ -1425,7 +1424,6 @@ def _build_events_page(event_date_str: str = None, period: str = "daily") -> str
     # 日付ナビゲーション HTML
     prev_href = f"/events?date={prev_date}&period={period}" if prev_date else "#"
     next_href = f"/events?date={next_date}&period={period}" if next_date else "#"
-    prev_cls  = "ev-nav-btn" if prev_date else "ev-nav-btn" + ' style="opacity:0.3;pointer-events:none"'
 
     date_nav = f"""<div class="ev-date-nav">
   <a class="ev-nav-btn" href="{prev_href}" {"style='opacity:0.3;pointer-events:none'" if not prev_date else ""}>◀</a>
@@ -2863,6 +2861,8 @@ function resetWhatIf(){
 def _valuation_ranking_rows(order_by: str, limit: int = 60) -> str:
     """理論株価ランキングの <tr> 群をサーバー側で生成する。
     order_by: 'theo_ratio'(割安) または 'upside_3y_pct'(成長)。"""
+    if order_by not in ("theo_ratio", "upside_3y_pct"):  # SQLに直接埋め込むため必ず許可リストで検証
+        raise ValueError(f"invalid order_by: {order_by}")
     import html as _html
     conn = get_conn()
     cur  = conn.cursor()
@@ -4700,7 +4700,7 @@ def _build_stock_page(code: str) -> str:
         # latest_te: 最新実績の自己資本（予想ROE計算用）
         result = []
         for i, r in enumerate(rows):
-            period_end, period_type = str(r[0]), r[1]
+            period_end = str(r[0])
             lbl = period_end[:7].replace("-", "/")
             rev  = _to_oku(r[2])
             op   = _to_oku(r[3])

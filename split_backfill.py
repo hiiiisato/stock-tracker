@@ -13,7 +13,7 @@
 import sys
 import time
 import requests
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import get_conn, bulk_upsert
 
