@@ -246,6 +246,18 @@ def run(init: bool = False, rankings_only: bool = False):
             print(f"  エラー: {e}")
             _log("events", "failed", error=str(e))
 
+    # 適時開示の蓄積・好材料AI付加・市況考察
+    # （TDnetは約1ヶ月で消えるため毎日蓄積が必須。event research の後 = テーマスコア等が揃った後）
+    if not rankings_only:
+        print("\n[適時開示] TDnet蓄積・好材料分析・市況考察...")
+        try:
+            from disclosures import run_daily as disclosures_run_daily
+            result = disclosures_run_daily(with_ai=True)
+            _log("disclosures", "done", result.get("stored", 0))
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("disclosures", "failed", error=str(e))
+
     elapsed = (datetime.now() - start).total_seconds()
     print(f"\n{'='*50}")
     print(f"完了: {elapsed:.1f}秒")

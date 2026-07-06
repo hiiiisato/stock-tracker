@@ -449,6 +449,7 @@ def _nav(active: str = "") -> str:
         ("valuation", "/valuation",  "理論株価"),
         ("rankings",  "/rankings",   "ランキング"),
         ("events",    "/events",     "イベント"),
+        ("disclosures", "/disclosures", "適時開示"),
         ("funds",     "/funds",      "ファンドウォッチ"),
         ("swing",     "/swing",      "スイング"),
         ("watchlist", "/watchlist",  "ウォッチリスト"),
@@ -1480,6 +1481,21 @@ def _build_event_picks_html(days: int = 60, min_mcap_oku: float = 50, top_n: int
     price_map: dict = {}
     for code, dt, adj in cur.fetchall():
         price_map.setdefault(str(code), []).append((dt, float(adj)))
+
+    # 適時開示連携: 直近30日に上方修正・増配等の好材料開示がある銘柄
+    good_disc: dict = {}
+    try:
+        cur.execute(f"""
+            SELECT code, category FROM disclosures
+            WHERE code IN ({ph})
+              AND category IN ('earnings_up','div_up','buyback','tob')
+              AND disclosed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        """, codes)
+        _disc_lbl = {"earnings_up": "上方修正", "div_up": "増配", "buyback": "自社株買い", "tob": "TOB"}
+        for code, cat in cur.fetchall():
+            good_disc.setdefault(str(code), set()).add(_disc_lbl.get(cat, cat))
+    except Exception:
+        pass  # disclosuresテーブル未作成でも動作継続
     cur.close(); conn.close()
 
     picks = []
@@ -1524,6 +1540,9 @@ def _build_event_picks_html(days: int = 60, min_mcap_oku: float = 50, top_n: int
             chips.append(("good", f"理論株価↑{float(theo_up):.0f}%"))
         if t20 is not None and float(t20) >= 1e8:
             score += 5
+        for lbl in sorted(good_disc.get(str(code), set())):
+            score += 12
+            chips.append(("good", lbl))
 
         picks.append({
             "code": str(code), "name": name or str(code), "score": score,
@@ -3101,6 +3120,287 @@ def _valuation_ranking_rows(order_by: str, limit: int = 60) -> str:
             f'<td class="val-num">{float(pbr):.2f}</td></tr>'
         )
     return "".join(out)
+
+
+_DISC_CSS = """
+.dc-wrap { display: flex; flex-direction: column; gap: 18px; }
+.dc-section-title { font-size: 15px; font-weight: 700; color: #e6edf3; margin-bottom: 8px; }
+
+/* 市況考察 */
+.dc-market {
+  background: #161b22; border: 1px solid rgba(88,166,255,0.35); border-radius: 8px;
+  padding: 14px 16px;
+}
+.dc-market-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.dc-market-title { font-size: 15px; font-weight: 700; color: #58a6ff; }
+.dc-market-date { font-size: 11px; color: #8b949e; }
+.dc-market-body { font-size: 13px; color: #c9d1d9; line-height: 1.85; white-space: pre-wrap; }
+.dc-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+.dc-chip {
+  font-size: 11px; padding: 2px 8px; border-radius: 10px;
+  background: #21262d; color: #8b949e; white-space: nowrap;
+}
+.dc-chip.up { background: rgba(232,64,64,0.12); color: #E84040; }
+.dc-chip.down { background: rgba(58,159,224,0.12); color: #3A9FE0; }
+
+/* 好材料ハイライト */
+.dc-highlights { display: flex; flex-direction: column; gap: 10px; }
+.dc-hl-card {
+  background: #161b22; border: 1px solid #30363d; border-left: 3px solid #3fb950;
+  border-radius: 6px; padding: 12px 14px;
+}
+.dc-hl-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.dc-hl-top a.stock { font-size: 14px; font-weight: 700; color: #e6edf3; text-decoration: none; }
+.dc-hl-top a.stock:hover { color: #58a6ff; }
+.dc-cat {
+  font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 3px; white-space: nowrap;
+  background: #21262d; color: #8b949e;
+}
+.dc-cat.pos { background: rgba(63,185,80,0.18); color: #3fb950; }
+.dc-cat.neg { background: rgba(248,81,73,0.15); color: #f85149; }
+.dc-hl-summary { font-size: 12.5px; color: #c9d1d9; line-height: 1.7; margin: 4px 0; }
+.dc-hl-ripple {
+  font-size: 12px; color: #d29922; background: rgba(210,153,34,0.07);
+  border-radius: 4px; padding: 6px 10px; margin-top: 6px; line-height: 1.6;
+}
+.dc-related-stocks { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.dc-related-label { font-size: 11px; color: #8b949e; }
+.dc-rel-chip {
+  font-size: 11px; padding: 1px 8px; border-radius: 10px; text-decoration: none;
+  background: rgba(210,153,34,0.12); color: #d29922; white-space: nowrap;
+}
+.dc-rel-chip:hover { background: rgba(210,153,34,0.25); }
+.dc-hl-meta { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+.dc-pdf-link { font-size: 11px; color: #58a6ff; text-decoration: none; }
+.dc-pdf-link:hover { text-decoration: underline; }
+.dc-mcap { font-size: 11px; color: #8b949e; }
+
+/* 開示一覧 */
+.dc-filter { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+.dc-filter a {
+  font-size: 12px; padding: 3px 10px; border-radius: 12px; text-decoration: none;
+  background: #21262d; color: #8b949e; border: 1px solid #30363d;
+}
+.dc-filter a.active { background: #388bfd; border-color: #388bfd; color: #fff; }
+.dc-list { display: flex; flex-direction: column; }
+.dc-row {
+  display: flex; gap: 8px; align-items: baseline; padding: 7px 10px;
+  border-bottom: 1px solid #21262d; font-size: 12.5px; flex-wrap: wrap;
+}
+.dc-row:hover { background: #1c2128; }
+.dc-row .time { color: #484f58; font-size: 11px; white-space: nowrap; }
+.dc-row a.stock { color: #e6edf3; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.dc-row a.stock:hover { color: #58a6ff; }
+.dc-row a.title { color: #8b949e; text-decoration: none; flex: 1; min-width: 200px; }
+.dc-row a.title:hover { color: #58a6ff; }
+.dc-nav { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.dc-nav a {
+  background: #21262d; border: 1px solid #30363d; color: #8b949e;
+  border-radius: 6px; padding: 4px 10px; text-decoration: none; font-size: 13px;
+}
+.dc-nav .lbl { font-size: 16px; font-weight: 700; color: #e6edf3; padding: 0 6px; }
+@media (max-width: 768px) {
+  .dc-row a.title { min-width: 100%; order: 5; }
+}
+"""
+
+
+def _build_disclosures_page(date_str: str = None, category: str = "") -> str:
+    import html as _html
+    from disclosures import CATEGORY_LABELS
+
+    conn = get_conn()
+    cur  = conn.cursor()
+
+    # ── 市況考察（最新） ──────────────────────────────────────────────
+    cur.execute("""SELECT summary_date, sector_stats, theme_stats, ai_commentary
+                   FROM market_summary ORDER BY summary_date DESC LIMIT 1""")
+    ms = cur.fetchone()
+    market_html = ""
+    if ms:
+        ms_date, sec_json, th_json, commentary = ms
+        chips = []
+        try:
+            secs = _json.loads(sec_json or "[]")
+            for s in secs[:4]:
+                chips.append(f'<span class="dc-chip up">▲ {_html.escape(s["sector"])} {s["avg_chg"]:+.1f}%</span>')
+            for s in secs[-3:]:
+                if s["avg_chg"] < 0:
+                    chips.append(f'<span class="dc-chip down">▼ {_html.escape(s["sector"])} {s["avg_chg"]:+.1f}%</span>')
+            ths = _json.loads(th_json or "[]")
+            for t in ths[:3]:
+                chips.append(f'<span class="dc-chip">{_html.escape(t["theme"])} {t["avg_chg"]:+.1f}%</span>')
+        except Exception:
+            pass
+        body = _html.escape(commentary) if commentary else "（本日のAIコメントは未生成です）"
+        market_html = f"""<div class="dc-market">
+  <div class="dc-market-head"><span class="dc-market-title">📊 市況考察</span>
+  <span class="dc-market-date">{ms_date} 基準・業種/テーマ別騰落と開示動向から生成</span></div>
+  <div class="dc-market-body">{body}</div>
+  <div class="dc-chips">{"".join(chips)}</div>
+</div>"""
+
+    # ── 好材料ハイライト（直近5日・AI付加済み） ──────────────────────
+    cur.execute("""
+        SELECT d.code, s.name, d.disclosed_at, d.title, d.pdf_url, d.category,
+               d.ai_summary, d.ai_related, f.market_cap
+        FROM disclosures d
+        LEFT JOIN stocks s ON d.code = s.code
+        LEFT JOIN stock_fundamentals f ON d.code = f.code
+        WHERE d.ai_summary IS NOT NULL
+          AND d.disclosed_at >= DATE_SUB(NOW(), INTERVAL 5 DAY)
+        ORDER BY d.disclosed_at DESC
+        LIMIT 20
+    """)
+    hl_rows = cur.fetchall()
+
+    # 関連テーマ → 関連銘柄の解決（テーマごとに relevance 上位を引く）
+    all_theme_names = set()
+    parsed_hl = []
+    for r in hl_rows:
+        related = {}
+        try:
+            related = _json.loads(r[7]) if r[7] else {}
+        except Exception:
+            pass
+        if related.get("direction") == "下方":
+            continue  # ハイライトは好材料のみ
+        parsed_hl.append((r, related))
+        all_theme_names.update(related.get("themes", []))
+
+    theme_stocks: dict = {}
+    if all_theme_names:
+        ph = ",".join(["%s"] * len(all_theme_names))
+        cur.execute(f"""
+            SELECT tc.name, st.code, s.name
+            FROM stock_themes st
+            JOIN theme_categories tc ON st.theme_id = tc.id
+            JOIN stocks s ON st.code = s.code
+            LEFT JOIN stock_fundamentals f ON st.code = f.code
+            WHERE tc.name IN ({ph}) AND st.relevance >= 2 AND s.is_active = TRUE
+            ORDER BY st.relevance DESC, COALESCE(f.market_cap,0) DESC
+        """, list(all_theme_names))
+        for tname, code, sname in cur.fetchall():
+            theme_stocks.setdefault(tname, []).append((code, sname))
+
+    hl_cards = []
+    for (code, sname, dts, title, pdf, cat, summary, _rel, mcap), related in parsed_hl[:12]:
+        cat_label = CATEGORY_LABELS.get(cat, cat)
+        mcap_txt = f"時価総額 {float(mcap)/1e8:,.0f}億円" if mcap else ""
+        ripple = related.get("ripple") or ""
+        rel_chips = []
+        for tname in related.get("themes", []):
+            for rc, rn in theme_stocks.get(tname, [])[:4]:
+                if rc != code and len(rel_chips) < 6:
+                    rel_chips.append(f'<a class="dc-rel-chip" href="/stock/{rc}">{_html.escape((rn or rc)[:10])}</a>')
+        related_html = ""
+        if ripple:
+            rel_stock_html = ""
+            if rel_chips:
+                rel_stock_html = (f'<div class="dc-related-stocks"><span class="dc-related-label">関連銘柄:</span>'
+                                  f'{"".join(rel_chips)}</div>')
+            related_html = f'<div class="dc-hl-ripple">💡 {_html.escape(ripple)}{rel_stock_html}</div>'
+        hl_cards.append(f"""<div class="dc-hl-card">
+  <div class="dc-hl-top">
+    <span class="dc-cat pos">{cat_label}</span>
+    <a class="stock" href="/stock/{code}">{_html.escape(sname or code)}（{code}）</a>
+    <span class="dc-mcap">{mcap_txt}</span>
+  </div>
+  <div class="dc-hl-summary">{_html.escape(summary or "")}</div>
+  {related_html}
+  <div class="dc-hl-meta">
+    <span class="time">{dts.strftime("%m/%d %H:%M")}</span>
+    <a class="dc-pdf-link" href="{_html.escape(pdf or "#")}" target="_blank" rel="noopener">開示PDF ↗</a>
+  </div>
+</div>""")
+
+    highlights_html = ""
+    if hl_cards:
+        highlights_html = (f'<div><div class="dc-section-title">⭐ 好材料ハイライト（直近5日・AI分析付き）</div>'
+                           f'<div class="dc-highlights">{"".join(hl_cards)}</div></div>')
+
+    # ── 開示一覧（日付ナビ + カテゴリフィルタ） ──────────────────────
+    cur.execute("SELECT DISTINCT DATE(disclosed_at) FROM disclosures ORDER BY 1 DESC LIMIT 40")
+    avail_dates = [r[0] for r in cur.fetchall()]
+
+    list_html = ""
+    if avail_dates:
+        target = avail_dates[0]
+        if date_str:
+            try:
+                target = date.fromisoformat(date_str)
+            except ValueError:
+                pass
+        try:
+            idx = avail_dates.index(target)
+        except ValueError:
+            idx = 0
+            target = avail_dates[0]
+        prev_d = avail_dates[idx + 1] if idx + 1 < len(avail_dates) else None
+        next_d = avail_dates[idx - 1] if idx > 0 else None
+
+        # カテゴリ件数
+        cur.execute("""SELECT category, COUNT(*) FROM disclosures
+                       WHERE DATE(disclosed_at) = %s GROUP BY category ORDER BY 2 DESC""", (target,))
+        cat_counts = cur.fetchall()
+
+        where_cat = " AND d.category = %s" if category else ""
+        params = [target] + ([category] if category else [])
+        cur.execute(f"""
+            SELECT d.code, s.name, d.disclosed_at, d.title, d.pdf_url, d.category, d.sentiment
+            FROM disclosures d LEFT JOIN stocks s ON d.code = s.code
+            WHERE DATE(d.disclosed_at) = %s{where_cat}
+            ORDER BY d.sentiment DESC, d.disclosed_at DESC
+            LIMIT 300
+        """, params)
+        rows = cur.fetchall()
+
+        base = f"/disclosures?date={target}"
+        filt = [f'<a class="{"active" if not category else ""}" href="{base}">全て</a>']
+        for cat, n in cat_counts:
+            if cat == "other":
+                continue
+            lbl = CATEGORY_LABELS.get(cat, cat)
+            cls = "active" if category == cat else ""
+            filt.append(f'<a class="{cls}" href="{base}&cat={cat}">{lbl} {n}</a>')
+
+        row_html = []
+        for code, sname, dts, title, pdf, cat, senti in rows:
+            cat_cls = "pos" if senti == 1 else ("neg" if senti == -1 else "")
+            lbl = CATEGORY_LABELS.get(cat, "")
+            cat_html = f'<span class="dc-cat {cat_cls}">{lbl}</span>' if cat != "other" else ""
+            row_html.append(
+                f'<div class="dc-row"><span class="time">{dts.strftime("%H:%M")}</span>'
+                f'{cat_html}'
+                f'<a class="stock" href="/stock/{code}">{_html.escape((sname or code)[:12])}（{code}）</a>'
+                f'<a class="title" href="{_html.escape(pdf or "#")}" target="_blank" rel="noopener">{_html.escape(title)}</a></div>'
+            )
+
+        nav_prev = f'<a href="/disclosures?date={prev_d}">◀</a>' if prev_d else ""
+        nav_next = f'<a href="/disclosures?date={next_d}">▶</a>' if next_d else ""
+        list_html = f"""<div>
+  <div class="dc-section-title">開示一覧</div>
+  <div class="dc-nav">{nav_prev}<span class="lbl">{target.strftime("%Y年%m月%d日")}</span>{nav_next}
+    <span style="font-size:11px;color:#8b949e">全{len(rows)}件（好材料を上に表示）</span></div>
+  <div class="dc-filter">{"".join(filt)}</div>
+  <div class="dc-list">{"".join(row_html)}</div>
+</div>"""
+
+    cur.close()
+    conn.close()
+
+    if not market_html and not hl_cards and not list_html:
+        body = f"""<style>{_DISC_CSS}</style>
+<div style="text-align:center;padding:60px;color:#484f58">
+  <p style="font-size:28px">📭</p><p>開示データがまだありません。daily_run実行後に表示されます。</p></div>"""
+    else:
+        body = f"""<style>{_DISC_CSS}</style>
+<div class="dc-wrap">
+  {market_html}
+  {highlights_html}
+  {list_html}
+</div>"""
+    return _page_html("適時開示", body, active="disclosures")
 
 
 _FUND_CSS = """
@@ -6098,6 +6398,18 @@ def valuation():
     html = _get(key)
     if not html:
         html = _build_valuation_page()
+        _set(key, html)
+    return html
+
+
+@app.route("/disclosures")
+def disclosures_page():
+    date_str = request.args.get("date", "")
+    category = request.args.get("cat", "")
+    key = f"disclosures_{date_str}_{category}"
+    html = _get(key)
+    if not html:
+        html = _build_disclosures_page(date_str or None, category)
         _set(key, html)
     return html
 
