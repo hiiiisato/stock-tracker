@@ -1260,7 +1260,41 @@ _EVENTS_CSS = """
 .ev-news-cat.業績,
 .ev-news-cat.決算 { background: rgba(88,166,255,0.15); color: #58a6ff; }
 .ev-news-cat.注目 { background: rgba(188,140,255,0.15); color: #bc8cff; }
+.ev-news-cat.適時開示 { background: rgba(255,166,87,0.22); color: #ffa657; border: 1px solid rgba(255,166,87,0.35); }
 .ev-news-title { color: #8b949e; }
+a.ev-news-title { text-decoration: none; }
+a.ev-news-title:hover { color: #58a6ff; text-decoration: underline; }
+.ev-mcap {
+  font-size: 11px; color: #8b949e; background: #21262d; border-radius: 10px;
+  padding: 1px 8px; white-space: nowrap;
+}
+.ev-mcap.small { color: #d29922; background: rgba(210,153,34,0.12); }
+
+/* 注目ピックアップ */
+.ev-picks {
+  background: #161b22; border: 1px solid rgba(210,153,34,0.4); border-radius: 8px;
+  padding: 14px 16px; margin-bottom: 20px;
+}
+.ev-picks-title { font-size: 15px; font-weight: 700; color: #d29922; margin-bottom: 4px; }
+.ev-picks-sub { font-size: 11px; color: #8b949e; margin-bottom: 10px; }
+.ev-picks-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ev-picks-table th {
+  text-align: left; color: #8b949e; font-weight: 600; padding: 4px 8px;
+  border-bottom: 1px solid #30363d; white-space: nowrap;
+}
+.ev-picks-table td { padding: 6px 8px; border-bottom: 1px solid #21262d; }
+.ev-picks-table tr:last-child td { border-bottom: none; }
+.ev-picks-table a { color: #e6edf3; text-decoration: none; font-weight: 600; }
+.ev-picks-table a:hover { color: #58a6ff; }
+.ev-pick-chip {
+  display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 10px;
+  background: #21262d; color: #8b949e; margin: 1px 2px 1px 0; white-space: nowrap;
+}
+.ev-pick-chip.good { background: rgba(63,185,80,0.15); color: #3fb950; }
+.ev-pick-chip.warn { background: rgba(210,153,34,0.15); color: #d29922; }
+.ev-picks-scroll { overflow-x: auto; }
+.num-up { color: #E84040; font-weight: 600; }
+.num-down { color: #3A9FE0; font-weight: 600; }
 
 /* AI 要約ブロック */
 .ev-ai-summary {
@@ -1348,13 +1382,19 @@ def _render_ai_summary(ai_text: str) -> str:
 
 
 def _render_news_items(news_text: str, collapsed: bool = False) -> str:
-    """保存済みニューステキストをHTML化。collapsed=True のとき折りたたみ表示。"""
+    """保存済みニューステキストをHTML化。collapsed=True のとき折りたたみ表示。
+    行末に ` | URL` があればタイトルを外部リンクにする（2026-07以降の保存形式）。"""
+    import html as _html
     if not news_text:
         return ""
     lines = [l for l in news_text.strip().split("\n") if l.strip()]
     items = []
     for line in lines:
-        # "[MM/DD HH:MM][カテゴリ] タイトル" 形式
+        # "[MM/DD HH:MM][カテゴリ] タイトル | URL" 形式
+        url = ""
+        if " | http" in line:
+            line, _, url = line.rpartition(" | ")
+            url = url.strip()
         cat = ""
         title = line
         if line.startswith("[") and "][" in line:
@@ -1365,18 +1405,165 @@ def _render_news_items(news_text: str, collapsed: bool = False) -> str:
                 title = line[close + 2:].strip()
             except ValueError:
                 pass
-        cat_cls = cat if cat in {"材料","開示","業績","決算","注目"} else ""
+        cat_cls = cat if cat in {"材料","開示","業績","決算","注目","適時開示"} else ""
         cat_html = f'<span class="ev-news-cat {cat_cls}">{cat}</span>' if cat else ""
-        items.append(
-            f'<div class="ev-news-item">{cat_html}'
-            f'<span class="ev-news-title">{title}</span></div>'
-        )
+        title_esc = _html.escape(title)
+        if url:
+            title_html = (f'<a class="ev-news-title" href="{_html.escape(url)}" '
+                          f'target="_blank" rel="noopener">{title_esc} ↗</a>')
+        else:
+            title_html = f'<span class="ev-news-title">{title_esc}</span>'
+        items.append(f'<div class="ev-news-item">{cat_html}{title_html}</div>')
     list_html = f'<div class="ev-news-list">{"".join(items)}</div>'
     if collapsed and items:
         return (f'<details class="ev-raw-toggle">'
                 f'<summary>元データ（{len(items)}件）</summary>'
                 f'{list_html}</details>')
     return list_html
+
+
+def _build_event_picks_html(days: int = 60, min_mcap_oku: float = 50, top_n: int = 12) -> str:
+    """注目ピックアップ: 直近の値上がりイベント常連から「有望株」を抽出する。
+
+    発想: 上がる株は必ずどこかで値上がり上位に入る。ただし超小型の投機株が大半なので、
+    ①時価総額・流動性、②イベント後も株価が維持されているか（フォロースルー）、
+    ③ファンダ（増収増益・理論株価の割安度）でふるいにかけ、スコア順に提示する。
+    """
+    import html as _html
+    key = "ev_picks"
+    cached = _get(key)
+    if cached is not None:
+        return cached
+
+    conn = get_conn()
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT pe.code, s.name,
+               COUNT(*)                        AS n_up,
+               MIN(pe.event_date)              AS first_ev,
+               MAX(pe.event_date)              AS last_ev,
+               MAX(pe.change_pct)              AS max_chg,
+               MAX(f.market_cap)               AS mcap,
+               MAX(ps.op_growth)               AS op_growth,
+               MAX(ps.rev_growth)              AS rev_growth,
+               MAX(ps.turnover_20d)            AS turnover_20d,
+               MAX(tv.upside_pct)              AS theo_upside,
+               SUM(CASE WHEN pe.period='weekly' THEN 1 ELSE 0 END) AS n_weekly
+        FROM price_events pe
+        JOIN stocks s ON pe.code = s.code
+        LEFT JOIN stock_fundamentals f  ON pe.code = f.code
+        LEFT JOIN price_stats ps        ON pe.code = ps.code
+        LEFT JOIN theoretical_values tv ON pe.code = tv.code
+        WHERE pe.direction = 'up'
+          AND pe.event_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+          AND s.is_active = TRUE
+          AND f.market_cap >= %s
+        GROUP BY pe.code, s.name
+    """, (days, min_mcap_oku * 1e8))
+    rows = cur.fetchall()
+
+    if not rows:
+        cur.close(); conn.close()
+        _set(key, "")
+        return ""
+
+    # フォロースルー: 最初のイベント日の株価と現在の株価を比較
+    codes = [r[0] for r in rows]
+    ph = ",".join(["%s"] * len(codes))
+    cur.execute(f"""
+        SELECT code, date, COALESCE(adj_close, close)
+        FROM daily_prices
+        WHERE code IN ({ph}) AND date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+          AND close IS NOT NULL
+        ORDER BY code, date
+    """, codes + [days + 7])
+    price_map: dict = {}
+    for code, dt, adj in cur.fetchall():
+        price_map.setdefault(str(code), []).append((dt, float(adj)))
+    cur.close(); conn.close()
+
+    picks = []
+    for code, name, n_up, first_ev, last_ev, max_chg, mcap, opg, revg, t20, theo_up, n_weekly in rows:
+        series = price_map.get(str(code), [])
+        if not series:
+            continue
+        # 最初のイベント日以降のフォロースルー
+        base = next((p for d, p in series if d >= first_ev), None)
+        cur_price = series[-1][1]
+        follow_pct = (cur_price / base - 1) * 100 if base and base > 0 else None
+
+        score = 0.0
+        chips = []
+        score += min(int(n_up), 5) * 10
+        if int(n_up) >= 2:
+            chips.append(("good", f"{n_up}回登場"))
+        if n_weekly and int(n_weekly) > 0:
+            score += 8
+            chips.append(("good", "週間上位"))
+        oku = float(mcap) / 1e8 if mcap else 0
+        if oku >= 300:
+            score += 15
+        elif oku >= 100:
+            score += 10
+        else:
+            chips.append(("warn", "小型"))
+        if follow_pct is not None:
+            if follow_pct >= 0:
+                score += 20
+                chips.append(("good", f"イベント後 +{follow_pct:.0f}%維持"))
+            elif follow_pct < -15:
+                score -= 25
+                chips.append(("warn", f"イベント後 {follow_pct:.0f}%"))
+            else:
+                score -= 5
+        if opg is not None and float(opg) > 0 and revg is not None and float(revg) > 0:
+            score += 12
+            chips.append(("good", "増収増益"))
+        if theo_up is not None and float(theo_up) > 0:
+            score += 10
+            chips.append(("good", f"理論株価↑{float(theo_up):.0f}%"))
+        if t20 is not None and float(t20) >= 1e8:
+            score += 5
+
+        picks.append({
+            "code": str(code), "name": name or str(code), "score": score,
+            "n_up": int(n_up), "mcap_oku": oku, "max_chg": float(max_chg or 0),
+            "follow": follow_pct, "last_ev": last_ev, "chips": chips,
+        })
+
+    picks.sort(key=lambda x: -x["score"])
+    picks = picks[:top_n]
+    if not picks:
+        _set(key, "")
+        return ""
+
+    trs = []
+    for p in picks:
+        mcap_txt = f"{p['mcap_oku']/10000:.1f}兆" if p['mcap_oku'] >= 10000 else f"{p['mcap_oku']:,.0f}億"
+        fol = p["follow"]
+        fol_html = (f'<span class="{"num-up" if fol >= 0 else "num-down"}">{fol:+.0f}%</span>'
+                    if fol is not None else "—")
+        chips_html = "".join(f'<span class="ev-pick-chip {c}">{_html.escape(t)}</span>'
+                             for c, t in p["chips"])
+        trs.append(
+            f'<tr><td><a href="/stock/{p["code"]}">{_html.escape(p["name"])}（{p["code"]}）</a></td>'
+            f'<td>{mcap_txt}</td>'
+            f'<td>{p["n_up"]}回</td>'
+            f'<td class="num-up">+{p["max_chg"]:.0f}%</td>'
+            f'<td>{fol_html}</td>'
+            f'<td>{chips_html}</td></tr>'
+        )
+
+    html = f"""<div class="ev-picks">
+  <div class="ev-picks-title">⭐ 注目ピックアップ（直近{days}日の値上がり銘柄から抽出）</div>
+  <div class="ev-picks-sub">時価総額{min_mcap_oku:.0f}億円以上・イベント後の株価維持・増収増益・理論株価の割安度でスコアリング。上がる株は必ず値上がり上位に現れる、の逆引き。</div>
+  <div class="ev-picks-scroll"><table class="ev-picks-table">
+    <tr><th>銘柄</th><th>時価総額</th><th>登場</th><th>最大上昇</th><th>初回イベント後</th><th>評価ポイント</th></tr>
+    {"".join(trs)}
+  </table></div>
+</div>"""
+    _set(key, html)
+    return html
 
 
 def _build_events_page(event_date_str: str = None, period: str = "daily") -> str:
@@ -1458,6 +1645,14 @@ def _build_events_page(event_date_str: str = None, period: str = "daily") -> str
             pct  = float(s["change_pct"] or 0)
             rk   = s["ranking"]
             rk_str = f"第{rk}位" if rk else ""
+            mcap = s.get("market_cap")
+            if mcap:
+                oku = float(mcap) / 1e8
+                mcap_cls = "ev-mcap small" if oku < 100 else "ev-mcap"
+                mcap_txt = f"{oku/10000:.1f}兆円" if oku >= 10000 else f"{oku:,.0f}億円"
+                mcap_html = f'<span class="{mcap_cls}" title="時価総額">{mcap_txt}</span>'
+            else:
+                mcap_html = ""
             ai_html   = _render_ai_summary(s.get("ai_summary") or "")
             news_html  = _render_news_items(s["news_items"] or "",
                                             collapsed=bool(ai_html))
@@ -1466,6 +1661,7 @@ def _build_events_page(event_date_str: str = None, period: str = "daily") -> str
   <div class="ev-card-top">
     <span class="ev-pct {color}">{sign}{pct:.1f}%</span>
     <a class="ev-stock-link" href="/stock/{code}">{name}（{code}）</a>
+    {mcap_html}
     <span class="ev-rank">{rk_str}</span>
   </div>
   {ai_html}
@@ -1473,7 +1669,11 @@ def _build_events_page(event_date_str: str = None, period: str = "daily") -> str
 </div>""")
         return header + f'<div class="ev-card-list">{"".join(cards)}</div>'
 
+    picks_html = _build_event_picks_html()
+
     body = f"""<style>{_EVENTS_CSS}</style>
+
+{picks_html}
 
 <div class="ev-controls">
   {date_nav}

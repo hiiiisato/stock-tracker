@@ -17,7 +17,6 @@ from config import get_conn
 from research_strategy import (
     fetch_news,
     fetch_news_batch,
-    summarize_news,
     summarize_news_batch,
     get_strategy_description,
     RESEARCH_THRESHOLD_PCT,
@@ -26,10 +25,15 @@ from research_strategy import (
 
 
 def _format_news_text(news_items: list) -> str:
+    """DB保存用のニューステキスト。URLがある場合は ` | url` を末尾に付与
+    （表示側 _render_news_items がリンク化する）。"""
     lines = []
     for it in news_items:
         dt_str = it["dt"].strftime("%m/%d %H:%M")
-        lines.append(f"[{dt_str}][{it['category']}] {it['title']}")
+        line = f"[{dt_str}][{it['category']}] {it['title']}"
+        if it.get("url"):
+            line += f" | {it['url']}"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -144,6 +148,97 @@ def _get_financials_context(codes: list) -> dict:
     return result
 
 
+def _get_market_caps(codes: list) -> dict:
+    """時価総額を一括取得（円）。"""
+    if not codes:
+        return {}
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        ph = ",".join(["%s"] * len(codes))
+        cur.execute(f"SELECT code, market_cap FROM stock_fundamentals WHERE code IN ({ph})", codes)
+        result = {str(r[0]): float(r[1]) for r in cur.fetchall() if r[1]}
+        cur.close(); conn.close()
+        return result
+    except Exception:
+        return {}
+
+
+def _get_themes_context(codes: list) -> dict:
+    """所属テーマ名を一括取得。テーマ株物色の文脈判断用。"""
+    if not codes:
+        return {}
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        ph = ",".join(["%s"] * len(codes))
+        cur.execute(f"""
+            SELECT st.code, GROUP_CONCAT(tc.name ORDER BY st.relevance DESC SEPARATOR '、')
+            FROM stock_themes st JOIN theme_categories tc ON st.theme_id = tc.id
+            WHERE st.code IN ({ph}) AND st.relevance >= 2
+            GROUP BY st.code
+        """, codes)
+        result = {str(r[0]): r[1] for r in cur.fetchall() if r[1]}
+        cur.close(); conn.close()
+        return result
+    except Exception:
+        return {}
+
+
+def _get_price_history_context(codes: list, ranking_date: date, days: int = 10) -> dict:
+    """直近N営業日の日次騰落率系列を一括取得。連続S高・暴落後リバウンド等の文脈用。"""
+    if not codes:
+        return {}
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        ph = ",".join(["%s"] * len(codes))
+        cur.execute(f"""
+            SELECT code, date, change_pct FROM (
+                SELECT code, date, change_pct,
+                       ROW_NUMBER() OVER (PARTITION BY code ORDER BY date DESC) AS rn
+                FROM daily_prices
+                WHERE code IN ({ph}) AND date <= %s AND change_pct IS NOT NULL
+            ) t WHERE rn <= %s ORDER BY code, date
+        """, codes + [ranking_date, days])
+        by_code: dict = {}
+        for code, dt, chg in cur.fetchall():
+            by_code.setdefault(str(code), []).append(f"{dt.strftime('%m/%d')} {float(chg):+.1f}%")
+        cur.close(); conn.close()
+        return {c: "、".join(v) for c, v in by_code.items()}
+    except Exception:
+        return {}
+
+
+def _get_recent_events_context(codes: list, ranking_date: date, days: int = 21) -> dict:
+    """同一銘柄の直近の変動イベント（過去の分析の【変動理由】1行目）を一括取得。"""
+    if not codes:
+        return {}
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        ph = ",".join(["%s"] * len(codes))
+        cur.execute(f"""
+            SELECT code, event_date, direction, change_pct, ai_summary
+            FROM price_events
+            WHERE code IN ({ph}) AND period = 'daily'
+              AND event_date < %s AND event_date >= DATE_SUB(%s, INTERVAL {days} DAY)
+            ORDER BY code, event_date
+        """, codes + [ranking_date, ranking_date])
+        by_code: dict = {}
+        for code, dt, direction, pct, summary in cur.fetchall():
+            reason = ""
+            if summary:
+                # 【変動理由】セクションの本文1行目だけを抜き出す
+                import re as _re
+                m = _re.search(r"【変動理由】\s*\n?(.+)", summary)
+                if m:
+                    reason = m.group(1).strip()[:80]
+            sign = "+" if (pct or 0) > 0 else ""
+            line = f"  {dt.strftime('%m/%d')} {sign}{float(pct or 0):.1f}%: {reason or '(要約なし)'}"
+            by_code.setdefault(str(code), []).append(line)
+        cur.close(); conn.close()
+        return {c: "\n".join(v[-5:]) for c, v in by_code.items()}
+    except Exception:
+        return {}
+
+
 def _save_event(code: str, event_date: date, direction: str, change_pct: float,
                 ranking: int, period: str, news_text: str | None,
                 ai_summary: str | None) -> bool:
@@ -186,11 +281,22 @@ def research_and_save(code: str, event_date: date, direction: str,
         _ai_column_checked = True
 
     company_name = _get_company_name(code)
+    window_days  = 7 if period == "weekly" else None
     news         = fetch_news(code, target_date=event_date, company_name=company_name,
-                              direction=direction)
+                              direction=direction, window_days=window_days)
     news_text    = _format_news_text(news) if news else None
-    ai_summary   = summarize_news(news, code, company_name, event_date,
-                                  direction=direction, change_pct=change_pct) if news else None
+
+    result = summarize_news_batch([{
+        "code": code, "name": company_name, "date": event_date,
+        "direction": direction, "change_pct": change_pct,
+        "news": news,
+        "financials":    _get_financials_context([code]).get(code),
+        "market_cap":    _get_market_caps([code]).get(code),
+        "themes":        _get_themes_context([code]).get(code),
+        "price_history": _get_price_history_context([code], event_date).get(code),
+        "recent_events": _get_recent_events_context([code], event_date).get(code),
+    }])
+    ai_summary = result.get(code)
 
     if ai_summary:
         print(f"    [AI要約完了] {code}")
@@ -249,8 +355,9 @@ def _get_weekly_movers(ranking_date: date, threshold: float, max_n: int) -> tupl
         cur.execute(f"""
             WITH week_prices AS (
                 SELECT code,
-                    FIRST_VALUE(close) OVER (PARTITION BY code ORDER BY date) AS first_close,
-                    LAST_VALUE(close)  OVER (
+                    -- 分割対応: 必ず調整済み株価で計算する（生closeだと権利落ちが暴落に見える）
+                    FIRST_VALUE(COALESCE(adj_close, close)) OVER (PARTITION BY code ORDER BY date) AS first_close,
+                    LAST_VALUE(COALESCE(adj_close, close))  OVER (
                         PARTITION BY code ORDER BY date
                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
                     ) AS last_close
@@ -329,14 +436,22 @@ def research_top_movers(target_date: date = None, period: str = "daily") -> int:
         print(f"  調査対象なし（閾値 ±{threshold}%）")
         return 0
 
-    # ── Phase 1: 全銘柄のニュース並行取得 + 財務データ一括取得 ─────────
+    # ── Phase 1: 全銘柄のニュース並行取得 + 文脈データ一括取得 ─────────
     codes = [c for c, _, _, _ in all_targets]
-    names   = _get_all_company_names(codes)   # 1クエリで一括取得
-    fin_ctx = _get_financials_context(codes)   # 最新2期の業績を一括取得
+    names    = _get_all_company_names(codes)   # 1クエリで一括取得
+    fin_ctx  = _get_financials_context(codes)  # 最新2期の業績
+    mcaps    = _get_market_caps(codes)         # 時価総額
+    themes   = _get_themes_context(codes)      # 所属テーマ
+    hist_ctx = _get_price_history_context(codes, ranking_date)  # 直近の値動き
+    ev_ctx   = _get_recent_events_context(codes, ranking_date)  # 過去の変動イベント
+
+    # 週次調査はニュース取得窓を1週間に広げる
+    window_days = 7 if period == "weekly" else None
 
     print(f"\n  [Phase 1] ニュース並行取得中 ({len(all_targets)}銘柄)...")
     stock_specs = [
-        {"code": c, "name": names.get(c, ""), "date": ranking_date, "direction": d}
+        {"code": c, "name": names.get(c, ""), "date": ranking_date, "direction": d,
+         "window_days": window_days}
         for c, _, _, d in all_targets
     ]
     news_by_code = fetch_news_batch(stock_specs)
@@ -344,16 +459,21 @@ def research_top_movers(target_date: date = None, period: str = "daily") -> int:
     print(f"  [Phase 1] 完了: {news_found}/{len(all_targets)} 銘柄でニュースあり"
           f"（財務データあり: {len(fin_ctx)}銘柄）")
 
-    # ── Phase 2: ニュースがある銘柄をまとめて AI 要約 ───────────────────
+    # ── Phase 2: 全銘柄をまとめて AI 要約 ───────────────────────────────
+    # ニュースが無い銘柄も対象にする（値動き履歴・過去イベント・テーマから
+    # 文脈を推測できるため。方向と整合しない空要約を防ぐ）
     batch_data = [
         {
             "code": c, "name": names.get(c, ""), "date": ranking_date,
             "direction": d, "change_pct": pct,
             "news": news_by_code.get(c, []),
-            "financials": fin_ctx.get(c),   # DB から取得した直近2期の業績
+            "financials": fin_ctx.get(c),
+            "market_cap": mcaps.get(c),
+            "themes": themes.get(c),
+            "price_history": hist_ctx.get(c),
+            "recent_events": ev_ctx.get(c),
         }
         for c, _, pct, d in all_targets
-        if news_by_code.get(c)
     ]
 
     if batch_data:
@@ -361,7 +481,7 @@ def research_top_movers(target_date: date = None, period: str = "daily") -> int:
         summaries = summarize_news_batch(batch_data)
     else:
         summaries = {}
-        print("  [Phase 2] ニュースなし → AI 要約スキップ")
+        print("  [Phase 2] 対象なし → AI 要約スキップ")
 
     # ── Phase 3: 全件 DB 保存 ────────────────────────────────────────────
     print(f"\n  [Phase 3] DB 保存...")
@@ -391,13 +511,14 @@ def get_events_for_date(event_date: date = None, period: str = "daily") -> dict:
 
     cur.execute("""
         SELECT pe.code, s.name, pe.direction, pe.change_pct,
-               pe.ranking, pe.news_items, pe.ai_summary
+               pe.ranking, pe.news_items, pe.ai_summary, f.market_cap
         FROM price_events pe
         JOIN stocks s ON pe.code = s.code
+        LEFT JOIN stock_fundamentals f ON pe.code = f.code
         WHERE pe.event_date = %s AND pe.period = %s
         ORDER BY pe.direction, ABS(pe.change_pct) DESC
     """, (event_date, period))
-    cols = ["code","name","direction","change_pct","ranking","news_items","ai_summary"]
+    cols = ["code","name","direction","change_pct","ranking","news_items","ai_summary","market_cap"]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     cur.close()
     conn.close()

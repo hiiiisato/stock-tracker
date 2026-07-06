@@ -91,6 +91,7 @@ def run(init: bool = False, rankings_only: bool = False):
             cur.execute("""
                 INSERT INTO trading_calendar (date, is_holiday)
                 SELECT DISTINCT date, FALSE FROM daily_prices
+                WHERE date >= '2000-01-01'  -- 零値日付等の毒データでINSERT全体が失敗するのを防ぐ
                 ON DUPLICATE KEY UPDATE is_holiday=FALSE
             """)
             conn.commit()

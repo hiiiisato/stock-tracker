@@ -90,8 +90,9 @@ def compute_weekly_rankings(week_ending: date = None, top_n: int = 15) -> int:
         WITH week_prices AS (
             SELECT
                 code,
-                FIRST_VALUE(close) OVER (PARTITION BY code ORDER BY date) AS first_close,
-                LAST_VALUE(close)  OVER (
+                -- 分割対応: 必ず調整済み株価で計算する（生closeだと権利落ちが暴落に見える）
+                FIRST_VALUE(COALESCE(adj_close, close)) OVER (PARTITION BY code ORDER BY date) AS first_close,
+                LAST_VALUE(COALESCE(adj_close, close))  OVER (
                     PARTITION BY code ORDER BY date
                     ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
                 ) AS last_close
