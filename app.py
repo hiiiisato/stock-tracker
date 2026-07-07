@@ -447,6 +447,7 @@ def _nav(active: str = "") -> str:
         ("home",      "/",           "ホーム"),
         ("screen",    "/screen",     "スクリーニング"),
         ("valuation", "/valuation",  "理論株価"),
+        ("themes",    "/themes",     "テーマ"),
         ("rankings",  "/rankings",   "ランキング"),
         ("events",    "/events",     "イベント"),
         ("disclosures", "/disclosures", "適時開示"),
@@ -638,7 +639,9 @@ def _build_index_section() -> str:
         })
     traces_data = json.dumps(traces_js, ensure_ascii=False)
 
-    chart_html = f"""<div class="idx-chart-wrap">
+    chart_html = f"""<details id="idx-chart-details" style="margin-top:8px">
+<summary style="font-size:12px;color:#8b949e;cursor:pointer;user-select:none;padding:4px 0">📈 指数チャートを表示（ローソク足・MA切替）</summary>
+<div class="idx-chart-wrap">
   <div class="idx-chart-tabs">{tabs_html}</div>
   <div style="display:flex;gap:8px;padding:4px 0 6px;flex-wrap:wrap;align-items:center">
     <div style="display:flex;gap:3px">
@@ -654,6 +657,7 @@ def _build_index_section() -> str:
   </div>
   <div class="idx-chart-body" id="idx-chart-div" style="height:320px"></div>
 </div>
+</details>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
 <script>
 (function() {{
@@ -754,7 +758,15 @@ def _build_index_section() -> str:
     }});
   }});
 
-  draw(0);
+  // チャートは折りたたみを開いた時に初めて描画する（非表示コンテナへの描画を防ぐ）
+  var det = document.getElementById('idx-chart-details');
+  var idxDrawn = false;
+  det.addEventListener('toggle', function() {{
+    if (det.open) {{
+      if (!idxDrawn) {{ idxDrawn = true; }}
+      draw(IDX_CURRENT);
+    }}
+  }});
 }})();
 </script>"""
 
@@ -791,16 +803,6 @@ def _build_home() -> str:
     up_pct   = up_cnt   / total * 100
     dn_pct   = dn_cnt   / total * 100
     flat_pct = flat_cnt / total * 100
-
-    # テーマ過熱度（最新日）
-    cur.execute("""
-        SELECT tc.id, tc.name, tc.code, tds.heat_score, tds.avg_change_pct, tds.breadth_ratio
-        FROM theme_daily_stats tds
-        JOIN theme_categories tc ON tds.theme_id = tc.id
-        WHERE tds.date = (SELECT MAX(date) FROM theme_daily_stats) AND tc.level = 2
-        ORDER BY tds.heat_score DESC
-    """)
-    themes = cur.fetchall()  # (id, name, code, heat, avg_change_pct, breadth_ratio)
 
     # 本日の値上がりTOP5（株式分割等の異常値を除外）
     cur.execute("""
@@ -845,62 +847,78 @@ def _build_home() -> str:
     cur.close()
     conn.close()
 
-    # ─ テーマレポートリンク ─
-    report_link = f"/report/{latest_date}" if latest_date else "/report"
+    # ─── 市況考察カード（適時開示システムの日次AIコメント） ─────────
+    market_ai_card = ""
+    try:
+        conn2 = get_conn(); cur2 = conn2.cursor()
+        cur2.execute("""SELECT summary_date, sector_stats, ai_commentary
+                        FROM market_summary ORDER BY summary_date DESC LIMIT 1""")
+        ms = cur2.fetchone()
+        cur2.close(); conn2.close()
+        if ms and ms[2]:
+            import html as _html2
+            sec_chips = ""
+            try:
+                secs = _json.loads(ms[1] or "[]")
+                chips = [f'<span class="dc-chip up">▲ {_html2.escape(s["sector"])} {s["avg_chg"]:+.1f}%</span>'
+                         for s in secs[:3]]
+                chips += [f'<span class="dc-chip down">▼ {_html2.escape(s["sector"])} {s["avg_chg"]:+.1f}%</span>'
+                          for s in secs[-2:] if s["avg_chg"] < 0]
+                sec_chips = f'<div class="dc-chips">{"".join(chips)}</div>'
+            except Exception:
+                pass
+            market_ai_card = f"""<div class="dc-market" style="margin-bottom:16px">
+  <div class="dc-market-head"><span class="dc-market-title">📊 市況考察</span>
+  <span class="dc-market-date">{ms[0]} 基準 <a href="/disclosures" style="color:#58a6ff">適時開示 →</a></span></div>
+  <div class="dc-market-body">{_html2.escape(ms[2])}</div>
+  {sec_chips}
+</div>"""
+    except Exception:
+        pass
 
-    # ─── 市場概況カード ───────────────────────────────────────────
+    # ─── 市場概況（コンパクト・1行バー） ───────────────────────────
     market_card = f"""<div class="card">
-  <div class="card-header">市場概況 — {latest_date}</div>
-  <div class="card-body">
-    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px">
-      <span class="up">▲上昇 {up_cnt:,}</span>
-      <span class="muted">→変わらず {flat_cnt:,}</span>
-      <span class="dn">▼下落 {dn_cnt:,}</span>
-    </div>
-    <div class="market-bar-wrap">
-      <div class="mb-up"   style="width:{up_pct:.1f}%"></div>
-      <div class="mb-flat" style="width:{flat_pct:.1f}%"></div>
-      <div class="mb-dn"   style="width:{dn_pct:.1f}%"></div>
-    </div>
-    <div style="font-size:11px;color:#8b949e;text-align:right;margin-top:4px">
-      全{total:,}銘柄 / 上昇率 {up_pct:.0f}%
+  <div class="card-body" style="padding:10px 14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;gap:10px;flex-wrap:wrap">
+      <span style="color:#8b949e;font-weight:600">市場概況</span>
+      <span class="up">▲ {up_cnt:,}</span>
+      <div class="market-bar-wrap" style="flex:1;min-width:120px;margin:0">
+        <div class="mb-up"   style="width:{up_pct:.1f}%"></div>
+        <div class="mb-flat" style="width:{flat_pct:.1f}%"></div>
+        <div class="mb-dn"   style="width:{dn_pct:.1f}%"></div>
+      </div>
+      <span class="dn">▼ {dn_cnt:,}</span>
+      <span class="muted" style="font-size:11px">上昇率 {up_pct:.0f}%（全{total:,}銘柄）</span>
     </div>
   </div>
 </div>"""
 
-    # ─── テーマ過熱度カード ───────────────────────────────────────
-    def _heat_badge(h):
-        h = float(h or 0)
-        if h >= 3:   return f'<span class="badge badge-hot">熱い</span>'
-        if h >= 1:   return f'<span class="badge badge-warm">上昇</span>'
-        if h <= -1:  return f'<span class="badge badge-cold">冷却</span>'
-        return f'<span class="badge badge-neu">中立</span>'
-
-    theme_rows = ""
-    for tid, tname, tcode, heat, avg_chg, breadth in themes:
-        h = float(heat or 0)
-        c = float(avg_chg or 0)
-        theme_rows += f"""<tr>
-      <td class="left"><a class="tbl-link" href="/theme/{tid}">{tname}</a></td>
-      <td>{_heat_badge(h)}</td>
-      <td class="{'up' if h > 0 else 'dn' if h < 0 else 'muted'}">{h:+.1f}</td>
-      <td class="{'up' if c > 0 else 'dn' if c < 0 else 'muted'}">{c:+.2f}%</td>
+    # ─── 今買うべきテーマ TOP5（新スコアリング） ──────────────────
+    theme_card = ""
+    try:
+        import html as _html3
+        tscores = _compute_theme_scores()[:5]
+        t_rows = ""
+        for t in tscores:
+            chips = "".join(f'<span class="th-chip {c}">{_html3.escape(x)}</span>' for c, x in t["chips"][:2])
+            t_rows += f"""<tr>
+      <td class="left"><a class="tbl-link" href="/theme/{t['id']}">{_html3.escape(t['name'])}</a></td>
+      <td><span class="th-verdict {t['vcls']}">{t['verdict']}</span></td>
+      <td style="font-weight:700">{t['score']:.0f}</td>
+      <td class="{'up' if t['chg5'] >= 0 else 'dn'}">{t['chg5']:+.1f}%</td>
+      <td class="left" style="white-space:normal">{chips}</td>
     </tr>"""
-
-    theme_card = f"""<div class="card">
-  <div class="card-header">テーマ過熱度 <a href="{report_link}" style="float:right;font-size:11px;font-weight:normal">詳細レポート →</a></div>
+        theme_card = f"""<div class="card">
+  <div class="card-header">🔥 今買うべきテーマ TOP5 <a href="/themes" style="float:right;font-size:11px;font-weight:normal">全テーマ分析 →</a></div>
   <div class="table-wrap">
     <table>
-      <thead><tr>
-        <th class="left">テーマ</th>
-        <th>状態</th>
-        <th>スコア</th>
-        <th>前日比</th>
-      </tr></thead>
-      <tbody>{theme_rows}</tbody>
+      <thead><tr><th class="left">テーマ</th><th>判定</th><th>妙味</th><th>5日</th><th class="left">根拠</th></tr></thead>
+      <tbody>{t_rows}</tbody>
     </table>
   </div>
 </div>"""
+    except Exception as e:
+        print(f"[home] テーマカード生成エラー: {e}")
 
     # ─── 値上がり/値下がりカード ──────────────────────────────────
     def _stock_rows(stocks, is_up: bool) -> str:
@@ -971,59 +989,74 @@ def _build_home() -> str:
   </div>
 </div>"""
 
-    # ─── ナビカード（3列） ──────────────────────────────────────────
-    nav_cards = f"""<div class="grid-3">
-  <a href="{report_link}" style="text-decoration:none">
-    <div class="card" style="padding:16px;cursor:pointer;transition:border-color .15s"
-         onmouseover="this.style.borderColor='#1f6feb'" onmouseout="this.style.borderColor='#30363d'">
-      <div style="font-size:24px;margin-bottom:8px">📊</div>
-      <div style="font-size:14px;font-weight:600;color:#e6edf3;margin-bottom:4px">テーマ分析</div>
-      <div style="font-size:12px;color:#8b949e">資金フロー・過熱スコアの詳細レポート</div>
-    </div>
-  </a>
-  <a href="/rankings" style="text-decoration:none">
-    <div class="card" style="padding:16px;cursor:pointer;transition:border-color .15s"
-         onmouseover="this.style.borderColor='#1f6feb'" onmouseout="this.style.borderColor='#30363d'">
-      <div style="font-size:24px;margin-bottom:8px">🏆</div>
-      <div style="font-size:14px;font-weight:600;color:#e6edf3;margin-bottom:4px">ランキング</div>
-      <div style="font-size:12px;color:#8b949e">値上がり・値下がり・週間ランキング</div>
-    </div>
-  </a>
-  <a href="/watchlist" style="text-decoration:none">
-    <div class="card" style="padding:16px;cursor:pointer;transition:border-color .15s"
-         onmouseover="this.style.borderColor='#1f6feb'" onmouseout="this.style.borderColor='#30363d'">
-      <div style="font-size:24px;margin-bottom:8px">⭐</div>
-      <div style="font-size:14px;font-weight:600;color:#e6edf3;margin-bottom:4px">ウォッチリスト</div>
-      <div style="font-size:12px;color:#8b949e">登録銘柄{len(watchlist)}件の最新状況</div>
-    </div>
-  </a>
-</div>"""
+    # ─── 注目ピックアップ（イベント常連×好材料の有望株） ────────────
+    picks_html = ""
+    try:
+        picks_html = _build_event_picks_html(top_n=8)
+    except Exception as e:
+        print(f"[home] ピックアップ生成エラー: {e}")
 
-    # 主要指数セクション（DBから取得、失敗時は非表示）
+    # ─── 好材料ハイライト（コンパクト・直近3件） ────────────────────
+    hl_html = ""
+    try:
+        import html as _html4
+        conn3 = get_conn(); cur3 = conn3.cursor()
+        cur3.execute("""
+            SELECT d.code, s.name, d.ai_summary
+            FROM disclosures d LEFT JOIN stocks s ON d.code = s.code
+            LEFT JOIN stock_fundamentals f ON d.code = f.code
+            WHERE d.ai_summary IS NOT NULL AND d.sentiment >= 0
+              AND d.disclosed_at >= DATE_SUB(NOW(), INTERVAL 3 DAY)
+            ORDER BY COALESCE(f.market_cap,0) DESC LIMIT 3
+        """)
+        hl = cur3.fetchall()
+        cur3.close(); conn3.close()
+        if hl:
+            items = "".join(
+                f'<div style="padding:8px 0;border-bottom:1px solid #21262d;font-size:12.5px;line-height:1.6">'
+                f'<a class="tbl-link" href="/stock/{c}" style="font-weight:600">{_html4.escape(n or c)}（{c}）</a> '
+                f'<span style="color:#8b949e">{_html4.escape((summ or "")[:110])}…</span></div>'
+                for c, n, summ in hl)
+            hl_html = f"""<div class="card">
+  <div class="card-header">💡 好材料ハイライト <a href="/disclosures" style="float:right;font-size:11px;font-weight:normal">適時開示 →</a></div>
+  <div class="card-body" style="padding-top:2px">{items}</div>
+</div>"""
+    except Exception:
+        pass
+
+    # 主要指数セクション（コンパクト・チャートは折りたたみ）
     index_section = _build_index_section()
 
     body = f"""\
+<style>{_DISC_CSS}{_THEME_CSS}{_EVENTS_CSS}</style>
 <div class="page-header">
   <div class="page-title">マーケット ダッシュボード</div>
   <div class="page-subtitle">最終更新: {latest_date}</div>
 </div>
 
-{index_section}
-
-{nav_cards}
+{market_ai_card}
 
 {market_card}
 
-<div style="margin-bottom:24px"></div>
+<div style="margin-bottom:16px"></div>
+
+{picks_html}
 
 <div class="grid-aside">
-  <div>{theme_card}</div>
+  <div style="display:flex;flex-direction:column;gap:16px">
+    {theme_card}
+    {hl_html}
+  </div>
   <div style="display:flex;flex-direction:column;gap:16px">
     {gainers_card}
     {losers_card}
     {wl_card}
   </div>
-</div>"""
+</div>
+
+<div style="margin-top:20px"></div>
+
+{index_section}"""
 
     return _page_html("ダッシュボード", body, active="home")
 
@@ -1538,7 +1571,7 @@ def _build_event_picks_html(days: int = 60, min_mcap_oku: float = 50, top_n: int
         if theo_up is not None and float(theo_up) > 0:
             score += 10
             chips.append(("good", f"理論株価↑{float(theo_up):.0f}%"))
-        if t20 is not None and float(t20) >= 1e8:
+        if t20 is not None and float(t20) >= 1.0:  # turnover_20dは億円単位
             score += 5
         for lbl in sorted(good_disc.get(str(code), set())):
             score += 12
@@ -3122,6 +3155,322 @@ def _valuation_ranking_rows(order_by: str, limit: int = 60) -> str:
     return "".join(out)
 
 
+_THEME_CSS = """
+.th-wrap { display: flex; flex-direction: column; gap: 16px; }
+.th-intro { font-size: 12px; color: #8b949e; line-height: 1.7; }
+.th-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.th-table th {
+  text-align: left; color: #8b949e; font-weight: 600; padding: 6px 8px;
+  border-bottom: 1px solid #30363d; white-space: nowrap; font-size: 11px;
+}
+.th-table td { padding: 8px; border-bottom: 1px solid #21262d; white-space: nowrap; }
+.th-table tr:last-child td { border-bottom: none; }
+.th-table a.tname { color: #e6edf3; font-weight: 700; text-decoration: none; font-size: 14px; }
+.th-table a.tname:hover { color: #58a6ff; }
+.th-verdict {
+  font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; white-space: nowrap;
+}
+.th-verdict.v-start { background: rgba(63,185,80,0.18); color: #3fb950; }
+.th-verdict.v-run   { background: rgba(232,64,64,0.15); color: #E84040; }
+.th-verdict.v-hot   { background: rgba(210,153,34,0.18); color: #d29922; }
+.th-verdict.v-cool  { background: rgba(58,159,224,0.12); color: #3A9FE0; }
+.th-verdict.v-neu   { background: #21262d; color: #8b949e; }
+.th-score { font-size: 15px; font-weight: 700; color: #e6edf3; }
+.th-chip {
+  display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 10px;
+  background: #21262d; color: #8b949e; margin: 1px 2px 1px 0; white-space: nowrap;
+}
+.th-chip.good { background: rgba(63,185,80,0.15); color: #3fb950; }
+.th-chip.warn { background: rgba(210,153,34,0.15); color: #d29922; }
+.th-stock-chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.th-stock-chips a {
+  font-size: 11px; padding: 1px 8px; border-radius: 10px; text-decoration: none;
+  background: rgba(88,166,255,0.1); color: #79c0ff; white-space: nowrap;
+}
+.th-stock-chips a:hover { background: rgba(88,166,255,0.25); }
+.th-scroll { overflow-x: auto; }
+.th-help { font-size: 11px; color: #484f58; line-height: 1.7; margin-top: 8px; }
+.num-up { color: #E84040; font-weight: 600; }
+.num-down { color: #3A9FE0; font-weight: 600; }
+
+/* テーマ詳細: 銘柄ランキング */
+.ts-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.ts-table th {
+  text-align: left; color: #8b949e; font-weight: 600; padding: 5px 8px;
+  border-bottom: 1px solid #30363d; white-space: nowrap; font-size: 11px;
+}
+.ts-table td { padding: 7px 8px; border-bottom: 1px solid #21262d; }
+.ts-table a.sname { color: #e6edf3; font-weight: 600; text-decoration: none; }
+.ts-table a.sname:hover { color: #58a6ff; }
+.th-head-stats { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 6px 0 2px; }
+.th-head-stat { font-size: 12px; color: #8b949e; }
+.th-head-stat b { color: #e6edf3; font-size: 14px; }
+@media (max-width: 768px) {
+  .th-table td, .th-table th { padding: 6px 5px; }
+}
+"""
+
+
+def _compute_theme_scores() -> list[dict]:
+    """テーマごとの「今買うべき度」を算出する。
+
+    観点: ①モメンタム（テーマ指数の5日/20日変化） ②広がり（上昇銘柄比率＝
+    1銘柄の暴騰でなくテーマ全体が動いているか） ③資金流入（売買代金サージ）
+    ④材料の裏付け（テーマ内の上方修正・増配、値上がりイベント数） ⑤過熱度。
+    判定: 初動 / 上昇継続 / 過熱注意 / 冷却 / 中立
+    """
+    cached = _get("theme_scores")
+    if cached is not None:
+        return cached
+
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT tds.theme_id, tc.name, tds.date, tds.index_value, tds.heat_score,
+               tds.avg_change_pct, tds.breadth_ratio, tds.turnover_surge
+        FROM theme_daily_stats tds
+        JOIN theme_categories tc ON tds.theme_id = tc.id
+        WHERE tc.level = 2
+          AND tds.date >= DATE_SUB(CURDATE(), INTERVAL 45 DAY)
+        ORDER BY tds.theme_id, tds.date
+    """)
+    by_theme: dict = {}
+    for tid, name, dt, idx, heat, chg, breadth, surge in cur.fetchall():
+        by_theme.setdefault(tid, {"name": name, "rows": []})["rows"].append(
+            (dt, float(idx or 0), float(heat or 0), float(chg or 0),
+             float(breadth or 0), float(surge or 0)))
+
+    # テーマ内の直近14日の好材料開示・値上がりイベント数
+    cur.execute("""
+        SELECT st.theme_id, COUNT(DISTINCT d.id)
+        FROM stock_themes st
+        JOIN disclosures d ON d.code = st.code
+        WHERE d.category IN ('earnings_up','div_up')
+          AND d.disclosed_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
+        GROUP BY st.theme_id
+    """)
+    disc_by_theme = {r[0]: int(r[1]) for r in cur.fetchall()}
+    cur.execute("""
+        SELECT st.theme_id, COUNT(DISTINCT pe.code)
+        FROM stock_themes st
+        JOIN price_events pe ON pe.code = st.code
+        WHERE pe.direction = 'up' AND pe.period = 'daily'
+          AND pe.event_date >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+        GROUP BY st.theme_id
+    """)
+    ev_by_theme = {r[0]: int(r[1]) for r in cur.fetchall()}
+    cur.close(); conn.close()
+
+    results = []
+    for tid, d in by_theme.items():
+        rows = d["rows"]
+        if len(rows) < 6:
+            continue
+        idx_series = [r[1] for r in rows if r[1] > 0]
+        if len(idx_series) < 6:
+            continue
+        latest = rows[-1]
+        chg5  = (idx_series[-1] / idx_series[-6]  - 1) * 100 if len(idx_series) >= 6  else 0.0
+        chg20 = (idx_series[-1] / idx_series[-21] - 1) * 100 if len(idx_series) >= 21 else \
+                (idx_series[-1] / idx_series[0]   - 1) * 100
+        heat, breadth, surge = latest[2], latest[4], latest[5]
+        n_disc = disc_by_theme.get(tid, 0)
+        n_ev   = ev_by_theme.get(tid, 0)
+
+        # 判定
+        if chg5 <= -1.5:
+            verdict, vcls = "冷却", "v-cool"
+        elif chg5 >= 10 or heat >= 6:
+            verdict, vcls = "過熱注意", "v-hot"
+        elif chg20 >= 5 and chg5 > 0:
+            verdict, vcls = "上昇継続", "v-run"
+        elif chg5 >= 1.2 and breadth >= 0.5:
+            verdict, vcls = "初動", "v-start"
+        else:
+            verdict, vcls = "中立", "v-neu"
+
+        # スコア（買い妙味: 初動・上昇継続を高く、過熱・冷却は減点）
+        score = 50.0
+        score += max(-15, min(15, chg5 * 2.0))
+        score += max(-10, min(10, chg20 * 0.6))
+        score += (breadth - 0.5) * 30
+        score += min(max(surge - 1.0, 0), 2) * 6
+        score += min(n_disc, 3) * 5 + min(n_ev, 4) * 2.5
+        if verdict == "過熱注意":
+            score -= 12
+        elif verdict == "冷却":
+            score -= 18
+
+        chips = []
+        if breadth >= 0.6:
+            chips.append(("good", f"上昇銘柄{breadth:.0%}"))
+        if surge >= 1.5:
+            chips.append(("good", f"売買代金{surge:.1f}倍"))
+        if n_disc > 0:
+            chips.append(("good", f"上方修正・増配{n_disc}件"))
+        if n_ev >= 2:
+            chips.append(("good", f"急騰イベント{n_ev}銘柄"))
+        if verdict == "過熱注意":
+            chips.append(("warn", "短期過熱"))
+
+        results.append({
+            "id": tid, "name": d["name"], "score": round(score, 1),
+            "verdict": verdict, "vcls": vcls,
+            "chg5": chg5, "chg20": chg20, "breadth": breadth,
+            "chips": chips,
+        })
+
+    results.sort(key=lambda x: -x["score"])
+    _set("theme_scores", results)
+    return results
+
+
+def _score_theme_stocks(theme_id: int, limit: int = 40) -> list[dict]:
+    """テーマ内銘柄の「買うべき度」を採点する。
+
+    観点: トレンド（MA整列・52週高値との距離）、モメンタム、増収増益、
+    理論株価の上昇余地、好材料開示（上方修正・増配）、関連度、流動性。
+    """
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT st.code, s.name, st.relevance,
+               ps.close, ps.chg5d, ps.chg25d, ps.ma25, ps.ma75, ps.ma200_slope,
+               ps.dev_high52w, ps.rsi14, ps.turnover_20d,
+               ps.rev_growth, ps.op_growth,
+               f.market_cap, tv.upside_pct
+        FROM stock_themes st
+        JOIN stocks s ON st.code = s.code
+        LEFT JOIN price_stats ps ON st.code = ps.code
+        LEFT JOIN stock_fundamentals f ON st.code = f.code
+        LEFT JOIN theoretical_values tv ON st.code = tv.code
+        WHERE st.theme_id = %s AND s.is_active = TRUE
+    """, (theme_id,))
+    rows = cur.fetchall()
+    codes = [r[0] for r in rows]
+    good_disc: dict = {}
+    if codes:
+        ph = ",".join(["%s"] * len(codes))
+        cur.execute(f"""
+            SELECT code, category FROM disclosures
+            WHERE code IN ({ph}) AND category IN ('earnings_up','div_up','buyback')
+              AND disclosed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        """, codes)
+        lbl = {"earnings_up": "上方修正", "div_up": "増配", "buyback": "自社株買い"}
+        for code, cat in cur.fetchall():
+            good_disc.setdefault(str(code), set()).add(lbl[cat])
+    cur.close(); conn.close()
+
+    scored = []
+    for (code, name, rel, close, chg5, chg25, ma25, ma75, ma200_slope,
+         dev_h52, rsi, t20, revg, opg, mcap, theo_up) in rows:
+        f = lambda v: float(v) if v is not None else None
+        close, chg25, ma25, ma75 = f(close), f(chg25), f(ma25), f(ma75)
+        score = 0.0
+        chips = []
+        # トレンド
+        if close and ma25 and close > ma25:
+            score += 8
+        if ma25 and ma75 and ma25 > ma75:
+            score += 6
+        if f(ma200_slope) is not None and f(ma200_slope) > 0:
+            score += 6
+        if close and ma25 and ma75 and close > ma25 > ma75:
+            chips.append(("good", "上昇トレンド"))
+        # 52週高値との距離（高値圏=強い）
+        if f(dev_h52) is not None and f(dev_h52) >= -10:
+            score += 8
+            chips.append(("good", "52週高値圏"))
+        # モメンタム
+        if chg25 is not None:
+            score += max(-8, min(12, chg25 * 0.4))
+        # 過熱
+        if f(rsi) is not None and f(rsi) >= 82:
+            score -= 6
+            chips.append(("warn", f"RSI{f(rsi):.0f}"))
+        # ファンダ
+        if f(opg) is not None and f(opg) > 0 and f(revg) is not None and f(revg) > 0:
+            score += 12
+            chips.append(("good", "増収増益"))
+        if f(theo_up) is not None and f(theo_up) > 0:
+            score += 10
+            chips.append(("good", f"理論株価↑{f(theo_up):.0f}%"))
+        # 好材料開示
+        for l in sorted(good_disc.get(str(code), set())):
+            score += 10
+            chips.append(("good", l))
+        # 関連度・流動性（turnover_20d は億円単位）
+        score += {3: 10, 2: 5}.get(int(rel or 1), 0)
+        if f(t20) is not None and f(t20) >= 1.0:
+            score += 5
+        elif f(t20) is not None and f(t20) < 0.3:
+            score -= 5
+            chips.append(("warn", "低流動性"))
+
+        scored.append({
+            "code": str(code), "name": name or str(code), "relevance": int(rel or 1),
+            "score": round(score, 1), "close": close, "chg25": chg25,
+            "mcap_oku": (f(mcap) or 0) / 1e8, "chips": chips,
+        })
+    scored.sort(key=lambda x: -x["score"])
+    return scored[:limit]
+
+
+def _build_themes_page() -> str:
+    """テーマ分析ハブ: 「今買うべきテーマ」ランキング＋各テーマの注目銘柄。"""
+    import html as _html
+    themes = _compute_theme_scores()
+    if not themes:
+        body = f"<style>{_THEME_CSS}</style><p style='color:#8b949e;padding:40px'>テーマデータがまだありません。</p>"
+        return _page_html("テーマ分析", body, active="themes")
+
+    # 上位テーマは「買うべき銘柄」上位3つをインライン表示
+    trs = []
+    for i, t in enumerate(themes):
+        chips_html = "".join(f'<span class="th-chip {c}">{_html.escape(x)}</span>' for c, x in t["chips"])
+        stock_chips = ""
+        if i < 6:
+            top_stocks = _score_theme_stocks(t["id"], limit=3)
+            stock_chips = "".join(
+                f'<a href="/stock/{s["code"]}">{_html.escape(s["name"][:8])}</a>'
+                for s in top_stocks)
+            stock_chips = f'<div class="th-stock-chips">{stock_chips}</div>'
+        trs.append(f"""<tr>
+  <td><a class="tname" href="/theme/{t['id']}">{_html.escape(t['name'])}</a></td>
+  <td><span class="th-verdict {t['vcls']}">{t['verdict']}</span></td>
+  <td class="th-score">{t['score']:.0f}</td>
+  <td class="{'num-up' if t['chg5'] >= 0 else 'num-down'}">{t['chg5']:+.1f}%</td>
+  <td class="{'num-up' if t['chg20'] >= 0 else 'num-down'}">{t['chg20']:+.1f}%</td>
+  <td>{t['breadth']:.0%}</td>
+  <td>{chips_html}</td>
+  <td>{stock_chips}</td>
+</tr>""")
+
+    latest_report = ""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT MAX(date) FROM theme_daily_stats")
+    md = cur.fetchone()[0]
+    cur.close(); conn.close()
+    if md:
+        latest_report = f'<a href="/report/{md}" style="font-size:12px;color:#58a6ff">資金フロー詳細レポート →</a>'
+
+    body = f"""<style>{_THEME_CSS}</style>
+<div class="page-header">
+  <div class="page-title">テーマ分析 — 今どのテーマを買うべきか</div>
+  <div class="page-subtitle">モメンタム × 広がり × 資金流入 × 材料の裏付けでスコアリング（{md} 基準） {latest_report}</div>
+</div>
+<div class="th-wrap">
+<div class="th-scroll"><table class="th-table">
+  <tr><th>テーマ</th><th>判定</th><th>買い妙味</th><th>5日</th><th>20日</th><th>上昇銘柄比率</th><th>根拠</th><th>注目銘柄（テーマ内上位）</th></tr>
+  {"".join(trs)}
+</table></div>
+<div class="th-help">
+判定の見方: <b>初動</b>=動き始めで広がりあり（仕込み妙味） / <b>上昇継続</b>=20日トレンドが本物 /
+<b>過熱注意</b>=短期急騰で反落リスク / <b>冷却</b>=資金流出中。<br>
+テーマ名をクリックすると、そのテーマ内で「どの銘柄を買うべきか」のランキング（トレンド・増収増益・理論株価・好材料開示で採点）が見られます。
+</div>
+</div>"""
+    return _page_html("テーマ分析", body, active="themes")
+
+
 _DISC_CSS = """
 .dc-wrap { display: flex; flex-direction: column; gap: 18px; }
 .dc-section-title { font-size: 15px; font-weight: 700; color: #e6edf3; margin-bottom: 8px; }
@@ -3212,9 +3561,22 @@ def _build_disclosures_page(date_str: str = None, category: str = "") -> str:
     conn = get_conn()
     cur  = conn.cursor()
 
-    # ── 市況考察（最新） ──────────────────────────────────────────────
-    cur.execute("""SELECT summary_date, sector_stats, theme_stats, ai_commentary
-                   FROM market_summary ORDER BY summary_date DESC LIMIT 1""")
+    # 日付指定があれば市況考察・ハイライトもその日付に追従する（履歴閲覧）
+    sel_date = None
+    if date_str:
+        try:
+            sel_date = date.fromisoformat(date_str)
+        except ValueError:
+            sel_date = None
+
+    # ── 市況考察（選択日 or 最新。日次で蓄積されており過去分も閲覧可能） ──
+    if sel_date:
+        cur.execute("""SELECT summary_date, sector_stats, theme_stats, ai_commentary
+                       FROM market_summary WHERE summary_date <= %s
+                       ORDER BY summary_date DESC LIMIT 1""", (sel_date,))
+    else:
+        cur.execute("""SELECT summary_date, sector_stats, theme_stats, ai_commentary
+                       FROM market_summary ORDER BY summary_date DESC LIMIT 1""")
     ms = cur.fetchone()
     market_html = ""
     if ms:
@@ -3240,18 +3602,30 @@ def _build_disclosures_page(date_str: str = None, category: str = "") -> str:
   <div class="dc-chips">{"".join(chips)}</div>
 </div>"""
 
-    # ── 好材料ハイライト（直近5日・AI付加済み） ──────────────────────
-    cur.execute("""
-        SELECT d.code, s.name, d.disclosed_at, d.title, d.pdf_url, d.category,
-               d.ai_summary, d.ai_related, f.market_cap
-        FROM disclosures d
-        LEFT JOIN stocks s ON d.code = s.code
-        LEFT JOIN stock_fundamentals f ON d.code = f.code
-        WHERE d.ai_summary IS NOT NULL
-          AND d.disclosed_at >= DATE_SUB(NOW(), INTERVAL 5 DAY)
-        ORDER BY d.disclosed_at DESC
-        LIMIT 20
-    """)
+    # ── 好材料ハイライト（選択日 or 直近5日・AI付加済み。恒久蓄積） ──
+    if sel_date:
+        cur.execute("""
+            SELECT d.code, s.name, d.disclosed_at, d.title, d.pdf_url, d.category,
+                   d.ai_summary, d.ai_related, f.market_cap
+            FROM disclosures d
+            LEFT JOIN stocks s ON d.code = s.code
+            LEFT JOIN stock_fundamentals f ON d.code = f.code
+            WHERE d.ai_summary IS NOT NULL AND DATE(d.disclosed_at) = %s
+            ORDER BY d.disclosed_at DESC
+            LIMIT 20
+        """, (sel_date,))
+    else:
+        cur.execute("""
+            SELECT d.code, s.name, d.disclosed_at, d.title, d.pdf_url, d.category,
+                   d.ai_summary, d.ai_related, f.market_cap
+            FROM disclosures d
+            LEFT JOIN stocks s ON d.code = s.code
+            LEFT JOIN stock_fundamentals f ON d.code = f.code
+            WHERE d.ai_summary IS NOT NULL
+              AND d.disclosed_at >= DATE_SUB(NOW(), INTERVAL 5 DAY)
+            ORDER BY d.disclosed_at DESC
+            LIMIT 20
+        """)
     hl_rows = cur.fetchall()
 
     # 関連テーマ → 関連銘柄の解決（テーマごとに relevance 上位を引く）
@@ -3316,7 +3690,8 @@ def _build_disclosures_page(date_str: str = None, category: str = "") -> str:
 
     highlights_html = ""
     if hl_cards:
-        highlights_html = (f'<div><div class="dc-section-title">⭐ 好材料ハイライト（直近5日・AI分析付き）</div>'
+        hl_label = f"{sel_date} の好材料" if sel_date else "好材料ハイライト（直近5日）"
+        highlights_html = (f'<div><div class="dc-section-title">⭐ {hl_label}・AI分析付き</div>'
                            f'<div class="dc-highlights">{"".join(hl_cards)}</div></div>')
 
     # ── 開示一覧（日付ナビ + カテゴリフィルタ） ──────────────────────
@@ -6522,47 +6897,77 @@ def events_page():
     return html
 
 
+@app.route("/themes")
+def themes_page():
+    html = _get("themes_page")
+    if not html:
+        html = _build_themes_page()
+        _set("themes_page", html)
+    return html
+
+
 @app.route("/theme/<int:theme_id>")
 def theme_page(theme_id: int):
+    import html as _html
     conn = get_conn()
     cur  = conn.cursor()
     cur.execute("SELECT id, name, level FROM theme_categories WHERE id = %s", (theme_id,))
     theme = cur.fetchone()
+    cur.close(); conn.close()
     if not theme:
-        cur.close(); conn.close()
         return "テーマが見つかりません", 404
 
-    cur.execute("""
-        SELECT st.code, s.name, st.relevance
-        FROM stock_themes st
-        JOIN stocks s ON st.code = s.code
-        WHERE st.theme_id = %s
-        ORDER BY st.relevance DESC, st.code
-    """, (theme_id,))
-    stocks_in_theme = cur.fetchall()
-    cur.close()
-    conn.close()
-
     theme_name = theme[1]
-    codes = [r[0] for r in stocks_in_theme]
+
+    # テーマの現況（スコア・判定）
+    t_info = next((t for t in _compute_theme_scores() if t["id"] == theme_id), None)
+    head_stats = ""
+    if t_info:
+        head_stats = f"""<div class="th-head-stats">
+  <span class="th-verdict {t_info['vcls']}">{t_info['verdict']}</span>
+  <span class="th-head-stat">買い妙味 <b>{t_info['score']:.0f}</b></span>
+  <span class="th-head-stat">5日 <b class="{'num-up' if t_info['chg5']>=0 else 'num-down'}">{t_info['chg5']:+.1f}%</b></span>
+  <span class="th-head-stat">20日 <b class="{'num-up' if t_info['chg20']>=0 else 'num-down'}">{t_info['chg20']:+.1f}%</b></span>
+  <span class="th-head-stat">上昇銘柄比率 <b>{t_info['breadth']:.0%}</b></span>
+</div>"""
+
+    # 買うべき銘柄ランキング
+    scored = _score_theme_stocks(theme_id)
+    codes = [s["code"] for s in scored]
     codes_js = _json.dumps(codes)
 
-    body = f"""<div class="page-header">
-  <div class="page-title">{theme_name}</div>
-  <div class="page-subtitle">テーマ銘柄 {len(codes)} 件</div>
+    rank_rows = []
+    for i, s in enumerate(scored, 1):
+        chips = "".join(f'<span class="th-chip {c}">{_html.escape(x)}</span>' for c, x in s["chips"])
+        mcap_txt = (f"{s['mcap_oku']/10000:.1f}兆" if s['mcap_oku'] >= 10000
+                    else f"{s['mcap_oku']:,.0f}億" if s['mcap_oku'] else "—")
+        chg_html = (f'<span class="{"num-up" if s["chg25"] >= 0 else "num-down"}">{s["chg25"]:+.1f}%</span>'
+                    if s["chg25"] is not None else "—")
+        rank_rows.append(
+            f'<tr><td>{i}</td>'
+            f'<td><a class="sname" href="/stock/{s["code"]}">{_html.escape(s["name"])}</a>'
+            f' <span style="color:#484f58;font-size:11px">{s["code"]}</span></td>'
+            f'<td>{"★" * s["relevance"]}</td>'
+            f'<td style="font-weight:700">{s["score"]:.0f}</td>'
+            f'<td>{chg_html}</td>'
+            f'<td>{mcap_txt}</td>'
+            f'<td style="white-space:normal">{chips}</td></tr>'
+        )
+
+    body = f"""<style>{_THEME_CSS}</style>
+<div class="page-header">
+  <div class="page-title">{_html.escape(theme_name)}</div>
+  <div class="page-subtitle"><a href="/themes" style="color:#58a6ff">← テーマ一覧</a>　テーマ銘柄 {len(codes)} 件</div>
+  {head_stats}
 </div>
 {_chart_grid_toolbar(codes_js, show_added_sort=False)}
 <div id="view-list">
   <div class="card">
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th class="left">銘柄</th><th>コード</th><th>関連度</th></tr></thead>
-        <tbody>{''.join(
-            f'<tr><td class="left"><a class="tbl-link" href="/stock/{c}">{n}</a></td>'
-            f'<td class="muted">{c}</td>'
-            f'<td>{"★"*r}{"☆"*(3-r)}</td></tr>'
-            for c, n, r in stocks_in_theme
-        )}</tbody>
+    <div class="card-header">このテーマで買うべき銘柄は？（トレンド × 増収増益 × 理論株価 × 好材料開示で採点）</div>
+    <div class="th-scroll">
+      <table class="ts-table">
+        <tr><th>#</th><th>銘柄</th><th>関連度</th><th>スコア</th><th>25日騰落</th><th>時価総額</th><th>評価ポイント</th></tr>
+        {"".join(rank_rows)}
       </table>
     </div>
   </div>
@@ -6572,7 +6977,7 @@ def theme_page(theme_id: int):
 </div>
 {_chart_grid_script()}"""
 
-    return _page_html(f"{theme_name} | テーマ", body)
+    return _page_html(f"{theme_name} | テーマ", body, active="themes")
 
 
 @app.route("/api/chart_grid")

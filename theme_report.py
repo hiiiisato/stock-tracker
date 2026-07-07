@@ -550,11 +550,17 @@ def generate_report(report_date: date, out_path: str = None) -> str:
 </head>
 <body>
 <nav class="app-nav">
-  <a class="app-nav-logo" href="/">📈 株式テーマ分析</a>
+  <a class="app-nav-logo" href="/">📈 株式分析</a>
   <div class="app-nav-links">
     <a class="app-nav-link" href="/">ホーム</a>
-    <a class="app-nav-link active" href="#">テーマ分析</a>
+    <a class="app-nav-link" href="/screen">スクリーニング</a>
+    <a class="app-nav-link" href="/valuation">理論株価</a>
+    <a class="app-nav-link active" href="/themes">テーマ</a>
     <a class="app-nav-link" href="/rankings">ランキング</a>
+    <a class="app-nav-link" href="/events">イベント</a>
+    <a class="app-nav-link" href="/disclosures">適時開示</a>
+    <a class="app-nav-link" href="/funds">ファンドウォッチ</a>
+    <a class="app-nav-link" href="/swing">スイング</a>
     <a class="app-nav-link" href="/watchlist">ウォッチリスト</a>
   </div>
 </nav>
