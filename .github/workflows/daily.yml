@@ -34,6 +34,8 @@ jobs:
           JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
           # AI要約・市況考察・開示分析に必須。未設定だとAI系が全てスキップされる
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # EDINET公式API（有報「事業の内容」の増分更新）。未設定だと該当ステップのみスキップ
+          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
           # TIDB_SSL_CA は未設定 → certifi を自動使用
         run: python daily_run.py
 

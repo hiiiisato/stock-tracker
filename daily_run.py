@@ -152,6 +152,17 @@ def run(init: bool = False, rankings_only: bool = False):
             print(f"  エラー: {e}")
             _log("kabutan_financials", "failed", error=str(e))
 
+    # 会社概要・kabutanテーマタグの定期メンテ（未取得優先→古い順に150件/日 ≒ 月次で全銘柄一巡）
+    if not rankings_only:
+        print("\n[会社概要] kabutan 会社概要・テーマタグを更新中...")
+        try:
+            from company_profile import run as update_company_profiles
+            n = update_company_profiles()
+            _log("company_profile", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("company_profile", "failed", error=str(e))
+
     # テーマスコア計算（価格更新後）
     if not rankings_only:
         print("\n[テーマスコア] テーマ別過熱スコアを計算中...")
@@ -235,6 +246,17 @@ def run(init: bool = False, rankings_only: bool = False):
         print(f"  エラー: {e}")
         _log("rankings", "failed", error=str(e))
 
+    # 資金フロー週次集計（テーマ/業種/規模/スタイル別。直近26週を再計算=自己修復）
+    if not rankings_only:
+        print("\n[資金フロー] グループ別の週次売買代金シェアを集計中...")
+        try:
+            from money_flow import compute as compute_money_flow
+            n = compute_money_flow()
+            _log("money_flow", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("money_flow", "failed", error=str(e))
+
     # ニュース収集（日次＋週次 TOP15）
     if not rankings_only:
         print(f"\n[ニュース] 上昇/下落 ±{RESEARCH_THRESHOLD_PCT}%超えの材料を収集中...")
@@ -257,6 +279,17 @@ def run(init: bool = False, rankings_only: bool = False):
         except Exception as e:
             print(f"  エラー: {e}")
             _log("disclosures", "failed", error=str(e))
+
+    # EDINET有報の「事業の内容」増分更新（直近7日に提出された有報のみ・年1回自動更新される）
+    if not rankings_only:
+        print("\n[事業内容] EDINET有報の増分を確認中...")
+        try:
+            from edinet_business import run_incremental as edinet_biz_incremental
+            n = edinet_biz_incremental()
+            _log("edinet_business", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("edinet_business", "failed", error=str(e))
 
     elapsed = (datetime.now() - start).total_seconds()
     print(f"\n{'='*50}")

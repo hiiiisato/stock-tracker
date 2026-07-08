@@ -448,6 +448,7 @@ def _nav(active: str = "") -> str:
         ("screen",    "/screen",     "スクリーニング"),
         ("valuation", "/valuation",  "理論株価"),
         ("themes",    "/themes",     "テーマ"),
+        ("flows",     "/flows",      "資金フロー"),
         ("events",    "/events",     "ランキング・イベント"),
         ("disclosures", "/disclosures", "適時開示"),
         ("funds",     "/funds",      "ファンドウォッチ"),
@@ -2223,6 +2224,11 @@ _STOCK_CSS = """
   list-style: none; display: inline-flex; align-items: center; gap: 4px;
 }
 .co-biz-toggle summary::-webkit-details-marker { display: none; }
+.co-theme-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.co-theme-chip {
+  font-size: 11px; color: #8b949e; background: #0d1117;
+  border: 1px solid #21262d; border-radius: 10px; padding: 2px 9px;
+}
 .co-biz-toggle summary::before { content: "▶"; font-size: 9px; transition: transform 0.2s; }
 .co-biz-toggle[open] summary::before { transform: rotate(90deg); }
 .co-biz-full {
@@ -2517,42 +2523,8 @@ input.sc-range-input::-moz-range-thumb {
 """
 
 # 会社概要キャッシュ（24h）
-_co_cache: dict = {}
-_CO_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-
-def _fetch_company_info(code: str) -> dict:
-    """kabutan から会社概要を取得して24時間キャッシュする。失敗時は {}。"""
-    entry = _co_cache.get(code)
-    if entry and time.time() - entry["ts"] < 86400:
-        return entry["data"]
-
-    data: dict = {}
-    url = f"https://kabutan.jp/stock/info?code={code}"
-    try:
-        r = _requests.get(url, headers=_CO_HEADERS, timeout=8)
-        if r.status_code != 200:
-            return {}
-        soup = _BS(r.text, "html.parser")
-
-        # 事業内容
-        for sel in [".company_body p", ".company_body", "#company_info_main p"]:
-            el = soup.select_one(sel)
-            if el and el.text.strip():
-                data["business"] = el.text.strip()[:600]
-                break
-
-        # 会社プロフィールテーブル
-        tbl = soup.find("table", id="company_profile") or soup.find("table", class_="company_profile")
-        if tbl:
-            for tr in tbl.find_all("tr"):
-                th = tr.find("th"); td = tr.find("td")
-                if th and td:
-                    data[th.text.strip()] = td.text.strip()
-    except Exception:
-        pass
-
-    _co_cache[code] = {"ts": time.time(), "data": data}
-    return data
+# 会社概要（簡単な事業内容・テーマタグ）は company_profile.py が日次でDBに保存する。
+# 旧 _fetch_company_info（kabutan /stock/info ライブ取得）は同URLの廃止(404)に伴い削除。
 
 
 def _build_swing_page() -> str:
@@ -3409,6 +3381,229 @@ def _build_themes_page() -> str:
 </div>
 </div>"""
     return _page_html("テーマ分析", body, active="themes")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  資金フロー（/flows）— どこに資金が流入しているかを週次で多角的に見る
+# ═══════════════════════════════════════════════════════════════════════════
+
+_FLOW_CSS = """
+.fl-wrap { display: flex; flex-direction: column; gap: 22px; }
+.fl-week-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fl-week-bar select {
+  background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
+  border-radius: 6px; padding: 5px 10px; font-size: 13px;
+}
+.fl-live { font-size: 11px; color: #d29922; border: 1px solid #d2992255; border-radius: 10px; padding: 1px 8px; }
+.fl-hero { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+.fl-hero-card {
+  background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.fl-hero-type { font-size: 10px; color: #8b949e; }
+.fl-hero-name { font-size: 13px; font-weight: 700; color: #c9d1d9; line-height: 1.3; }
+.fl-hero-flow { font-size: 20px; font-weight: 700; }
+.fl-hero-sub  { font-size: 11px; color: #8b949e; }
+.fl-section { background: #161b22; border: 1px solid #21262d; border-radius: 8px; overflow: hidden; }
+.fl-section-hd { padding: 12px 14px 4px; }
+.fl-section-title { font-size: 14px; font-weight: 700; color: #c9d1d9; }
+.fl-section-sub { font-size: 11px; color: #8b949e; margin-top: 2px; }
+.fl-scroll { overflow-x: auto; }
+.fl-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 760px; }
+.fl-table th {
+  text-align: right; padding: 8px 10px; color: #8b949e; font-size: 11px; font-weight: 600;
+  border-bottom: 1px solid #21262d; white-space: nowrap;
+}
+.fl-table th:first-child, .fl-table td:first-child { text-align: left; }
+.fl-table td { padding: 7px 10px; border-bottom: 1px solid #21262d33; text-align: right; white-space: nowrap; }
+.fl-table tr:last-child td { border-bottom: none; }
+.fl-glabel { font-weight: 600; color: #c9d1d9; }
+.fl-n { color: #484f58; font-size: 11px; }
+.fl-badge { display: inline-block; min-width: 46px; text-align: center; border-radius: 5px; padding: 2px 7px; font-weight: 700; font-size: 12px; }
+.fl-in-strong  { background: #f8514922; color: #f85149; }
+.fl-in-mild    { background: #f8514911; color: #e0806b; }
+.fl-neutral    { background: #21262d;   color: #8b949e; }
+.fl-out        { background: #388bfd22; color: #58a6ff; }
+.fl-pos { color: #f85149; } .fl-neg { color: #58a6ff; }
+.fl-tops { font-size: 11.5px; text-align: left !important; }
+.fl-tops a { color: #58a6ff; text-decoration: none; }
+.fl-help { font-size: 12px; color: #8b949e; line-height: 1.7; background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 12px 14px; }
+@media (max-width: 768px) {
+  .fl-hero { grid-template-columns: repeat(2, 1fr); }
+}
+"""
+
+
+def _build_flows_page(week_str: str | None = None) -> str:
+    """資金フローページ: テーマ/業種/規模/スタイル別の週次資金流入ランキング。"""
+    import html as _html
+    import json as _json2
+    conn = get_conn()
+    cur  = conn.cursor()
+
+    cur.execute("SELECT DISTINCT week_end FROM money_flow_weekly ORDER BY week_end DESC LIMIT 30")
+    weeks = [r[0] for r in cur.fetchall()]
+    if not weeks:
+        cur.close(); conn.close()
+        body = f"<style>{_FLOW_CSS}</style><p style='color:#8b949e;padding:40px'>資金フローデータがまだありません（日次バッチで自動生成されます）。</p>"
+        return _page_html("資金フロー", body, active="flows")
+
+    sel_week = weeks[0]
+    if week_str:
+        for w in weeks:
+            if str(w) == week_str:
+                sel_week = w
+                break
+    is_live = sel_week >= date.today()   # 進行中の週か
+
+    cur.execute("""
+        SELECT group_type, group_key, group_label, n_stocks, turnover, turnover_share,
+               flow_ratio, ret_median, breadth, excess_topix, last_trade_date, top_stocks
+        FROM money_flow_weekly WHERE week_end = %s
+    """, (sel_week,))
+    cols = ["group_type","group_key","group_label","n_stocks","turnover","turnover_share",
+            "flow_ratio","ret_median","breadth","excess_topix","last_trade_date","top_stocks"]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    # スパークライン用: 選択週までの8週分の flow_ratio 履歴
+    cur.execute("""
+        SELECT week_end, group_type, group_key, flow_ratio
+        FROM money_flow_weekly
+        WHERE week_end <= %s AND week_end > DATE_SUB(%s, INTERVAL 8 WEEK)
+        ORDER BY week_end
+    """, (sel_week, sel_week))
+    hist: dict = {}
+    for wk, gt, gk, fr in cur.fetchall():
+        hist.setdefault((gt, gk), []).append(float(fr) if fr is not None else None)
+    cur.close(); conn.close()
+
+    f = lambda v: float(v) if v is not None else None
+
+    def _flow_badge(fr):
+        if fr is None:
+            return '<span class="fl-badge fl-neutral">—</span>'
+        if fr >= 1.2:  cls = "fl-in-strong"
+        elif fr >= 1.05: cls = "fl-in-mild"
+        elif fr >= 0.95: cls = "fl-neutral"
+        else: cls = "fl-out"
+        return f'<span class="fl-badge {cls}">{fr:.2f}x</span>'
+
+    def _pct_span(v, suffix="%"):
+        if v is None:
+            return '<span class="fl-n">—</span>'
+        cls = "fl-pos" if v > 0 else ("fl-neg" if v < 0 else "")
+        return f'<span class="{cls}">{v:+.1f}{suffix}</span>'
+
+    def _spark(vals) -> str:
+        """flow_ratioの8週推移をインラインSVGで描く（点線=1.0）。"""
+        pts = [v for v in (vals or []) if v is not None]
+        if len(pts) < 2:
+            return '<span class="fl-n">—</span>'
+        w, h, pad = 72, 20, 2
+        vmin, vmax = min(pts + [1.0]), max(pts + [1.0])
+        rng = (vmax - vmin) or 1
+        xs = [pad + i * (w - 2*pad) / (len(pts) - 1) for i in range(len(pts))]
+        ys = [h - pad - (v - vmin) / rng * (h - 2*pad) for v in pts]
+        poly = " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
+        y1 = h - pad - (1.0 - vmin) / rng * (h - 2*pad)
+        color = "#f85149" if pts[-1] >= 1.05 else ("#58a6ff" if pts[-1] < 0.95 else "#8b949e")
+        return (f'<svg width="{w}" height="{h}" style="vertical-align:middle">'
+                f'<line x1="{pad}" y1="{y1:.1f}" x2="{w-pad}" y2="{y1:.1f}" stroke="#30363d" stroke-dasharray="2,2"/>'
+                f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="1.5"/></svg>')
+
+    def _tops_html(top_json) -> str:
+        try:
+            items = _json2.loads(top_json or "[]")[:3]
+        except Exception:
+            items = []
+        return "、".join(
+            f'<a href="/stock/{_html.escape(str(it["code"]))}">{_html.escape(it["name"])}</a>'
+            f'<span class="fl-n">({it["ret"]:+.0f}%)</span>'
+            for it in items)
+
+    def _row_html(r) -> str:
+        key = (r["group_type"], r["group_key"])
+        return f"""<tr>
+  <td><span class="fl-glabel">{_html.escape(r["group_label"] or r["group_key"])}</span> <span class="fl-n">{r["n_stocks"]}銘柄</span></td>
+  <td>{f(r["turnover"]):,.0f}億</td>
+  <td>{_flow_badge(f(r["flow_ratio"]))}</td>
+  <td>{_spark(hist.get(key))}</td>
+  <td>{_pct_span(f(r["ret_median"]))}</td>
+  <td>{f(r["breadth"]) or 0:.0f}%</td>
+  <td>{_pct_span(f(r["excess_topix"]), "pt")}</td>
+  <td class="fl-tops">{_tops_html(r["top_stocks"])}</td>
+</tr>"""
+
+    _THEAD = """<tr><th>グループ</th><th>週間売買代金</th><th>資金流入度</th><th>8週推移</th>
+<th>騰落率(中央値)</th><th>上昇銘柄比率</th><th>対TOPIX</th><th>主な売買銘柄</th></tr>"""
+
+    def _section(title: str, sub: str, rlist: list) -> str:
+        body_rows = "".join(_row_html(r) for r in rlist)
+        return f"""<div class="fl-section">
+  <div class="fl-section-hd"><div class="fl-section-title">{title}</div><div class="fl-section-sub">{sub}</div></div>
+  <div class="fl-scroll"><table class="fl-table">{_THEAD}{body_rows}</table></div>
+</div>"""
+
+    by_type: dict = {"theme": [], "sector": [], "size": [], "style": []}
+    for r in rows:
+        if r["group_type"] in by_type:
+            by_type[r["group_type"]].append(r)
+
+    def _sorted_flow(rlist, min_turnover=0.0):
+        eligible = [r for r in rlist if f(r["flow_ratio"]) is not None and f(r["turnover"]) >= min_turnover]
+        return sorted(eligible, key=lambda r: -f(r["flow_ratio"]))
+
+    themes_in  = _sorted_flow(by_type["theme"], min_turnover=30)
+    theme_rows = themes_in[:15] + list(reversed(themes_in[-5:])) if len(themes_in) > 20 else themes_in
+    sector_rows = _sorted_flow(by_type["sector"])
+    size_rows   = _sorted_flow(by_type["size"])
+    style_rows  = _sorted_flow(by_type["style"])
+
+    # ヒーロー: テーマ・業種横断の流入TOP10（規模・スタイルは母数が大きく1近傍のため除外）
+    hero_pool = [r for r in themes_in + sector_rows if f(r["turnover"]) >= 50]
+    hero_pool.sort(key=lambda r: -f(r["flow_ratio"]))
+    type_lbl = {"theme": "テーマ", "sector": "業種", "size": "規模", "style": "スタイル"}
+    hero_cards = "".join(f"""<div class="fl-hero-card">
+  <span class="fl-hero-type">{type_lbl[r["group_type"]]}</span>
+  <span class="fl-hero-name">{_html.escape(r["group_label"] or r["group_key"])}</span>
+  <span class="fl-hero-flow" style="color:{'#f85149' if f(r["flow_ratio"]) >= 1.05 else '#8b949e'}">{f(r["flow_ratio"]):.2f}x</span>
+  <span class="fl-hero-sub">{_pct_span(f(r["ret_median"]))} ・ {f(r["turnover"]):,.0f}億円</span>
+</div>""" for r in hero_pool[:10])
+
+    week_opts = "".join(
+        f'<option value="{w}"{" selected" if w == sel_week else ""}>'
+        f'{w}週{"（進行中）" if w >= date.today() else ""}</option>'
+        for w in weeks)
+    live_badge = '<span class="fl-live">進行中の週（日次更新）</span>' if is_live else ""
+
+    body = f"""<style>{_FLOW_CSS}</style>
+<div class="page-header">
+  <div class="page-title">資金フロー — どこにお金が流れているか</div>
+  <div class="page-subtitle">週間売買代金シェアの変化から、資金が集まっているテーマ・業種・スタイルを捉える（スイングの初動探し）</div>
+</div>
+<div class="fl-wrap">
+  <div class="fl-week-bar">
+    <label style="font-size:12px;color:#8b949e">週:</label>
+    <select onchange="location.href='/flows?week='+this.value">{week_opts}</select>
+    {live_badge}
+  </div>
+  <div>
+    <div class="fl-section-title" style="margin-bottom:8px">🔥 今、資金流入が強いグループ TOP10</div>
+    <div class="fl-hero">{hero_cards}</div>
+  </div>
+  {_section("テーマ別", "kabutanテーマタグ基準・売買代金30億円以上。上位15=流入 / 下位5=流出", theme_rows)}
+  {_section("業種別（東証33業種）", "", sector_rows)}
+  {_section("規模別（時価総額帯）", "大型に集まる=指数相場 / 小型に広がる=物色相場", size_rows)}
+  {_section("スタイル別", "高配当・バリュー・グロース等。銘柄は複数スタイルに重複所属します", style_rows)}
+  <div class="fl-help">
+    <b>資金流入度</b> = そのグループの週間売買代金シェア ÷ 過去13週の平均シェア。
+    <b>1.2x以上</b>なら明確に資金が向かっている状態。騰落率がプラスで上昇銘柄比率も高ければ「買われて集まっている」、
+    騰落率マイナスなら「売られて出来高が膨らんでいる（逃げ場・投げ）」の可能性が高い。<br>
+    スイング狙いは「流入度が1.05→1.2xへ上がり始め・騰落率プラス・上昇銘柄比率60%超」の組み合わせが初動シグナル。
+    8週推移の折れ線が右肩上がりなら資金シフトの持続性がある。
+  </div>
+</div>"""
+    return _page_html("資金フロー", body, active="flows")
 
 
 _DISC_CSS = """
@@ -5309,7 +5504,8 @@ def _build_stock_page(code: str) -> str:
     # 銘柄基本情報
     cur.execute("""
         SELECT s.code, s.name, m.name AS market, sec.name AS sector,
-               s.business_description, s.biz_updated_at
+               s.business_description, s.biz_updated_at,
+               s.business_summary, s.website
         FROM stocks s
         LEFT JOIN markets  m   ON s.market_id  = m.id
         LEFT JOIN sectors  sec ON s.sector_id  = sec.id
@@ -5319,7 +5515,11 @@ def _build_stock_page(code: str) -> str:
     if not row:
         cur.close(); conn.close()
         abort(404)
-    s_code, s_name, market, sector, s_biz_desc, s_biz_updated = row
+    s_code, s_name, market, sector, s_biz_desc, s_biz_updated, s_biz_summary, s_website = row
+
+    # kabutanテーマタグ（company_profile.py が保存）
+    cur.execute("SELECT theme FROM kabutan_themes WHERE code = %s ORDER BY theme", (code,))
+    kab_themes = [r[0] for r in cur.fetchall()]
 
     # 価格データ（直近3年）— adj_closeで連続チャートを表示（株式分割対応）
     # close/adj_closeの比率をopen/high/lowにも適用し、分割前後で連続した表示にする
@@ -5867,7 +6067,7 @@ def _build_stock_page(code: str) -> str:
     <button class="ma-btn" data-ma="75" style="--ma-color:#a371f7">75</button>
   </div>
 </div>
-<div id="stock-chart" style="width:100%;height:340px"></div>
+<div id="stock-chart" style="width:100%;height:400px"></div>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <script>
 (function(){{
@@ -5894,9 +6094,17 @@ def _build_stock_page(code: str) -> str:
       high:prices.map(function(p){{return p.high;}}),
       low:prices.map(function(p){{return p.low;}}),
       close:prices.map(function(p){{return p.close;}}),
-      name:'株価',
+      name:'株価',yaxis:'y',
       increasing:{{line:{{color:'#E84040'}},fillcolor:'rgba(232,64,64,0.3)'}},
       decreasing:{{line:{{color:'#3A9FE0'}},fillcolor:'rgba(58,159,224,0.3)'}},
+    }},{{
+      type:'bar',x:dates,yaxis:'y2',name:'出来高',
+      y:prices.map(function(p){{return p.volume;}}),
+      marker:{{color:prices.map(function(p){{
+        return p.close>=p.open?'rgba(232,64,64,0.45)':'rgba(58,159,224,0.45)';
+      }})}},
+      hovertemplate:'%{{x}}<br>出来高 %{{y:,.0f}}株<extra></extra>',
+      showlegend:false,
     }}];
     var fromDate=prices[0].date;
     [5,25,75].forEach(function(n){{
@@ -5915,12 +6123,16 @@ def _build_stock_page(code: str) -> str:
     var layout={{
       paper_bgcolor:'#161b22',plot_bgcolor:'#161b22',
       font:{{color:'#c9d1d9',size:11}},
-      height:340,margin:{{l:10,r:55,t:10,b:30}},
+      height:400,margin:{{l:10,r:55,t:10,b:30}},
       xaxis:{{rangeslider:{{visible:false}},gridcolor:'#21262d',color:'#8b949e',
               type:'category',nticks:8}},
-      yaxis:{{gridcolor:'#21262d',color:'#8b949e',side:'right',automargin:true}},
+      yaxis:{{gridcolor:'#21262d',color:'#8b949e',side:'right',automargin:true,
+              domain:[0.24,1]}},
+      yaxis2:{{gridcolor:'#21262d',color:'#484f58',side:'right',automargin:true,
+               domain:[0,0.19],tickformat:'~s',nticks:3,fixedrange:true}},
       showlegend:activeMAs.size>0,
       legend:{{x:0.01,y:0.99,bgcolor:'rgba(22,27,34,0.8)',font:{{size:10}},orientation:'h'}},
+      bargap:0.25,
     }};
     Plotly.react('stock-chart',traces,layout,{{responsive:true}});
   }}
@@ -5994,19 +6206,12 @@ def _build_stock_page(code: str) -> str:
     if mktcap:  co_facts.append(("時価総額",   _mktcap(mktcap)))
     if shares:  co_facts.append(("発行済株式", f"{int(shares/1e4):,}万株"))
 
-    # 事業内容: EDINETバッチ取得済みならDBから表示、未取得ならkabutan fallback
-    biz = s_biz_desc or ""
-    biz_src_note = ""
-    if biz:
-        biz_updated_str = str(s_biz_updated)[:10] if s_biz_updated else ""
-        biz_src_note = f'（有価証券報告書 {biz_updated_str}）' if biz_updated_str else ""
-    else:
-        co_info = _fetch_company_info(s_code)
-        biz = co_info.get("business", "")
-        for kab_key, label in [("設立","設立"), ("資本金","資本金"), ("従業員","従業員"), ("決算","決算月")]:
-            v = co_info.get(kab_key, "")
-            if v:
-                co_facts.append((label, v))
+    import html as _html_mod
+    if s_website:
+        url_esc = _html_mod.escape(s_website, quote=True)
+        co_facts.append(("会社サイト",
+                         f'<a href="{url_esc}" target="_blank" rel="noopener" '
+                         f'style="color:#58a6ff">{_html_mod.escape(s_website.replace("https://","").replace("http://","").rstrip("/"))}</a>'))
 
     # ファクトグリッドHTML
     facts_html = "".join(
@@ -6015,27 +6220,38 @@ def _build_stock_page(code: str) -> str:
         for lbl, val in co_facts
     ) if co_facts else ""
 
-    # 事業内容: 最初の段落を要約として表示 + 残りを全文トグル
+    # 事業内容:
+    #   簡単 = stocks.business_summary（kabutan概要・company_profile.py が月次一巡で更新）
+    #   詳細 = stocks.business_description（EDINET有報「事業の内容」・edinet_texts.py）
     biz_summary_html = ""
     biz_full_html    = ""
-    if biz:
-        import html as _html_mod
-        biz_esc = _html_mod.escape(biz)
-        paragraphs = [p.strip() for p in biz_esc.split("\n\n") if p.strip()]
-        if not paragraphs:
-            paragraphs = [biz_esc[:500]]
-        biz_summary_html = f'<p>{paragraphs[0]}</p>'
-        if len(paragraphs) > 1:
-            rest = "".join(f'<p style="margin-top:8px">{p}</p>' for p in paragraphs[1:])
-            biz_full_html = f"""<details class="co-biz-toggle">
-  <summary>全文を表示{biz_src_note}</summary>
-  <div class="co-biz-full">{rest}</div>
+    if s_biz_summary:
+        biz_summary_html = f'<p>{_html_mod.escape(s_biz_summary)}</p>'
+    if s_biz_desc:
+        biz_updated_str = str(s_biz_updated)[:10] if s_biz_updated else ""
+        biz_src_note = f'（有価証券報告書 {biz_updated_str}）' if biz_updated_str else "（有価証券報告書）"
+        desc_esc = _html_mod.escape(s_biz_desc)
+        paragraphs = [p.strip() for p in desc_esc.split("\n\n") if p.strip()] or [desc_esc[:3000]]
+        body = "".join(f'<p style="margin-top:8px">{p}</p>' for p in paragraphs)
+        biz_full_html = f"""<details class="co-biz-toggle">
+  <summary>詳細な事業内容を表示{biz_src_note}</summary>
+  <div class="co-biz-full">{body}</div>
 </details>"""
+        if not biz_summary_html:
+            biz_summary_html = f'<p>{paragraphs[0]}</p>'
 
+    # kabutanテーマタグ（チップ表示）
+    kab_themes_html = ""
+    if kab_themes:
+        chips = "".join(f'<span class="co-theme-chip">{_html_mod.escape(t)}</span>' for t in kab_themes)
+        kab_themes_html = f'<div class="co-theme-chips">{chips}</div>'
+
+    biz_block = biz_summary_html or biz_full_html
     co_html = f"""<div class="co-box">
   <div class="co-section-title">会社概要</div>
   {f'<div class="co-facts-grid">{facts_html}</div>' if facts_html else ""}
-  {f'<hr class="co-biz-divider"><div class="co-biz-summary">{biz_summary_html}</div>{biz_full_html}' if biz_summary_html else ""}
+  {f'<hr class="co-biz-divider"><div class="co-biz-summary">{biz_summary_html}</div>{biz_full_html}' if biz_block else ""}
+  {kab_themes_html}
 </div>"""
 
     # チャート＋指標の配置（指標なしなら1列）
@@ -6945,6 +7161,19 @@ def themes_page():
     if not html:
         html = _build_themes_page()
         _set("themes_page", html)
+    return html
+
+
+@app.route("/flows")
+def flows_page():
+    week = request.args.get("week", "")
+    if week and not re.match(r"^\d{4}-\d{2}-\d{2}$", week):
+        week = ""
+    key = f"flows_{week}"
+    html = _get(key)
+    if not html:
+        html = _build_flows_page(week or None)
+        _set(key, html)
     return html
 
 
