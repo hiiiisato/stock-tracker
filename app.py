@@ -1031,7 +1031,7 @@ def _build_home() -> str:
 <style>{_DISC_CSS}{_THEME_CSS}{_EVENTS_CSS}</style>
 <div class="page-header">
   <div class="page-title">マーケット ダッシュボード</div>
-  <div class="page-subtitle">最終更新: {latest_date}</div>
+  <div class="page-subtitle">最終更新: {latest_date} ・ <a href="/daily" style="color:#58a6ff">📰 今日の日次レポート →</a></div>
 </div>
 
 {market_ai_card}
@@ -7161,6 +7161,21 @@ def themes_page():
     if not html:
         html = _build_themes_page()
         _set("themes_page", html)
+    return html
+
+
+@app.route("/daily")
+@app.route("/daily/<date_str>")
+def daily_report_page(date_str: str = ""):
+    if date_str and not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
+        date_str = ""
+    key = f"daily_report_{date_str}"
+    html = _get(key)
+    if not html:
+        from daily_report import build_report_html
+        d = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else None
+        html = build_report_html(d)
+        _set(key, html)
     return html
 
 
