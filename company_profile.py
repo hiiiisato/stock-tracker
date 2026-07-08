@@ -95,19 +95,39 @@ def fetch_one(code: str) -> dict | None:
         return None
 
 
-def _save(cur, code: str, data: dict, now: str):
-    cur.execute(
-        """UPDATE stocks SET business_summary = COALESCE(%s, business_summary),
-                             website          = COALESCE(%s, website),
-                             profile_updated_at = %s
-           WHERE code = %s""",
-        (data.get("summary"), data.get("website"), now, code))
-    themes = data.get("themes") or []
-    if themes:
-        cur.execute("DELETE FROM kabutan_themes WHERE code = %s", (code,))
-        cur.executemany(
-            "INSERT IGNORE INTO kabutan_themes (code, theme) VALUES (%s, %s)",
-            [(code, t) for t in themes])
+def _save(code: str, data: dict, now: str):
+    """DB保存。長時間バッチ中のTiDB接続リセットに備え、保存ごとに新規接続＋1回リトライする。"""
+    for attempt in (1, 2):
+        conn = None
+        try:
+            conn = get_conn()
+            cur  = conn.cursor()
+            cur.execute(
+                """UPDATE stocks SET business_summary = COALESCE(%s, business_summary),
+                                     website          = COALESCE(%s, website),
+                                     profile_updated_at = %s
+                   WHERE code = %s""",
+                (data.get("summary"), data.get("website"), now, code))
+            themes = data.get("themes") or []
+            if themes:
+                cur.execute("DELETE FROM kabutan_themes WHERE code = %s", (code,))
+                cur.executemany(
+                    "INSERT IGNORE INTO kabutan_themes (code, theme) VALUES (%s, %s)",
+                    [(code, t) for t in themes])
+            conn.commit()
+            cur.close()
+            conn.close()
+            return
+        except Exception as e:
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
+            if attempt == 2:
+                raise
+            print(f"  {code}: DB保存リトライ ({e})")
+            time.sleep(5)
 
 
 # ─── バッチ実行 ──────────────────────────────────────────────────────────────
@@ -129,6 +149,8 @@ def run(target_codes: list[str] | None = None, limit: int | None = DAILY_LIMIT) 
             {}
         """.format(f"LIMIT {int(limit)}" if limit else ""), (STALE_DAYS,))
         codes = [r[0] for r in cur.fetchall()]
+    cur.close()
+    conn.close()
 
     n_ok = n_empty = n_err = 0
     for i, code in enumerate(codes, 1):
@@ -138,17 +160,18 @@ def run(target_codes: list[str] | None = None, limit: int | None = DAILY_LIMIT) 
         if data is None:
             n_err += 1
             continue
-        _save(cur, code, data, now)
+        try:
+            _save(code, data, now)
+        except Exception as e:
+            print(f"  {code}: 保存失敗（スキップ） {e}")
+            n_err += 1
+            continue
         if data.get("summary"):
             n_ok += 1
         else:
             n_empty += 1
         if i % 50 == 0:
-            conn.commit()
             print(f"  [{i}/{len(codes)}] 概要あり={n_ok} 情報なし={n_empty} 失敗={n_err}")
-    conn.commit()
-    cur.close()
-    conn.close()
     print(f"会社概要取得 完了: 概要あり={n_ok} 情報なし={n_empty} 失敗={n_err} / 対象{len(codes)}件")
     return n_ok
 
