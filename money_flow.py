@@ -47,6 +47,8 @@ SIZE_BUCKETS = [
     ("micro", "超小型（300億円未満）",    lambda mc: mc < 3e10),
 ]
 
+GROUP_TYPE_LABELS = {"theme": "テーマ", "sector": "業種", "size": "規模", "style": "スタイル"}
+
 
 def ensure_table():
     conn = get_conn()
@@ -151,6 +153,19 @@ def _load_groups(cur) -> tuple[dict, dict]:
         groups[code].append(("theme", theme))
         labels[("theme", theme)] = theme
     return groups, labels
+
+
+def get_group_members(group_type: str, group_key: str) -> tuple[list[str], str]:
+    """指定グループの所属銘柄コード一覧と表示ラベルを返す（ドリルダウンページ用）。
+    グループ定義は _load_groups と完全に同一（定義の二重管理を避けるため流用）。"""
+    conn = get_conn()
+    cur  = conn.cursor()
+    groups, labels = _load_groups(cur)
+    cur.close()
+    conn.close()
+    target = (group_type, group_key)
+    codes = [c for c, gl in groups.items() if target in gl]
+    return codes, labels.get(target, group_key)
 
 
 def compute(weeks: int = LOOKBACK_WEEKS) -> int:

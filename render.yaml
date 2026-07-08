@@ -1,3 +1,7 @@
+# Render.com は Webサービス（サイト本体）のみ。
+# 定期バッチはすべて GitHub Actions（.github/workflows/daily.yml, misc_batch.yml）で実行する。
+# ※ Render無料プランは cron ジョブ非対応のため、旧定義にあった cron サービス群
+#   （daily-stock-update / edinet-text-daily / fund-watch-monthly）は実在せず削除した。
 services:
   - type: web
     name: kabushiki-tracker
@@ -23,82 +27,7 @@ services:
       - key: GEMINI_API_KEY
         sync: false        # Render ダッシュボードで手動設定（Google AI Studio で無料取得）
       - key: EDINET_API_KEY
-        sync: false        # Render ダッシュボードで手動設定（https://api.edinet-api.fsa.go.jp/ で無料取得）
+        sync: false        # Render ダッシュボードで手動設定（https://api.edinet-fsa.go.jp/ で無料取得）
       - key: EDINETDB_API_KEY
         sync: false        # Render ダッシュボードで手動設定（https://edinetdb.jp/developers で取得）
       # TIDB_SSL_CA は未設定のまま → certifi を自動使用（Linux 対応済み）
-
-  - type: cron
-    name: daily-stock-update
-    env: python
-    # 平日 17:00 JST（UTC 8:00）に実行。市場終了（15:30）後に価格・業績・変動要因を一括更新。
-    schedule: "0 8 * * 1-5"
-    buildCommand: pip install -r requirements.txt
-    startCommand: python daily_run.py
-    envVars:
-      - key: TIDB_HOST
-        sync: false
-      - key: TIDB_PORT
-        value: "4000"
-      - key: TIDB_DATABASE
-        value: stock_tracker
-      - key: TIDB_USER
-        sync: false
-      - key: TIDB_PASSWORD
-        sync: false
-      - key: JQUANTS_API_KEY
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: EDINET_API_KEY
-        sync: false
-      - key: EDINETDB_API_KEY
-        sync: false
-      - key: LINE_CHANNEL_ACCESS_TOKEN
-        sync: false        # LINE Messaging API チャネルアクセストークン（スイング通知用）
-      - key: LINE_USER_ID
-        sync: false        # 通知先 LINE ユーザーID（U から始まる文字列）
-
-  - type: cron
-    name: edinet-text-daily
-    env: python
-    # 毎日 23:45 JST（UTC 14:45）に実行。未取得銘柄から銘柄コード順に最大80件取得。
-    schedule: "45 14 * * *"
-    buildCommand: pip install -r requirements.txt
-    startCommand: python edinet_texts.py --all
-    envVars:
-      - key: TIDB_HOST
-        sync: false
-      - key: TIDB_PORT
-        value: "4000"
-      - key: TIDB_DATABASE
-        value: stock_tracker
-      - key: TIDB_USER
-        sync: false
-      - key: TIDB_PASSWORD
-        sync: false
-      - key: EDINETDB_API_KEY
-        sync: false
-
-  - type: cron
-    name: fund-watch-monthly
-    env: python
-    # 毎月 5日・15日・25日 の 6:00 JST（UTC 21:00 前日）に実行。
-    # ファンド各社の月次レポート発行タイミングがバラバラなため月3回チェックし、
-    # 既に取り込み済みの月は fund_watch.py 内でスキップされる（重複コストなし）。
-    schedule: "0 21 4,14,24 * *"
-    buildCommand: pip install -r requirements.txt
-    startCommand: python fund_watch.py
-    envVars:
-      - key: TIDB_HOST
-        sync: false
-      - key: TIDB_PORT
-        value: "4000"
-      - key: TIDB_DATABASE
-        value: stock_tracker
-      - key: TIDB_USER
-        sync: false
-      - key: TIDB_PASSWORD
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false

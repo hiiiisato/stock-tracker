@@ -3521,10 +3521,13 @@ def _build_flows_page(week_str: str | None = None) -> str:
             f'<span class="fl-n">({it["ret"]:+.0f}%)</span>'
             for it in items)
 
+    from urllib.parse import quote as _q
+
     def _row_html(r) -> str:
         key = (r["group_type"], r["group_key"])
+        gurl = f'/flowgroup?type={r["group_type"]}&key={_q(str(r["group_key"]))}'
         return f"""<tr>
-  <td><span class="fl-glabel">{_html.escape(r["group_label"] or r["group_key"])}</span> <span class="fl-n">{r["n_stocks"]}銘柄</span></td>
+  <td><a class="fl-glabel" href="{gurl}">{_html.escape(r["group_label"] or r["group_key"])}</a> <span class="fl-n">{r["n_stocks"]}銘柄</span></td>
   <td>{f(r["turnover"]):,.0f}億</td>
   <td>{_flow_badge(f(r["flow_ratio"]))}</td>
   <td>{_spark(hist.get(key))}</td>
@@ -3565,7 +3568,7 @@ def _build_flows_page(week_str: str | None = None) -> str:
     type_lbl = {"theme": "テーマ", "sector": "業種", "size": "規模", "style": "スタイル"}
     hero_cards = "".join(f"""<div class="fl-hero-card">
   <span class="fl-hero-type">{type_lbl[r["group_type"]]}</span>
-  <span class="fl-hero-name">{_html.escape(r["group_label"] or r["group_key"])}</span>
+  <span class="fl-hero-name"><a href="/flowgroup?type={r["group_type"]}&key={_q(str(r["group_key"]))}" style="color:inherit">{_html.escape(r["group_label"] or r["group_key"])}</a></span>
   <span class="fl-hero-flow" style="color:{'#f85149' if f(r["flow_ratio"]) >= 1.05 else '#8b949e'}">{f(r["flow_ratio"]):.2f}x</span>
   <span class="fl-hero-sub">{_pct_span(f(r["ret_median"]))} ・ {f(r["turnover"]):,.0f}億円</span>
 </div>""" for r in hero_pool[:10])
@@ -3578,7 +3581,7 @@ def _build_flows_page(week_str: str | None = None) -> str:
 
     body = f"""<style>{_FLOW_CSS}</style>
 <div class="page-header">
-  <div class="page-title">資金フロー — どこにお金が流れているか</div>
+  <div class="page-title">資金フロー — どこにお金が流れているか</div><!-- flows-page -->
   <div class="page-subtitle">週間売買代金シェアの変化から、資金が集まっているテーマ・業種・スタイルを捉える（スイングの初動探し）</div>
 </div>
 <div class="fl-wrap">
@@ -3604,6 +3607,88 @@ def _build_flows_page(week_str: str | None = None) -> str:
   </div>
 </div>"""
     return _page_html("資金フロー", body, active="flows")
+
+
+def _build_flow_group_page(gtype: str, gkey: str) -> str:
+    """資金フローグループの所属銘柄一覧（ドリルダウン）。"""
+    import html as _html
+    from money_flow import get_group_members, GROUP_TYPE_LABELS
+    codes, label = get_group_members(gtype, gkey)
+
+    conn = get_conn()
+    cur  = conn.cursor()
+    # グループの直近週メトリクス
+    cur.execute("""
+        SELECT week_end, n_stocks, turnover, flow_ratio, ret_median, breadth, excess_topix
+        FROM money_flow_weekly
+        WHERE group_type = %s AND group_key = %s
+        ORDER BY week_end DESC LIMIT 1
+    """, (gtype, gkey))
+    wk = cur.fetchone()
+
+    rows = []
+    if codes:
+        ph = ",".join(["%s"] * len(codes))
+        cur.execute(f"""
+            SELECT s.code, s.name, ps.close, dp.change_pct, ps.chg5d, ps.chg25d,
+                   ps.vol20_ratio, ps.turnover_day, f.market_cap, f.per, f.div_yield
+            FROM stocks s
+            LEFT JOIN price_stats ps ON ps.code = s.code
+            LEFT JOIN stock_fundamentals f ON f.code = s.code
+            LEFT JOIN daily_prices dp
+              ON dp.code = s.code AND dp.date = (SELECT MAX(date) FROM daily_prices)
+            WHERE s.code IN ({ph})
+            ORDER BY COALESCE(ps.turnover_day, 0) DESC
+            LIMIT 300
+        """, codes)
+        rows = cur.fetchall()
+    cur.close(); conn.close()
+
+    f = lambda v: float(v) if v is not None else None
+    def _pct(v):
+        v = f(v)
+        if v is None:
+            return '<span class="fl-n">—</span>'
+        cls = "fl-pos" if v > 0 else ("fl-neg" if v < 0 else "")
+        return f'<span class="{cls}">{v:+.1f}%</span>'
+
+    wk_html = ""
+    if wk:
+        wk_end, n_stocks, tv, fr, ret_med, breadth, excess = wk
+        badge = f'{f(fr):.2f}x' if fr is not None else "—"
+        wk_html = f"""<div class="fl-section" style="padding:12px 14px;margin-bottom:14px">
+  <span style="font-size:12px;color:#8b949e">{wk_end}週: 資金流入度 <b style="color:#c9d1d9">{badge}</b>
+  ・売買代金 {f(tv) or 0:,.0f}億円 ・騰落率中央値 {_pct(ret_med)} ・上昇銘柄比率 {f(breadth) or 0:.0f}%
+  ・対TOPIX {_pct(excess)}</span>
+</div>"""
+
+    trs = "".join(f"""<tr>
+  <td><a href="/stock/{_html.escape(str(r[0]))}" class="fl-glabel">{_html.escape(r[1] or str(r[0]))}</a> <span class="fl-n">{_html.escape(str(r[0]))}</span></td>
+  <td>{f'{f(r[2]):,.0f}円' if r[2] else '—'}</td>
+  <td>{_pct(r[3])}</td>
+  <td>{_pct(r[4])}</td>
+  <td>{_pct(r[5])}</td>
+  <td>{f'{f(r[6]):.1f}x' if r[6] else '—'}</td>
+  <td>{f'{f(r[7]):,.1f}億' if r[7] else '—'}</td>
+  <td>{f'{f(r[8])/1e8:,.0f}億' if r[8] else '—'}</td>
+  <td>{f'{f(r[9]):.1f}' if r[9] else '—'}</td>
+  <td>{f'{f(r[10]):.1f}%' if r[10] else '—'}</td>
+</tr>""" for r in rows)
+
+    body = f"""<style>{_FLOW_CSS}</style>
+<div class="page-header">
+  <div class="page-title">{_html.escape(label)} <span style="font-size:13px;color:#8b949e">{GROUP_TYPE_LABELS.get(gtype, gtype)}・{len(rows)}銘柄</span></div>
+  <div class="page-subtitle"><a href="/flows">← 資金フローに戻る</a></div>
+</div>
+{wk_html}
+<div class="fl-section">
+  <div class="fl-scroll"><table class="fl-table" style="min-width:860px">
+    <tr><th>銘柄</th><th>終値</th><th>前日比</th><th>5日</th><th>25日</th>
+        <th>出来高比</th><th>売買代金/日</th><th>時価総額</th><th>PER</th><th>利回り</th></tr>
+    {trs or '<tr><td colspan="10" class="fl-n">所属銘柄がありません</td></tr>'}
+  </table></div>
+</div>"""
+    return _page_html(f"{label} — 資金フロー", body, active="flows")
 
 
 _DISC_CSS = """
@@ -4330,6 +4415,7 @@ def _build_screen_page() -> str:
     <input id="f-d52h-min" type="hidden"><input id="f-d52h-max" type="hidden">
     <input id="f-d52l-min" type="hidden"><input id="f-d52l-max" type="hidden">
     <input id="f-vol-min" type="hidden">
+    <input id="f-vol-max" type="hidden">
     <input id="f-vr625-min" type="hidden"><input id="f-vr625-max" type="hidden">
     <input id="f-turn-min" type="hidden"><input id="f-turn-max" type="hidden">
     <input id="f-chg25-min" type="hidden"><input id="f-chg25-max" type="hidden">
@@ -4374,35 +4460,39 @@ def _build_screen_page() -> str:
              {{f:'dev_high52w',op:'>=',val:-10,lbl:'52週高値-10%内'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}},
              {{f:'turnover_20d',op:'>=',val:10,lbl:'売買代金10億+'}}],
       cols:['name','close','change_pct','chg25d','dev_ma25','dev_high52w','vol20_ratio','turnover_20d','market_cap'],sort:'chg25d-desc'}},
-    {{name:'② ブレイクアウト',desc:'20日高値更新・出来高急増・RSI55〜80・MACD-GC。上昇加速の初動サイン。',
+    {{name:'② ブレイクアウト',desc:'20日高値更新・出来高急増・MACD-GC。流動性と過熱除外を追加（バックテストで大幅改善）。',
       conds:[{{f:'break_20d',op:'=',val:1,lbl:'20日高値更新'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}},
-             {{f:'rsi14',op:'>=',val:55,lbl:'RSI≥55'}},{{f:'rsi14',op:'<=',val:80,lbl:'RSI≤80'}},{{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC'}}],
+             {{f:'rsi14',op:'>=',val:55,lbl:'RSI≥55'}},{{f:'rsi14',op:'<=',val:75,lbl:'RSI≤75'}},{{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC'}},
+             {{f:'turnover_20d',op:'>=',val:5,lbl:'売買代金5億+'}},{{f:'chg25d',op:'<=',val:25,lbl:'25日+25%以内(過熱前)'}}],
       cols:['name','close','change_pct','chg25d','rsi14','vol20_ratio','turnover_day','break_20d','macd_gc'],sort:'vol20_ratio-desc'}},
     {{name:'③ 好決算モメンタム',desc:'売上+15%・営業利益+20%の高成長。決算跨ぎで急伸しやすい銘柄群。',
       conds:[{{f:'rev_growth',op:'>=',val:15,lbl:'売上+15%'}},{{f:'op_growth',op:'>=',val:20,lbl:'営業利益+20%'}},
              {{f:'vol20_ratio',op:'>=',val:1.2,lbl:'出来高1.2倍+'}}],
       cols:['name','close','change_pct','chg25d','rev_growth','op_growth','eps_growth','roe','rsi14'],sort:'op_growth-desc'}},
-    {{name:'④ V字反転',desc:'急落後の反発局面。RSI30〜55・MACDゴールデンクロス・出来高回復が揃う。',
-      conds:[{{f:'rsi14',op:'>=',val:30,lbl:'RSI≥30'}},{{f:'rsi14',op:'<=',val:55,lbl:'RSI≤55'}},
-             {{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC'}},{{f:'chg25d',op:'<=',val:-5,lbl:'25日-5%以下'}},
-             {{f:'vol20_ratio',op:'>=',val:1.2,lbl:'出来高1.2倍+'}}],
-      cols:['name','close','change_pct','chg25d','chg75d','rsi14','dev_ma25','macd_gc','vol20_ratio'],sort:'chg25d-asc'}},
+    {{name:'④ 高値圏の静かな強さ',desc:'52週高値-5%圏で出来高が静か＝急騰前の蓄積局面。旧「V字反転」は全期間で劣後したため差し替え。',
+      conds:[{{f:'dev_high52w',op:'>=',val:-5,lbl:'52週高値-5%圏'}},{{f:'vol20_ratio',op:'<=',val:1.2,lbl:'出来高静か(≤1.2倍)'}},
+             {{f:'vs_ma25',op:'>=',val:0,lbl:'株価>MA25'}},{{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}},
+             {{f:'volatility_60d',op:'<=',val:40,lbl:'低ボラ(60日≤40%)'}}],
+      cols:['name','close','change_pct','chg25d','dev_high52w','vol20_ratio','volatility_60d','turnover_20d','market_cap'],sort:'dev_high52w-desc'}},
     {{name:'⑤ 業績急成長',desc:'売上+20%・EPS+25%・ROE15%・営業利益率10%以上が揃った成長株。',
       conds:[{{f:'rev_growth',op:'>=',val:20,lbl:'売上+20%'}},{{f:'eps_growth',op:'>=',val:25,lbl:'EPS+25%'}},
              {{f:'roe',op:'>=',val:15,lbl:'ROE≥15%'}},{{f:'op_margin',op:'>=',val:10,lbl:'営業利益率≥10%'}},
              {{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}}],
       cols:['name','close','change_pct','per','pbr','roe','rev_growth','eps_growth','op_margin','roic'],sort:'eps_growth-desc'}},
-    {{name:'⑥ 小型株爆発',desc:'時価総額50〜500億の小型株で20日高値更新・出来高急増のもの。',
+    {{name:'⑥ 小型株爆発',desc:'小型株の20日高値更新×出来高急増。過熱除外と流動性を追加。短期(1ヶ月)向き＝引っ張らない。',
       conds:[{{f:'market_cap',op:'>=',val:50e8,lbl:'時価総額50億+'}},{{f:'market_cap',op:'<=',val:500e8,lbl:'時価総額500億以下'}},
-             {{f:'break_20d',op:'=',val:1,lbl:'20日高値更新'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}}],
+             {{f:'break_20d',op:'=',val:1,lbl:'20日高値更新'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}},
+             {{f:'chg25d',op:'<=',val:25,lbl:'25日+25%以内(過熱前)'}},{{f:'turnover_20d',op:'>=',val:2,lbl:'売買代金2億+'}}],
       cols:['name','close','change_pct','chg25d','rsi14','vol20_ratio','turnover_day','break_20d','market_cap'],sort:'vol20_ratio-desc'}},
-    {{name:'⑦ 高配当バリュー',desc:'配当利回り3%以上・PBR1.5倍以下・ROE10%以上・営業CF黒字の持続可能高配当株。',
+    {{name:'⑦ 高配当バリュー',desc:'高配当×割安×ROE。流動性とMA75上（下落トレンドの罠回避）を追加（バックテストで対TOPIXほぼ互角の最上位クラス）。',
       conds:[{{f:'div_yield',op:'>=',val:3,lbl:'配当3%+'}},{{f:'pbr',op:'<=',val:1.5,lbl:'PBR≤1.5倍'}},
-             {{f:'roe',op:'>=',val:10,lbl:'ROE≥10%'}},{{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}}],
+             {{f:'roe',op:'>=',val:10,lbl:'ROE≥10%'}},{{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}},
+             {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}},{{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}}],
       cols:['name','close','change_pct','div_yield','pbr','per','roe','roic','cf_positive'],sort:'div_yield-desc'}},
-    {{name:'⑧ 低PBR発掘',desc:'PBR0.8倍以下でROE黒字・CF安定。解散価値以下で放置された超割安株。',
+    {{name:'⑧ 低PBR動意',desc:'解散価値以下の超割安株が動き出した瞬間を捉える（25日騰落プラス条件を追加、放置株の「塩漬け待ち」を回避）。',
       conds:[{{f:'pbr',op:'<=',val:0.8,lbl:'PBR≤0.8倍'}},{{f:'roe',op:'>=',val:5,lbl:'ROE≥5%'}},
-             {{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}}],
+             {{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}},{{f:'chg25d',op:'>=',val:0,lbl:'25日騰落プラス(動意)'}},
+             {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}}],
       cols:['name','close','change_pct','pbr','per','roe','div_yield','market_cap','chg25d'],sort:'pbr-asc'}},
     {{name:'⑨ 高ROEグロース',desc:'ROE20%以上・ROIC10%以上・CF黒字・営業利益率15%以上の高資本効率優良成長株。',
       conds:[{{f:'roe',op:'>=',val:20,lbl:'ROE≥20%'}},{{f:'roic',op:'>=',val:10,lbl:'ROIC≥10%'}},
@@ -4412,26 +4502,30 @@ def _build_screen_page() -> str:
       conds:[{{f:'market_cap',op:'>=',val:500e8,lbl:'時価総額500億+'}},{{f:'turnover_20d',op:'>=',val:20,lbl:'売買代金20億+'}},
              {{f:'roe',op:'>=',val:15,lbl:'ROE≥15%'}},{{f:'op_margin',op:'>=',val:15,lbl:'営業利益率≥15%'}}],
       cols:['name','close','change_pct','market_cap','turnover_20d','per','pbr','roe','op_margin','div_yield'],sort:'market_cap-desc'}},
-    {{name:'⑪ ボックス上抜け',desc:'65日高値更新（3ヶ月レンジ上抜け）・出来高急増・MACD-GCで力強い上放れ。',
+    {{name:'⑪ ボックス上抜け',desc:'3ヶ月レンジ上抜け×出来高急増。流動性・過熱除外を追加（バックテストで対TOPIXプラスの最上位クラス）。',
       conds:[{{f:'break_65d',op:'=',val:1,lbl:'65日高値更新'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}},
-             {{f:'rsi14',op:'>=',val:55,lbl:'RSI≥55'}},{{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC'}}],
+             {{f:'rsi14',op:'>=',val:55,lbl:'RSI≥55'}},{{f:'rsi14',op:'<=',val:75,lbl:'RSI≤75'}},{{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC'}},
+             {{f:'turnover_20d',op:'>=',val:5,lbl:'売買代金5億+'}},{{f:'chg25d',op:'<=',val:25,lbl:'25日+25%以内(過熱前)'}}],
       cols:['name','close','change_pct','chg75d','rsi14','vol20_ratio','turnover_day','break_65d','macd_gc'],sort:'chg75d-desc'}},
-    {{name:'⑫ 押し目買い',desc:'MA25付近に押してきた（乖離-5〜+2%）・MA75上・RSI40〜65の理想的エントリーゾーン。',
+    {{name:'⑫ 押し目買い',desc:'MA25付近に押してきた（乖離-5〜+2%）・MA75上・RSI40〜65。流動性条件を追加。',
       conds:[{{f:'dev_ma25',op:'>=',val:-5,lbl:'MA25乖離-5%以上'}},{{f:'dev_ma25',op:'<=',val:2,lbl:'MA25乖離+2%以下'}},
-             {{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}},{{f:'rsi14',op:'>=',val:40,lbl:'RSI≥40'}},{{f:'rsi14',op:'<=',val:65,lbl:'RSI≤65'}}],
+             {{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}},{{f:'rsi14',op:'>=',val:40,lbl:'RSI≥40'}},{{f:'rsi14',op:'<=',val:65,lbl:'RSI≤65'}},
+             {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}}],
       cols:['name','close','change_pct','dev_ma25','dev_ma75','rsi14','vol20_ratio','chg75d','market_cap'],sort:'dev_ma25-asc'}},
-    {{name:'⑬ MACD-GC',desc:'直近5本以内にMACDがシグナルを上抜け。株価>MA25・RSI50以上で強度確認。',
+    {{name:'⑬ MACD-GC',desc:'MACDがシグナルを上抜け。MA75上（中期トレンド内のGCのみ拾う）と流動性を追加。',
       conds:[{{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC発生'}},{{f:'vs_ma25',op:'>=',val:0,lbl:'株価>MA25'}},
-             {{f:'rsi14',op:'>=',val:50,lbl:'RSI≥50'}}],
+             {{f:'rsi14',op:'>=',val:50,lbl:'RSI≥50'}},{{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}},
+             {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}}],
       cols:['name','close','change_pct','rsi14','macd','macd_signal','dev_ma25','vol20_ratio','chg25d'],sort:'chg25d-desc'}},
-    {{name:'⑭ 増配・高配当',desc:'配当利回り2%以上・配当性向50%以下・ROE10%以上・CF黒字で持続可能な配当株。',
+    {{name:'⑭ 増配・高配当',desc:'配当利回り2%以上・配当性向50%以下（増配余地）・ROE10%以上・CF黒字。流動性条件を追加。',
       conds:[{{f:'div_yield',op:'>=',val:2,lbl:'配当2%+'}},{{f:'payout_ratio',op:'<=',val:50,lbl:'配当性向50%以下'}},
-             {{f:'roe',op:'>=',val:10,lbl:'ROE≥10%'}},{{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}}],
+             {{f:'roe',op:'>=',val:10,lbl:'ROE≥10%'}},{{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}},
+             {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}}],
       cols:['name','close','change_pct','div_yield','payout_ratio','pbr','roe','rev_growth','market_cap'],sort:'div_yield-desc'}},
-    {{name:'⑮ 業績+チャート複合',desc:'売上+15%・EPS+15%・ROE15%+・MA75上・出来高増加が揃った総合戦略。',
+    {{name:'⑮ 業績+チャート複合',desc:'売上+15%・EPS+15%・ROE15%+・MA75上・出来高増加の総合戦略。流動性条件を追加。',
       conds:[{{f:'rev_growth',op:'>=',val:15,lbl:'売上+15%'}},{{f:'eps_growth',op:'>=',val:15,lbl:'EPS+15%'}},
              {{f:'roe',op:'>=',val:15,lbl:'ROE≥15%'}},{{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}},
-             {{f:'vol20_ratio',op:'>=',val:1.3,lbl:'出来高1.3倍+'}}],
+             {{f:'vol20_ratio',op:'>=',val:1.3,lbl:'出来高1.3倍+'}},{{f:'turnover_20d',op:'>=',val:2,lbl:'売買代金2億+'}}],
       cols:['name','close','change_pct','rev_growth','eps_growth','roe','roic','chg25d','rsi14','vol20_ratio'],sort:'rev_growth-desc'}},
   ];
 
@@ -4458,7 +4552,7 @@ def _build_screen_page() -> str:
     'f-rsi-min','f-rsi-max',
     'f-dm25-min','f-dm25-max','f-dm75-min','f-dm75-max','f-dm200-min','f-dm200-max',
     'f-d52h-min','f-d52h-max','f-d52l-min','f-d52l-max',
-    'f-vol-min','f-vr625-min','f-vr625-max',
+    'f-vol-min','f-vol-max','f-vr625-min','f-vr625-max',
     'f-turn-min','f-turn-max',
     'f-chg25-min','f-chg25-max',
     'f-stk-min','f-stk-max','f-vol60-min','f-vol60-max',
@@ -4490,7 +4584,7 @@ def _build_screen_page() -> str:
     'dev_ma200':     {{'>=':[['f-dm200-min']], '<=':[['f-dm200-max']]}},
     'dev_high52w':   {{'>=':[['f-d52h-min']],  '<=':[['f-d52h-max']]}},
     'dev_low52w':    {{'>=':[['f-d52l-min']],  '<=':[['f-d52l-max']]}},
-    'vol20_ratio':   {{'>=':[['f-vol-min']]}},
+    'vol20_ratio':   {{'>=':[['f-vol-min']], '<=':[['f-vol-max']]}},
     'vol_ratio_6_25':{{'>=':[['f-vr625-min']], '<=':[['f-vr625-max']]}},
     'turnover_20d':  {{'>=':[['f-turn-min']],  '<=':[['f-turn-max']]}},
     'per':           {{'>=':[['f-per-min']],   '<=':[['f-per-max']]}},
@@ -4660,6 +4754,7 @@ def _build_screen_page() -> str:
     if(!mn('dev_low52w','f-d52l-min'))return false;
     if(!mx('dev_low52w','f-d52l-max'))return false;
     if(!mn('vol20_ratio','f-vol-min'))return false;
+    if(!mx('vol20_ratio','f-vol-max'))return false;
     if(!mn('vol_ratio_6_25','f-vr625-min'))return false;
     if(!mx('vol_ratio_6_25','f-vr625-max'))return false;
     if(!mn('turnover_20d','f-turn-min'))return false;
@@ -4797,7 +4892,7 @@ def _build_screen_page() -> str:
     {{cat:'テクニカル',id:'d52h',  lbl:'52週高値乖離',field:'dev_high52w', minId:'f-d52h-min', maxId:'f-d52h-max', unit:'%', step:1}},
     {{cat:'テクニカル',id:'d52l',  lbl:'52週安値上昇',field:'dev_low52w',  minId:'f-d52l-min', maxId:'f-d52l-max', unit:'%', step:1}},
     {{cat:'テクニカル',id:'chg25', lbl:'25日騰落',   field:'chg25d',       minId:'f-chg25-min',maxId:'f-chg25-max',unit:'%', step:1}},
-    {{cat:'テクニカル',id:'vol',   lbl:'出来高比(20日)',field:'vol20_ratio',minId:'f-vol-min',  unit:'x', step:0.1, minOnly:true}},
+    {{cat:'テクニカル',id:'vol',   lbl:'出来高比(20日)',field:'vol20_ratio',minId:'f-vol-min',maxId:'f-vol-max',unit:'x', step:0.1}},
     {{cat:'テクニカル',id:'vr625', lbl:'出来高比(6/25日)',field:'vol_ratio_6_25',minId:'f-vr625-min',maxId:'f-vr625-max',unit:'x',step:0.1}},
     {{cat:'テクニカル',id:'stk',   lbl:'ストキャス%K', field:'stoch_k',    minId:'f-stk-min',  maxId:'f-stk-max',  unit:'',  step:1}},
     {{cat:'テクニカル',id:'vol60', lbl:'60日ボラティリティ',field:'volatility_60d',minId:'f-vol60-min',maxId:'f-vol60-max',unit:'%',step:1}},
@@ -7172,9 +7267,45 @@ def daily_report_page(date_str: str = ""):
     key = f"daily_report_{date_str}"
     html = _get(key)
     if not html:
-        from daily_report import build_report_html
+        from daily_report import build_report_html, load_report, report_dates
         d = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else None
-        html = build_report_html(d)
+        # 過去日は蓄積済みスナップショットを優先（その日に配信された内容そのまま）
+        html = load_report(d) if d else None
+        if not html:
+            html = build_report_html(d)
+        # 前日/翌日ナビを注入（蓄積HTML内のプレースホルダを配信時に置換）
+        dates = report_dates(90)
+        cur_d = d
+        if cur_d is None:
+            m = re.search(r"<title>日次レポート (\d{4}-\d{2}-\d{2})</title>", html)
+            cur_d = datetime.strptime(m.group(1), "%Y-%m-%d").date() if m else None
+        nav = ""
+        if cur_d:
+            older = [x for x in dates if x < cur_d]
+            newer = [x for x in reversed(dates) if x > cur_d]
+            prev_l = f'<a href="/daily/{older[0]}">◀ {older[0].month}/{older[0].day}</a>' if older else '<span style="color:#30363d">◀</span>'
+            next_l = f'<a href="/daily/{newer[0]}">{newer[0].month}/{newer[0].day} ▶</a>' if newer else '<a href="/daily">最新 ▶</a>'
+            opts = "".join(f'<option value="{x}"{" selected" if x == cur_d else ""}>{x}</option>' for x in dates) or f'<option selected>{cur_d}</option>'
+            nav = (f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;font-size:13px">'
+                   f'{prev_l}<select onchange="location.href=\'/daily/\'+this.value" '
+                   f'style="background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:3px 8px">{opts}</select>'
+                   f'{next_l}</div>')
+        html = html.replace("<!--DATENAV-->", nav)
+        _set(key, html)
+    return html
+
+
+@app.route("/flowgroup")
+def flow_group_page():
+    gtype = request.args.get("type", "")
+    gkey  = request.args.get("key", "")[:80]
+    from money_flow import GROUP_TYPE_LABELS
+    if gtype not in GROUP_TYPE_LABELS or not gkey:
+        return redirect("/flows")
+    key = f"flowgroup_{gtype}_{gkey}"
+    html = _get(key)
+    if not html:
+        html = _build_flow_group_page(gtype, gkey)
         _set(key, html)
     return html
 

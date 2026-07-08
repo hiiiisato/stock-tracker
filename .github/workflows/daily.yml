@@ -1,15 +1,25 @@
 name: 日次市場データ更新
 
+# GitHub Actions の cron は数十分〜数時間遅延することがあるため:
+#  - 16:00 メイン + 17:00 リトライの2本立て（daily_run.py 側の重複ガードで二重実行は防止）
+#  - 20:30 イブニング便で夜間の適時開示を回収し、市況考察・日次レポートを確定版に更新
 on:
   schedule:
-    # 16:30 JST = 07:30 UTC（月〜金）
-    - cron: '30 7 * * 1-5'
-  workflow_dispatch:  # GitHub UI から手動実行も可能
+    - cron: '0 7 * * 1-5'    # 16:00 JST メイン
+    - cron: '0 8 * * 1-5'    # 17:00 JST リトライ（完了済みならスキップ）
+    - cron: '30 11 * * 1-5'  # 20:30 JST イブニング便（開示完全版+レポート確定）
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '実行モード'
+        type: choice
+        options: [main, evening]
+        default: main
 
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60   # パイプライン全体の所要増に合わせて拡大（旧30分では途中killが発生）
 
     steps:
       - name: Checkout
@@ -24,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: 日次データ更新（価格・スコア・ランキング）
+      - name: 日次データ更新
         env:
           TIDB_HOST:      ${{ secrets.TIDB_HOST }}
           TIDB_PORT:      ${{ secrets.TIDB_PORT }}
@@ -37,7 +47,12 @@ jobs:
           # EDINET公式API（有報「事業の内容」の増分更新）。未設定だと該当ステップのみスキップ
           EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
           # TIDB_SSL_CA は未設定 → certifi を自動使用
-        run: python daily_run.py
+        run: |
+          if [ "${{ github.event.schedule }}" = "30 11 * * 1-5" ] || [ "${{ inputs.mode }}" = "evening" ]; then
+            python daily_run.py --evening
+          else
+            python daily_run.py
+          fi
 
       - name: 結果サマリー
         if: always()

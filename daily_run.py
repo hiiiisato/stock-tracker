@@ -2,15 +2,80 @@
 日次実行スクリプト — 毎営業日の市場終了後（16:00以降）に実行する
 実行順: 銘柄マスタ → カレンダー → 価格データ → テーマスコア → ランキング
 
+スケジューラは GitHub Actions（.github/workflows/daily.yml）:
+  16:00 JST メイン / 17:00 JST リトライ（完了済みならスキップ） / 20:30 JST イブニング便
+
 使い方:
-  python daily_run.py              # 通常の日次更新
+  python daily_run.py              # 通常の日次更新（当日完了済みならスキップ）
+  python daily_run.py --force     # 完了済みでも再実行
+  python daily_run.py --evening   # イブニング便: 夜間開示の回収+市況考察+日次レポート確定版
   python daily_run.py --init       # 初回: 全期間の価格データを一括取得
   python daily_run.py --rankings   # ランキングのみ再計算
 """
 import sys
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from config import get_conn
+
+
+def _jst_now() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(hours=9)
+
+
+def _already_done_today(fetch_type: str = "daily_report") -> bool:
+    """今日(JST)に指定ステップが完了済みか。リトライ実行の重複ガードに使う。"""
+    jst_day_start_utc = datetime.combine(_jst_now().date(), datetime.min.time()) - timedelta(hours=9)
+    try:
+        c = get_conn(); cur = c.cursor()
+        cur.execute("""
+            SELECT COUNT(*) FROM fetch_logs
+            WHERE fetch_type = %s AND status = 'done' AND finished_at >= %s
+        """, (fetch_type, jst_day_start_utc.strftime("%Y-%m-%d %H:%M:%S")))
+        n = cur.fetchone()[0]
+        cur.close(); c.close()
+        return n > 0
+    except Exception:
+        return False
+
+
+def _has_prices_today() -> bool:
+    """今日(JST)の価格データが存在するか（=営業日か）。休場日はYahooが当日行を返さない。"""
+    try:
+        c = get_conn(); cur = c.cursor()
+        cur.execute("SELECT COUNT(*) FROM daily_prices WHERE date = %s LIMIT 1",
+                    (_jst_now().date(),))
+        n = cur.fetchone()[0]
+        cur.close(); c.close()
+        return n > 0
+    except Exception:
+        return True   # 判定不能時は続行（止める方がリスク）
+
+
+def run_evening():
+    """イブニング便（20:30 JST）: 夜間に出た適時開示を回収し、市況考察と日次レポートを確定版に更新する。"""
+    print(f"\n{'='*50}\nイブニング便開始: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{'='*50}")
+    if not _has_prices_today():
+        print("本日は休場（当日価格データなし）のためスキップ")
+        return
+
+    print("\n[適時開示] 夜間分を含めて再取得・市況考察を更新...")
+    try:
+        from disclosures import run_daily as disclosures_run_daily
+        result = disclosures_run_daily(with_ai=True)
+        _log("disclosures_evening", "done", result.get("stored", 0))
+    except Exception as e:
+        print(f"  エラー: {e}")
+        _log("disclosures_evening", "failed", error=str(e))
+
+    print("\n[日次レポート] 確定版を保存...")
+    try:
+        from daily_report import save_report
+        save_report()
+        _log("daily_report", "done", 1)
+    except Exception as e:
+        print(f"  エラー: {e}")
+        _log("daily_report", "failed", error=str(e))
+    print("\nイブニング便 完了")
 from master import update_stock_master, update_trading_calendar
 from prices_yahoo import fetch_and_store_yahoo
 from dividends import fetch_all_dividends
@@ -41,11 +106,16 @@ def _log(fetch_type: str, status: str, rows: int = 0, error: str = None):
         print(f"  [ログ記録失敗] {log_err}")
 
 
-def run(init: bool = False, rankings_only: bool = False):
+def run(init: bool = False, rankings_only: bool = False, force: bool = False):
     start = datetime.now()
     print(f"\n{'='*50}")
     print(f"日次更新開始: {start.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*50}")
+
+    # 重複実行ガード: 16:00メインが完走済みなら17:00リトライは何もしない
+    if not (force or init or rankings_only) and _already_done_today("daily_report"):
+        print("本日の日次更新は完了済み（リトライ実行をスキップ）。再実行は --force")
+        return
 
     # 0. 主要指数データ更新（毎日・差分）
     if not rankings_only:
@@ -102,6 +172,12 @@ def run(init: bool = False, rankings_only: bool = False):
             print(f"  エラー: {e}")
             traceback.print_exc()
             _log("prices", "failed", error=str(e))
+
+    # 休場日ガード: 当日の価格が1件も来ていない＝休場（祝日等）。
+    # 元データが更新されていないのに後段（指標再計算・AI調査・レポート保存）が走るのを防ぐ。
+    if not (rankings_only or init) and not _has_prices_today():
+        print("\n本日は休場（当日価格データなし）。後段処理をスキップして終了します。")
+        return
 
     # 3.5. 株式分割・併合 対応（JPX公式 J-Quants ベース）
     #   - 直近窓の新規分割を Yahoo splits で暫定検知し、該当銘柄の adj_close を再計算。
@@ -257,6 +333,19 @@ def run(init: bool = False, rankings_only: bool = False):
             print(f"  エラー: {e}")
             _log("money_flow", "failed", error=str(e))
 
+    # 適時開示の蓄積・好材料AI付加・市況考察
+    # （TDnetは約1ヶ月で消えるため毎日蓄積が必須。時間のかかるイベント調査より先に実行し、
+    #   タイムアウト等で途中終了しても当日の開示データは確保する。夜間分は20:30のイブニング便が回収）
+    if not rankings_only:
+        print("\n[適時開示] TDnet蓄積・好材料分析・市況考察...")
+        try:
+            from disclosures import run_daily as disclosures_run_daily
+            result = disclosures_run_daily(with_ai=True)
+            _log("disclosures", "done", result.get("stored", 0))
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("disclosures", "failed", error=str(e))
+
     # ニュース収集（日次＋週次 TOP15）
     if not rankings_only:
         print(f"\n[ニュース] 上昇/下落 ±{RESEARCH_THRESHOLD_PCT}%超えの材料を収集中...")
@@ -267,18 +356,6 @@ def run(init: bool = False, rankings_only: bool = False):
         except Exception as e:
             print(f"  エラー: {e}")
             _log("events", "failed", error=str(e))
-
-    # 適時開示の蓄積・好材料AI付加・市況考察
-    # （TDnetは約1ヶ月で消えるため毎日蓄積が必須。event research の後 = テーマスコア等が揃った後）
-    if not rankings_only:
-        print("\n[適時開示] TDnet蓄積・好材料分析・市況考察...")
-        try:
-            from disclosures import run_daily as disclosures_run_daily
-            result = disclosures_run_daily(with_ai=True)
-            _log("disclosures", "done", result.get("stored", 0))
-        except Exception as e:
-            print(f"  エラー: {e}")
-            _log("disclosures", "failed", error=str(e))
 
     # EDINET有報の「事業の内容」増分更新（直近7日に提出された有報のみ・年1回自動更新される）
     if not rankings_only:
@@ -291,6 +368,17 @@ def run(init: bool = False, rankings_only: bool = False):
             print(f"  エラー: {e}")
             _log("edinet_business", "failed", error=str(e))
 
+    # 日次レポートを生成してDBに蓄積（全ステップの後 = 開示・市況考察・資金フローが揃った状態）
+    if not rankings_only:
+        print("\n[日次レポート] 生成・保存中...")
+        try:
+            from daily_report import save_report
+            save_report()
+            _log("daily_report", "done", 1)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("daily_report", "failed", error=str(e))
+
     elapsed = (datetime.now() - start).total_seconds()
     print(f"\n{'='*50}")
     print(f"完了: {elapsed:.1f}秒")
@@ -300,6 +388,10 @@ def run(init: bool = False, rankings_only: bool = False):
 
 
 if __name__ == "__main__":
-    init          = "--init" in sys.argv
-    rankings_only = "--rankings" in sys.argv
-    run(init=init, rankings_only=rankings_only)
+    if "--evening" in sys.argv:
+        run_evening()
+    else:
+        init          = "--init" in sys.argv
+        rankings_only = "--rankings" in sys.argv
+        force         = "--force" in sys.argv
+        run(init=init, rankings_only=rankings_only, force=force)

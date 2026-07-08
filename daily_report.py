@@ -64,14 +64,16 @@ def _fetch_indices(cur, target: date) -> list[dict]:
         cur.execute("""
             SELECT date, close FROM market_index_prices
             WHERE symbol = %s AND close IS NOT NULL AND date <= %s
-            ORDER BY date DESC LIMIT 2
+            ORDER BY date DESC LIMIT 30
         """, (sym, target))
         rows = cur.fetchall()
         if not rows:
             continue
-        close = float(rows[0][1])
-        chg = (close / float(rows[1][1]) - 1) * 100 if len(rows) > 1 and rows[1][1] else None
+        series = [float(r[1]) for r in reversed(rows)]   # 古→新（30日ミニチャート用）
+        close = series[-1]
+        chg = (close / series[-2] - 1) * 100 if len(series) > 1 and series[-2] else None
         out.append({"name": names[sym], "sym": sym, "close": close, "chg": chg,
+                    "series": series,
                     "decimals": decimals.get(sym, 0), "as_of": rows[0][0]})
     return out
 
@@ -115,7 +117,7 @@ def _fetch_flow_changes(cur, target: date) -> dict:
     w_now, w_prev = wks[0], wks[1]
 
     cur.execute("""
-        SELECT a.group_label, a.flow_ratio, b.flow_ratio, a.ret_median, a.turnover
+        SELECT a.group_label, a.flow_ratio, b.flow_ratio, a.ret_median, a.turnover, a.group_key
         FROM money_flow_weekly a
         JOIN money_flow_weekly b
           ON b.week_end = %s AND b.group_type = a.group_type AND b.group_key = a.group_key
@@ -124,7 +126,8 @@ def _fetch_flow_changes(cur, target: date) -> dict:
           AND a.turnover >= 100 AND a.n_stocks >= 5
     """, (w_prev, w_now))
     rows = [{"label": r[0], "now": float(r[1]), "prev": float(r[2]),
-             "ret": float(r[3] or 0), "tv": float(r[4] or 0), "delta": float(r[1]) - float(r[2])}
+             "ret": float(r[3] or 0), "tv": float(r[4] or 0), "delta": float(r[1]) - float(r[2]),
+             "key": r[5]}
             for r in cur.fetchall()]
     accel = sorted([r for r in rows if r["now"] >= 1.05 and r["delta"] > 0.05],
                    key=lambda r: -r["delta"])[:5]
@@ -438,8 +441,8 @@ def build_report_html(target_date: date | None = None) -> str:
     # ── 2. 相場の数字 ──
     idx_cells = "".join(f"""<div class="idx-cell">
   <div class="idx-name">{esc(i["name"])}</div>
-  <div class="idx-val">{i["close"]:,.{i["decimals"]}f}</div>
-  <div class="idx-chg">{_chg_html(i["chg"])}</div>
+  <div class="idx-val">{i["close"]:,.{i["decimals"]}f} <span class="idx-chg">{_chg_html(i["chg"])}</span></div>
+  {_spark_svg(i["series"], w=120, h=26)}
 </div>""" for i in indices)
     tot = breadth["up"] + breadth["down"] + breadth["flat"]
     up_w = breadth["up"] / tot * 100 if tot else 0
@@ -461,13 +464,15 @@ def build_report_html(target_date: date | None = None) -> str:
 </div>"""
 
     # ── 3. 資金フロー ──
+    from urllib.parse import quote as _q
+
     def _fl_rows(items, sign):
         rows = ""
         for r in items:
             arrow = "↑" if sign > 0 else "↓"
             cls = "pos" if sign > 0 else "neg"
             rows += f"""<div class="fl-row">
-  <span class="fl-name">{esc(r["label"])}</span>
+  <span class="fl-name"><a href="/flowgroup?type=theme&key={_q(str(r.get("key", r["label"])))}" style="color:inherit">{esc(r["label"])}</a></span>
   <span class="mut" style="font-size:11px">{r["prev"]:.2f}x→{r["now"]:.2f}x</span>
   <span class="fl-delta {cls}">{arrow}{abs(r["delta"]):.2f}</span>
   <span style="width:56px;text-align:right">{_chg_html(r["ret"])}</span>
@@ -565,6 +570,7 @@ def build_report_html(target_date: date | None = None) -> str:
 </div>""" if wl_rows else ""
 
     # ── 組み立て ──
+    # <!--DATENAV--> は配信時(app.py)に前日/翌日ナビへ置換されるプレースホルダ
     return f"""<!DOCTYPE html>
 <html lang="ja"><head>
 <meta charset="utf-8">
@@ -575,6 +581,7 @@ def build_report_html(target_date: date | None = None) -> str:
 <div class="rp">
   <div class="rp-date">{target} ({wd}) 大引け後</div>
   <div class="rp-title">📰 日次相場レポート</div>
+  <!--DATENAV-->
   {sec_summary}
   {sec_numbers}
   {sec_flows}
@@ -595,8 +602,85 @@ def build_report_html(target_date: date | None = None) -> str:
 </body></html>"""
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  蓄積（daily_run.py から毎営業日呼ばれる）
+# ═══════════════════════════════════════════════════════════════════════════
+
+def ensure_table():
+    conn = get_conn()
+    cur  = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS daily_reports (
+            report_date DATE PRIMARY KEY,
+            html        MEDIUMTEXT,
+            created_at  DATETIME
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def save_report(target_date: date | None = None) -> date | None:
+    """レポートを生成してDBに保存する（その日の状態のスナップショットとして蓄積）。"""
+    ensure_table()
+    html = build_report_html(target_date)
+    conn = get_conn()
+    cur  = conn.cursor()
+    cur.execute("SELECT MAX(date) FROM daily_prices" if not target_date else
+                "SELECT MAX(date) FROM daily_prices WHERE date <= %s",
+                () if not target_date else (target_date,))
+    d = cur.fetchone()[0]
+    if not d:
+        cur.close(); conn.close()
+        return None
+    cur.execute("""
+        INSERT INTO daily_reports (report_date, html, created_at)
+        VALUES (%s, %s, NOW())
+        ON DUPLICATE KEY UPDATE html = VALUES(html), created_at = VALUES(created_at)
+    """, (d, html))
+    conn.commit()
+    cur.close()
+    conn.close()
+    print(f"  日次レポート保存: {d}")
+    return d
+
+
+def load_report(target_date: date) -> str | None:
+    """保存済みレポートHTMLを返す。無ければNone。"""
+    conn = get_conn()
+    cur  = conn.cursor()
+    try:
+        cur.execute("SELECT html FROM daily_reports WHERE report_date = %s", (target_date,))
+        r = cur.fetchone()
+        return r[0] if r else None
+    except Exception:
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def report_dates(limit: int = 60) -> list[date]:
+    conn = get_conn()
+    cur  = conn.cursor()
+    try:
+        cur.execute("SELECT report_date FROM daily_reports ORDER BY report_date DESC LIMIT %s", (limit,))
+        return [r[0] for r in cur.fetchall()]
+    except Exception:
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
 if __name__ == "__main__":
+    args = sys.argv[1:]
     d = None
-    if len(sys.argv) > 1:
-        d = datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
-    print(build_report_html(d))
+    for a in args:
+        if not a.startswith("--"):
+            d = datetime.strptime(a, "%Y-%m-%d").date()
+    if "--save" in args:
+        save_report(d)
+    else:
+        print(build_report_html(d))

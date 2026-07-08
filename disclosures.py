@@ -280,8 +280,8 @@ DISC:番号 {{"summary": "...", "direction": "上方", "themes": ["半導体"], 
                 raw = resp.text or ""
                 break
             except Exception as e:
-                if "429" in str(e) and attempt == 0:
-                    print("    [enrich] レート制限 → 65秒待機してリトライ")
+                if ("429" in str(e) or "503" in str(e)) and attempt == 0:
+                    print("    [enrich] レート制限/過負荷 → 65秒待機してリトライ")
                     time.sleep(65)
                 else:
                     print(f"    [enrich] Geminiエラー: {str(e)[:120]}")
@@ -404,8 +404,8 @@ def build_market_summary(target_date: date = None) -> bool:
                 commentary = (resp.text or "").strip()[:2000]
                 break
             except Exception as e:
-                if "429" in str(e) and attempt == 0:
-                    print("  [市況] レート制限 → 65秒待機してリトライ")
+                if ("429" in str(e) or "503" in str(e)) and attempt == 0:
+                    print("  [市況] レート制限/過負荷 → 65秒待機してリトライ")
                     time.sleep(65)
                 else:
                     print(f"  [市況] Geminiエラー: {str(e)[:120]}")
