@@ -47,4 +47,7 @@ jobs:
             python fund_watch.py
           else
             python edinet_texts.py --all
+            # 会社概要・kabutanテーマタグの定期メンテ（150件/日 ≒ 月次で全銘柄一巡）。
+            # 市場時間と無関係なので夕方のメイン便ではなく夜間に実行する。
+            python company_profile.py
           fi

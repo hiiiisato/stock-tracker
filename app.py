@@ -3675,10 +3675,13 @@ def _build_flow_group_page(gtype: str, gkey: str) -> str:
   <td>{f'{f(r[10]):.1f}%' if r[10] else '—'}</td>
 </tr>""" for r in rows)
 
+    from urllib.parse import quote as _q
+    screen_url = f"/screen?gtype={gtype}&gkey={_q(gkey)}"
     body = f"""<style>{_FLOW_CSS}</style>
 <div class="page-header">
   <div class="page-title">{_html.escape(label)} <span style="font-size:13px;color:#8b949e">{GROUP_TYPE_LABELS.get(gtype, gtype)}・{len(rows)}銘柄</span></div>
-  <div class="page-subtitle"><a href="/flows">← 資金フローに戻る</a></div>
+  <div class="page-subtitle"><a href="/flows">← 資金フローに戻る</a> ・
+    <a href="{screen_url}" style="font-weight:600">🔍 この銘柄群をスクリーニングで絞り込む →</a></div>
 </div>
 {wk_html}
 <div class="fl-section">
@@ -4293,7 +4296,24 @@ def _build_screen_page() -> str:
   <div class="sc-active-bar" id="scActiveBar">
     <span class="sc-no-cond-label" id="scNoCondLabel">条件なし（全件表示）</span>
     <button class="sc-add-cond-btn" id="scAddCondBtn">＋ 条件を追加</button>
+    <button class="sc-add-cond-btn" id="scGroupBtn">🏷 テーマ・業種で絞る</button>
     <button class="sc-bar-clear-btn" id="scBarClearBtn" style="display:none">✕ クリア</button>
+  </div>
+  <div id="scGroupPicker" style="display:none;margin:8px 0;padding:10px;background:#161b22;border:1px solid #30363d;border-radius:8px">
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <select id="sc-grp-type" style="background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:5px 8px">
+        <option value="theme">テーマ（kabutan）</option>
+        <option value="sector">業種（東証33）</option>
+      </select>
+      <input id="sc-grp-key" list="sc-grp-list" placeholder="名前を入力（例: 半導体）"
+             style="background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:5px 8px;min-width:200px">
+      <datalist id="sc-grp-list"></datalist>
+      <button class="sc-add-cond-btn" id="sc-grp-apply">適用</button>
+      <button class="sc-bar-clear-btn" id="sc-grp-close">閉じる</button>
+    </div>
+    <div style="font-size:11px;color:#484f58;margin-top:6px">
+      テーマは資金フロー分析と同じ kabutanテーマタグ（銘柄5つ以上・約700テーマ）。他の条件と組み合わせて絞り込めます。
+    </div>
   </div>
 
   <div class="sc-cond-picker" id="scCondPicker" style="display:none">
@@ -4574,6 +4594,7 @@ def _build_screen_page() -> str:
     'f-bb-up','f-bb-dn','f-ytdh-brk',
   ];
   var _cmin={{}},_cmax={{}},_cflg={{}};
+  var _cgroup=null;   /* テーマ・業種グループ条件 {{type,key,label,map:{{code:1}}}} */
   var _minIdMap={{}},_maxIdMap={{}},_chkIdMap={{}};
 
   /* ── 条件→入力欄マッピング（populateInputs/STRATS用）── */
@@ -4627,7 +4648,7 @@ def _build_screen_page() -> str:
   }};
 
   function clearInputs(){{
-    _cmin={{}};_cmax={{}};_cflg={{}};
+    _cmin={{}};_cmax={{}};_cflg={{}};_cgroup=null;
     var hw=document.getElementById('scHistWrap');if(hw)hw.style.display='none';
     scHistCond=null;
     if(typeof renderChips==='function')renderChips();
@@ -4738,6 +4759,7 @@ def _build_screen_page() -> str:
 
   function passFilter(s){{
     if(!passMarket(s))return false;
+    if(_cgroup&&!_cgroup.map[s.code])return false;
     function mn(f,id,sc){{var v=_v(id);if(v===null)return true;var sv=s[f];if(sv===null||sv===undefined)return false;return sv>=(sc?v*sc:v);}}
     function mx(f,id,sc){{var v=_v(id);if(v===null)return true;var sv=s[f];if(sv===null||sv===undefined)return false;return sv<=(sc?v*sc:v);}}
     /* ── テクニカル ── */
@@ -4984,9 +5006,23 @@ def _build_screen_page() -> str:
     var noLabel=document.getElementById('scNoCondLabel');
     var clearBtn=document.getElementById('scBarClearBtn');
     var addBtn=document.getElementById('scAddCondBtn');
-    if(!activeConds.length){{
+    /* グループ条件チップ（テーマ・業種） */
+    if(_cgroup){{
+      var gchip=document.createElement('button');
+      gchip.className='sc-active-chip';
+      gchip.appendChild(document.createTextNode(
+        '🏷 '+(_cgroup.type==='theme'?'テーマ':'業種')+': '+_cgroup.label+' '));
+      var gx=document.createElement('span');gx.className='sc-chip-x';gx.textContent='×';
+      gx.addEventListener('click',function(e){{e.stopPropagation();_cgroup=null;renderChips();render();}});
+      gchip.appendChild(gx);
+      bar.insertBefore(gchip,addBtn);
+    }}
+    if(!activeConds.length&&!_cgroup){{
       if(noLabel)noLabel.style.display='';
       if(clearBtn)clearBtn.style.display='none';
+    }}else if(!activeConds.length){{
+      if(noLabel)noLabel.style.display='none';
+      if(clearBtn)clearBtn.style.display='';
     }}else{{
       if(noLabel)noLabel.style.display='none';
       if(clearBtn)clearBtn.style.display='';
@@ -5221,6 +5257,55 @@ def _build_screen_page() -> str:
   document.getElementById('scBarClearBtn').addEventListener('click',function(){{
     clearInputs();applyStrat(-1);
   }});
+
+  /* ── テーマ・業種グループ条件ピッカー ── */
+  var _grpNames={{}};
+  function loadGroupList(gtype){{
+    if(_grpNames[gtype]){{fillGroupList(gtype);return;}}
+    fetch('/api/group_list?type='+gtype).then(function(r){{return r.json();}}).then(function(js){{
+      _grpNames[gtype]=js;fillGroupList(gtype);
+    }});
+  }}
+  function fillGroupList(gtype){{
+    var dl=document.getElementById('sc-grp-list');dl.innerHTML='';
+    (_grpNames[gtype]||[]).forEach(function(g){{
+      var o=document.createElement('option');o.value=g.name;o.label=g.name+'（'+g.n+'銘柄）';dl.appendChild(o);
+    }});
+  }}
+  function applyGroup(gtype,gkey,then){{
+    fetch('/api/group_codes?type='+encodeURIComponent(gtype)+'&key='+encodeURIComponent(gkey))
+      .then(function(r){{return r.json();}}).then(function(js){{
+        if(js.error||!js.codes||!js.codes.length){{alert('該当グループが見つかりません: '+gkey);return;}}
+        var map={{}};js.codes.forEach(function(c){{map[c]=1;}});
+        _cgroup={{type:js.type,key:js.key,label:js.label,map:map}};
+        renderChips();render();
+        if(then)then();
+      }});
+  }}
+  document.getElementById('scGroupBtn').addEventListener('click',function(){{
+    var p=document.getElementById('scGroupPicker');
+    p.style.display=(p.style.display==='none')?'':'none';
+    if(p.style.display!=='none')loadGroupList(document.getElementById('sc-grp-type').value);
+  }});
+  document.getElementById('sc-grp-type').addEventListener('change',function(){{
+    loadGroupList(this.value);
+  }});
+  document.getElementById('sc-grp-apply').addEventListener('click',function(){{
+    var gkey=document.getElementById('sc-grp-key').value.trim();
+    if(!gkey)return;
+    applyGroup(document.getElementById('sc-grp-type').value,gkey,function(){{
+      document.getElementById('scGroupPicker').style.display='none';
+    }});
+  }});
+  document.getElementById('sc-grp-close').addEventListener('click',function(){{
+    document.getElementById('scGroupPicker').style.display='none';
+  }});
+  /* URLパラメータ ?gtype=theme&gkey=半導体 で初期グループを適用（資金フローからの遷移） */
+  (function(){{
+    var q=new URLSearchParams(location.search);
+    var gt=q.get('gtype'),gk=q.get('gkey');
+    if(gt&&gk)applyGroup(gt,gk);
+  }})();
   document.getElementById('scPickerClose').addEventListener('click',function(){{
     document.getElementById('scCondPicker').style.display='none';
   }});
@@ -7293,6 +7378,52 @@ def daily_report_page(date_str: str = ""):
         html = html.replace("<!--DATENAV-->", nav)
         _set(key, html)
     return html
+
+
+@app.route("/api/group_codes")
+def api_group_codes():
+    """資金フローグループの所属銘柄コード（スクリーニングのグループ条件用）。"""
+    gtype = request.args.get("type", "")
+    gkey  = request.args.get("key", "")[:80]
+    from money_flow import GROUP_TYPE_LABELS, get_group_members
+    if gtype not in GROUP_TYPE_LABELS or not gkey:
+        return _json.dumps({"error": "bad_group"}), 400, {"Content-Type": "application/json"}
+    key = f"group_codes_{gtype}_{gkey}"
+    cached = _get(key)
+    if not cached:
+        codes, label = get_group_members(gtype, gkey)
+        cached = _json.dumps({"type": gtype, "key": gkey, "label": label, "codes": codes},
+                             ensure_ascii=False)
+        _set(key, cached)
+    return cached, 200, {"Content-Type": "application/json"}
+
+
+@app.route("/api/group_list")
+def api_group_list():
+    """グループ名の一覧（スクリーニングのグループピッカー用）。theme=銘柄数5以上のみ。"""
+    gtype = request.args.get("type", "theme")
+    if gtype not in ("theme", "sector"):
+        return _json.dumps([]), 200, {"Content-Type": "application/json"}
+    key = f"group_list_{gtype}"
+    cached = _get(key)
+    if not cached:
+        conn = get_conn(); cur = conn.cursor()
+        if gtype == "theme":
+            cur.execute("""
+                SELECT theme, COUNT(*) AS n FROM kabutan_themes
+                GROUP BY theme HAVING n >= 5 ORDER BY n DESC
+            """)
+        else:
+            cur.execute("""
+                SELECT sec.name, COUNT(*) FROM stocks s
+                JOIN sectors sec ON sec.id = s.sector_id
+                WHERE s.is_active = 1 GROUP BY sec.name ORDER BY COUNT(*) DESC
+            """)
+        rows = [{"name": r[0], "n": int(r[1])} for r in cur.fetchall()]
+        cur.close(); conn.close()
+        cached = _json.dumps(rows, ensure_ascii=False)
+        _set(key, cached)
+    return cached, 200, {"Content-Type": "application/json"}
 
 
 @app.route("/flowgroup")

@@ -228,16 +228,8 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
             print(f"  エラー: {e}")
             _log("kabutan_financials", "failed", error=str(e))
 
-    # 会社概要・kabutanテーマタグの定期メンテ（未取得優先→古い順に150件/日 ≒ 月次で全銘柄一巡）
-    if not rankings_only:
-        print("\n[会社概要] kabutan 会社概要・テーマタグを更新中...")
-        try:
-            from company_profile import run as update_company_profiles
-            n = update_company_profiles()
-            _log("company_profile", "done", n)
-        except Exception as e:
-            print(f"  エラー: {e}")
-            _log("company_profile", "failed", error=str(e))
+    # ※会社概要・kabutanテーマタグの定期メンテは夜間バッチ（misc_batch.yml 23:45）に移動。
+    #   市場時間と無関係なデータのため、夕方のクリティカルパスから外して日次レポートを早める。
 
     # テーマスコア計算（価格更新後）
     if not rankings_only:
@@ -332,6 +324,18 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
         except Exception as e:
             print(f"  エラー: {e}")
             _log("money_flow", "failed", error=str(e))
+
+    # 日次レポート【速報版】を先に保存（数値系セクションはこの時点で全部揃っている。
+    # AI変動理由・当日市況考察・当日開示は後段完了後の再保存とイブニング便で追記される）
+    if not rankings_only:
+        print("\n[日次レポート] 速報版を保存...")
+        try:
+            from daily_report import save_report
+            save_report()
+            _log("daily_report_interim", "done", 1)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("daily_report_interim", "failed", error=str(e))
 
     # 適時開示の蓄積・好材料AI付加・市況考察
     # （TDnetは約1ヶ月で消えるため毎日蓄積が必須。時間のかかるイベント調査より先に実行し、
