@@ -70,6 +70,7 @@ def fetch_one(code: str) -> dict | None:
         if r.status_code == 404:
             return {}   # ページ自体が無い（PRO Market等）→ 試行済みスタンプして毎日再試行しない
         if r.status_code != 200:
+            print(f"  [company_profile] {code}: HTTP {r.status_code}")
             return None  # 一時的なエラー → 次回リトライ
         soup = BeautifulSoup(r.text, "html.parser")
         blk  = soup.select_one(".company_block")
