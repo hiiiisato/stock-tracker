@@ -3525,7 +3525,7 @@ def _build_flows_page(week_str: str | None = None) -> str:
 
     def _row_html(r) -> str:
         key = (r["group_type"], r["group_key"])
-        gurl = f'/flowgroup?type={r["group_type"]}&key={_q(str(r["group_key"]))}'
+        gurl = f'/screen?gtype={r["group_type"]}&gkey={_q(str(r["group_key"]))}'
         return f"""<tr>
   <td><a class="fl-glabel" href="{gurl}">{_html.escape(r["group_label"] or r["group_key"])}</a> <span class="fl-n">{r["n_stocks"]}銘柄</span></td>
   <td>{f(r["turnover"]):,.0f}億</td>
@@ -3568,7 +3568,7 @@ def _build_flows_page(week_str: str | None = None) -> str:
     type_lbl = {"theme": "テーマ", "sector": "業種", "size": "規模", "style": "スタイル"}
     hero_cards = "".join(f"""<div class="fl-hero-card">
   <span class="fl-hero-type">{type_lbl[r["group_type"]]}</span>
-  <span class="fl-hero-name"><a href="/flowgroup?type={r["group_type"]}&key={_q(str(r["group_key"]))}" style="color:inherit">{_html.escape(r["group_label"] or r["group_key"])}</a></span>
+  <span class="fl-hero-name"><a href="/screen?gtype={r["group_type"]}&gkey={_q(str(r["group_key"]))}" style="color:inherit">{_html.escape(r["group_label"] or r["group_key"])}</a></span>
   <span class="fl-hero-flow" style="color:{'#f85149' if f(r["flow_ratio"]) >= 1.05 else '#8b949e'}">{f(r["flow_ratio"]):.2f}x</span>
   <span class="fl-hero-sub">{_pct_span(f(r["ret_median"]))} ・ {f(r["turnover"]):,.0f}億円</span>
 </div>""" for r in hero_pool[:10])
@@ -3607,91 +3607,6 @@ def _build_flows_page(week_str: str | None = None) -> str:
   </div>
 </div>"""
     return _page_html("資金フロー", body, active="flows")
-
-
-def _build_flow_group_page(gtype: str, gkey: str) -> str:
-    """資金フローグループの所属銘柄一覧（ドリルダウン）。"""
-    import html as _html
-    from money_flow import get_group_members, GROUP_TYPE_LABELS
-    codes, label = get_group_members(gtype, gkey)
-
-    conn = get_conn()
-    cur  = conn.cursor()
-    # グループの直近週メトリクス
-    cur.execute("""
-        SELECT week_end, n_stocks, turnover, flow_ratio, ret_median, breadth, excess_topix
-        FROM money_flow_weekly
-        WHERE group_type = %s AND group_key = %s
-        ORDER BY week_end DESC LIMIT 1
-    """, (gtype, gkey))
-    wk = cur.fetchone()
-
-    rows = []
-    if codes:
-        ph = ",".join(["%s"] * len(codes))
-        cur.execute(f"""
-            SELECT s.code, s.name, ps.close, dp.change_pct, ps.chg5d, ps.chg25d,
-                   ps.vol20_ratio, ps.turnover_day, f.market_cap, f.per, f.div_yield
-            FROM stocks s
-            LEFT JOIN price_stats ps ON ps.code = s.code
-            LEFT JOIN stock_fundamentals f ON f.code = s.code
-            LEFT JOIN daily_prices dp
-              ON dp.code = s.code AND dp.date = (SELECT MAX(date) FROM daily_prices)
-            WHERE s.code IN ({ph})
-            ORDER BY COALESCE(ps.turnover_day, 0) DESC
-            LIMIT 300
-        """, codes)
-        rows = cur.fetchall()
-    cur.close(); conn.close()
-
-    f = lambda v: float(v) if v is not None else None
-    def _pct(v):
-        v = f(v)
-        if v is None:
-            return '<span class="fl-n">—</span>'
-        cls = "fl-pos" if v > 0 else ("fl-neg" if v < 0 else "")
-        return f'<span class="{cls}">{v:+.1f}%</span>'
-
-    wk_html = ""
-    if wk:
-        wk_end, n_stocks, tv, fr, ret_med, breadth, excess = wk
-        badge = f'{f(fr):.2f}x' if fr is not None else "—"
-        wk_html = f"""<div class="fl-section" style="padding:12px 14px;margin-bottom:14px">
-  <span style="font-size:12px;color:#8b949e">{wk_end}週: 資金流入度 <b style="color:#c9d1d9">{badge}</b>
-  ・売買代金 {f(tv) or 0:,.0f}億円 ・騰落率中央値 {_pct(ret_med)} ・上昇銘柄比率 {f(breadth) or 0:.0f}%
-  ・対TOPIX {_pct(excess)}</span>
-</div>"""
-
-    trs = "".join(f"""<tr>
-  <td><a href="/stock/{_html.escape(str(r[0]))}" class="fl-glabel">{_html.escape(r[1] or str(r[0]))}</a> <span class="fl-n">{_html.escape(str(r[0]))}</span></td>
-  <td>{f'{f(r[2]):,.0f}円' if r[2] else '—'}</td>
-  <td>{_pct(r[3])}</td>
-  <td>{_pct(r[4])}</td>
-  <td>{_pct(r[5])}</td>
-  <td>{f'{f(r[6]):.1f}x' if r[6] else '—'}</td>
-  <td>{f'{f(r[7]):,.1f}億' if r[7] else '—'}</td>
-  <td>{f'{f(r[8])/1e8:,.0f}億' if r[8] else '—'}</td>
-  <td>{f'{f(r[9]):.1f}' if r[9] else '—'}</td>
-  <td>{f'{f(r[10]):.1f}%' if r[10] else '—'}</td>
-</tr>""" for r in rows)
-
-    from urllib.parse import quote as _q
-    screen_url = f"/screen?gtype={gtype}&gkey={_q(gkey)}"
-    body = f"""<style>{_FLOW_CSS}</style>
-<div class="page-header">
-  <div class="page-title">{_html.escape(label)} <span style="font-size:13px;color:#8b949e">{GROUP_TYPE_LABELS.get(gtype, gtype)}・{len(rows)}銘柄</span></div>
-  <div class="page-subtitle"><a href="/flows">← 資金フローに戻る</a> ・
-    <a href="{screen_url}" style="font-weight:600">🔍 この銘柄群をスクリーニングで絞り込む →</a></div>
-</div>
-{wk_html}
-<div class="fl-section">
-  <div class="fl-scroll"><table class="fl-table" style="min-width:860px">
-    <tr><th>銘柄</th><th>終値</th><th>前日比</th><th>5日</th><th>25日</th>
-        <th>出来高比</th><th>売買代金/日</th><th>時価総額</th><th>PER</th><th>利回り</th></tr>
-    {trs or '<tr><td colspan="10" class="fl-n">所属銘柄がありません</td></tr>'}
-  </table></div>
-</div>"""
-    return _page_html(f"{label} — 資金フロー", body, active="flows")
 
 
 _DISC_CSS = """
@@ -7428,17 +7343,15 @@ def api_group_list():
 
 @app.route("/flowgroup")
 def flow_group_page():
+    # 銘柄一覧ページは廃止。資金フローのグループは直接スクリーニングへ遷移する。
+    # 旧URL・ブックマーク・キャッシュ対策として /screen へリダイレクトする。
+    from urllib.parse import quote as _q
     gtype = request.args.get("type", "")
     gkey  = request.args.get("key", "")[:80]
     from money_flow import GROUP_TYPE_LABELS
     if gtype not in GROUP_TYPE_LABELS or not gkey:
         return redirect("/flows")
-    key = f"flowgroup_{gtype}_{gkey}"
-    html = _get(key)
-    if not html:
-        html = _build_flow_group_page(gtype, gkey)
-        _set(key, html)
-    return html
+    return redirect(f"/screen?gtype={gtype}&gkey={_q(gkey)}")
 
 
 @app.route("/flows")

@@ -472,7 +472,7 @@ def build_report_html(target_date: date | None = None) -> str:
             arrow = "↑" if sign > 0 else "↓"
             cls = "pos" if sign > 0 else "neg"
             rows += f"""<div class="fl-row">
-  <span class="fl-name"><a href="/flowgroup?type=theme&key={_q(str(r.get("key", r["label"])))}" style="color:inherit">{esc(r["label"])}</a></span>
+  <span class="fl-name"><a href="/screen?gtype=theme&gkey={_q(str(r.get("key", r["label"])))}" style="color:inherit">{esc(r["label"])}</a></span>
   <span class="mut" style="font-size:11px">{r["prev"]:.2f}x→{r["now"]:.2f}x</span>
   <span class="fl-delta {cls}">{arrow}{abs(r["delta"]):.2f}</span>
   <span style="width:56px;text-align:right">{_chg_html(r["ret"])}</span>
