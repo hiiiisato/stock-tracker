@@ -99,24 +99,39 @@ def _strip_html(html_text: str) -> str:
 
 
 def _save(code: str, edinet_code: str, text: str, report_date: str | None):
+    """DB保存。TiDBの一時的な接続切断に備えて1回リトライする（長時間バッチ対策）。"""
     text_enc = text.encode("utf-8")
     if len(text_enc) > MAX_BYTES:
         text = text_enc[:MAX_BYTES].decode("utf-8", errors="ignore")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn = get_conn()
-    cur  = conn.cursor()
-    cur.execute(
-        "UPDATE stocks SET business_description=%s, biz_updated_at=%s, edinet_code=COALESCE(edinet_code,%s) WHERE code=%s",
-        (text, now, edinet_code, code))
-    cur.execute("""
-        INSERT INTO edinet_text_blocks (code, section, edinet_code, report_date, text, fetched_at)
-        VALUES (%s, '事業の内容', %s, %s, %s, %s)
-        ON DUPLICATE KEY UPDATE edinet_code=VALUES(edinet_code),
-            report_date=VALUES(report_date), text=VALUES(text), fetched_at=VALUES(fetched_at)
-    """, (code, edinet_code, report_date, text, now))
-    conn.commit()
-    cur.close()
-    conn.close()
+    for attempt in (1, 2):
+        conn = None
+        try:
+            conn = get_conn()
+            cur  = conn.cursor()
+            cur.execute(
+                "UPDATE stocks SET business_description=%s, biz_updated_at=%s, edinet_code=COALESCE(edinet_code,%s) WHERE code=%s",
+                (text, now, edinet_code, code))
+            cur.execute("""
+                INSERT INTO edinet_text_blocks (code, section, edinet_code, report_date, text, fetched_at)
+                VALUES (%s, '事業の内容', %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE edinet_code=VALUES(edinet_code),
+                    report_date=VALUES(report_date), text=VALUES(text), fetched_at=VALUES(fetched_at)
+            """, (code, edinet_code, report_date, text, now))
+            conn.commit()
+            cur.close()
+            conn.close()
+            return
+        except Exception as e:
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
+            if attempt == 2:
+                raise
+            print(f"  {code}: DB保存リトライ ({e})")
+            time.sleep(5)
 
 
 def _active_codes_and_freshness() -> tuple[set, dict]:
@@ -155,12 +170,12 @@ def _process_days(days: list[date], skip_fresh_days: int | None = None) -> int:
                     continue
             try:
                 text = _fetch_business_text(d["docID"])
+                if not text or len(text) < 100:
+                    continue
+                _save(code, d.get("edinetCode", ""), text, day.strftime("%Y-%m-%d"))
             except Exception as e:
-                print(f"  {code}: ダウンロードエラー {e}")
+                print(f"  {code}: エラー {e}")
                 continue
-            if not text or len(text) < 100:
-                continue
-            _save(code, d.get("edinetCode", ""), text, day.strftime("%Y-%m-%d"))
             freshness[code] = datetime.combine(day, datetime.min.time())
             n_saved += 1
             print(f"  {code} {d.get('filerName','')[:20]} ({day}) {len(text)}字")
