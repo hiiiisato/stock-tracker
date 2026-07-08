@@ -556,8 +556,7 @@ def generate_report(report_date: date, out_path: str = None) -> str:
     <a class="app-nav-link" href="/screen">スクリーニング</a>
     <a class="app-nav-link" href="/valuation">理論株価</a>
     <a class="app-nav-link active" href="/themes">テーマ</a>
-    <a class="app-nav-link" href="/rankings">ランキング</a>
-    <a class="app-nav-link" href="/events">イベント</a>
+    <a class="app-nav-link" href="/events">ランキング・イベント</a>
     <a class="app-nav-link" href="/disclosures">適時開示</a>
     <a class="app-nav-link" href="/funds">ファンドウォッチ</a>
     <a class="app-nav-link" href="/swing">スイング</a>

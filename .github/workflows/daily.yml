@@ -32,6 +32,8 @@ jobs:
           TIDB_PASSWORD:  ${{ secrets.TIDB_PASSWORD }}
           TIDB_DATABASE:  ${{ secrets.TIDB_DATABASE }}
           JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
+          # AI要約・市況考察・開示分析に必須。未設定だとAI系が全てスキップされる
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           # TIDB_SSL_CA は未設定 → certifi を自動使用
         run: python daily_run.py
 

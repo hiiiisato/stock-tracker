@@ -435,8 +435,28 @@ def build_market_summary(target_date: date = None) -> bool:
 # エントリーポイント
 # ─────────────────────────────────────────────────────────────────────────────
 
+def backfill_missing_commentaries(days_back: int = 5) -> int:
+    """直近N日で ai_commentary が欠損している市況考察を再生成する（自己修復）。
+    Gemini枠切れ・APIキー未設定の実行環境で生成に失敗した日を翌日以降に埋める。"""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT summary_date FROM market_summary
+        WHERE ai_commentary IS NULL
+          AND summary_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+        ORDER BY summary_date
+    """, (days_back,))
+    missing = [r[0] for r in cur.fetchall()]
+    cur.close(); conn.close()
+    fixed = 0
+    for d in missing:
+        print(f"  [市況] {d} のコメント欠損を再生成...")
+        if build_market_summary(d):
+            fixed += 1
+    return fixed
+
+
 def run_daily(with_ai: bool = True) -> dict:
-    """日次実行: 当日+前日の開示を蓄積 → 好材料AI付加 → 市況考察。"""
+    """日次実行: 当日+前日の開示を蓄積 → 好材料AI付加 → 市況考察（欠損自己修復つき）。"""
     ensure_tables()
     today = date.today()
     total = 0
@@ -448,8 +468,9 @@ def run_daily(with_ai: bool = True) -> dict:
         print(f"  [開示] {d}: {n}件")
     enriched = 0
     if with_ai:
-        enriched = enrich_highlights()
+        enriched = enrich_highlights(days_back=4)
         build_market_summary()
+        backfill_missing_commentaries()
     return {"stored": total, "enriched": enriched}
 
 

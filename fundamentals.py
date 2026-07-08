@@ -178,9 +178,21 @@ def recompute_price_metrics(latest_date=None) -> int:
         cur.close(); conn.close()
         return 0
 
+    # 配当利回りは「今期の会社予想配当」を最優先で使う:
+    #   kabutan通期予想(financials_forecast.div_per_share)
+    #   → Yahoo予想(dividend_rate) → 実績(annual_dps)
     cur.execute("""
         UPDATE stock_fundamentals sf
         JOIN daily_prices dp ON dp.code = sf.code AND dp.date = %s
+        LEFT JOIN (
+            SELECT code, div_per_share FROM (
+                SELECT code, div_per_share,
+                       ROW_NUMBER() OVER (PARTITION BY code ORDER BY fiscal_year_end) AS rn
+                FROM financials_forecast
+                WHERE period_type = 'A' AND div_per_share IS NOT NULL
+                  AND fiscal_year_end >= CURDATE()
+            ) t WHERE rn = 1
+        ) fc ON fc.code = sf.code
         SET
           sf.market_cap = CASE
             WHEN sf.shares_outstanding IS NOT NULL AND sf.shares_outstanding > 0
@@ -198,8 +210,8 @@ def recompute_price_metrics(latest_date=None) -> int:
             ELSE NULL
           END,
           sf.div_yield = CASE
-            WHEN sf.annual_dps IS NOT NULL AND sf.annual_dps > 0 AND dp.close > 0
-            THEN ROUND(sf.annual_dps / dp.close * 100, 4)
+            WHEN COALESCE(fc.div_per_share, sf.dividend_rate, sf.annual_dps) > 0 AND dp.close > 0
+            THEN ROUND(COALESCE(fc.div_per_share, sf.dividend_rate, sf.annual_dps) / dp.close * 100, 4)
             ELSE NULL
           END
         WHERE dp.close IS NOT NULL AND dp.close > 0

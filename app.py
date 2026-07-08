@@ -448,8 +448,7 @@ def _nav(active: str = "") -> str:
         ("screen",    "/screen",     "スクリーニング"),
         ("valuation", "/valuation",  "理論株価"),
         ("themes",    "/themes",     "テーマ"),
-        ("rankings",  "/rankings",   "ランキング"),
-        ("events",    "/events",     "イベント"),
+        ("events",    "/events",     "ランキング・イベント"),
         ("disclosures", "/disclosures", "適時開示"),
         ("funds",     "/funds",      "ファンドウォッチ"),
         ("swing",     "/swing",      "スイング"),
@@ -936,7 +935,7 @@ def _build_home() -> str:
         return rows
 
     gainers_card = f"""<div class="card">
-  <div class="card-header">本日の値上がりTOP5 <a href="/rankings" style="float:right;font-size:11px;font-weight:normal">全件 →</a></div>
+  <div class="card-header">本日の値上がりTOP5 <a href="/events" style="float:right;font-size:11px;font-weight:normal">全件 →</a></div>
   <div class="table-wrap">
     <table>
       <thead><tr><th class="left">銘柄</th><th>終値</th><th>騰落</th></tr></thead>
@@ -946,7 +945,7 @@ def _build_home() -> str:
 </div>"""
 
     losers_card = f"""<div class="card">
-  <div class="card-header">本日の値下がりTOP5 <a href="/rankings" style="float:right;font-size:11px;font-weight:normal">全件 →</a></div>
+  <div class="card-header">本日の値下がりTOP5 <a href="/events" style="float:right;font-size:11px;font-weight:normal">全件 →</a></div>
   <div class="table-wrap">
     <table>
       <thead><tr><th class="left">銘柄</th><th>終値</th><th>騰落</th></tr></thead>
@@ -1065,167 +1064,6 @@ def _build_home() -> str:
 #  ランキングページ
 # ════════════════════════════════════════════════════════════════════════
 
-def _build_rankings_page() -> str:
-    conn = get_conn()
-    cur  = conn.cursor()
-
-    cur.execute("SELECT MAX(date) FROM daily_prices WHERE close IS NOT NULL")
-    latest_date: date = cur.fetchone()[0]
-
-    # 本日の値上がり TOP20（値幅制限を超える異常値=株式分割等を除外）
-    cur.execute("""
-        SELECT dp.code, s.name, dp.close, dp.change_pct,
-               COALESCE(dp.turnover, dp.volume * dp.close) AS tval
-        FROM daily_prices dp
-        JOIN stocks s ON dp.code = s.code
-        WHERE dp.date = %s AND dp.close IS NOT NULL AND dp.change_pct IS NOT NULL
-          AND ABS(dp.change_pct) <= 50
-          AND s.is_active = TRUE
-        ORDER BY dp.change_pct DESC
-        LIMIT 20
-    """, (latest_date,))
-    gainers = cur.fetchall()
-
-    # 本日の値下がり TOP20（値幅制限を超える異常値=株式分割等を除外）
-    cur.execute("""
-        SELECT dp.code, s.name, dp.close, dp.change_pct,
-               COALESCE(dp.turnover, dp.volume * dp.close) AS tval
-        FROM daily_prices dp
-        JOIN stocks s ON dp.code = s.code
-        WHERE dp.date = %s AND dp.close IS NOT NULL AND dp.change_pct IS NOT NULL
-          AND ABS(dp.change_pct) <= 50
-          AND s.is_active = TRUE
-        ORDER BY dp.change_pct ASC
-        LIMIT 20
-    """, (latest_date,))
-    losers = cur.fetchall()
-
-    # 週間値上がり/値下がり TOP20（1週間前との比較・株式分割調整済み）
-    week_ago = latest_date - timedelta(days=7)
-    weekly_sql = """
-        SELECT dp.code, s.name, dp.close, dp.change_pct,
-               (COALESCE(dp.adj_close, dp.close) - COALESCE(prev.adj_close, prev.close))
-               / COALESCE(prev.adj_close, prev.close) * 100 AS weekly_chg
-        FROM daily_prices dp
-        JOIN stocks s ON dp.code = s.code
-        JOIN (
-            SELECT code, close, adj_close
-            FROM daily_prices
-            WHERE date = (
-                SELECT MAX(date) FROM daily_prices WHERE date <= %s
-            )
-        ) prev ON dp.code = prev.code
-        WHERE dp.date = %s AND dp.close IS NOT NULL AND prev.close IS NOT NULL
-          AND prev.close > 0 AND s.is_active = TRUE
-          AND ABS(
-              (COALESCE(dp.adj_close, dp.close) - COALESCE(prev.adj_close, prev.close))
-              / COALESCE(prev.adj_close, prev.close) * 100
-          ) <= 50
-        ORDER BY weekly_chg {order}
-        LIMIT 20
-    """
-    cur.execute(weekly_sql.format(order="DESC"), (week_ago, latest_date))
-    weekly_gainers = cur.fetchall()
-    cur.execute(weekly_sql.format(order="ASC"), (week_ago, latest_date))
-    weekly_losers = cur.fetchall()
-
-    cur.close()
-    conn.close()
-
-    def _rank_table(stocks, cols=("終値", "騰落率", "売買代金"), weekly=False) -> str:
-        rows = ""
-        for i, row in enumerate(stocks, 1):
-            code, name, close, chg = row[0], row[1], row[2], row[3]
-            extra = row[4] if len(row) > 4 else None
-            cl = float(close or 0)
-            chg_str = _fmt_chg(chg if not weekly else extra)
-            if weekly:
-                extra_str = _fmt_chg(extra)
-                tval_str  = ""
-            else:
-                extra_str = ""
-                tval_str  = f"{float(extra or 0)/1e8:,.1f}億" if extra else "-"
-
-            rows += f"""<tr>
-          <td class="muted" style="width:28px;text-align:center">{i}</td>
-          <td class="td-name">
-            <a class="tbl-link" href="/stock/{code}" title="{name}">{name}</a>
-            <div class="td-sub">{code}</div>
-          </td>
-          <td>{cl:,.0f}</td>
-          <td>{extra_str if weekly else chg_str}</td>
-          <td class="muted">{tval_str}</td>
-        </tr>"""
-
-        header_cols = "<th style='width:32px'>#</th><th class='left'>銘柄</th>"
-        if weekly:
-            header_cols += "<th>終値</th><th>週間騰落</th><th></th>"
-        else:
-            header_cols += "<th>終値</th><th>騰落率</th><th>売買代金</th>"
-
-        return f"""<div class="table-wrap">
-      <table>
-        <thead><tr>{header_cols}</tr></thead>
-        <tbody>{rows}</tbody>
-      </table>
-    </div>"""
-
-    def _tval_table(stocks) -> str:
-        rows = ""
-        for i, (code, name, close, chg, tval) in enumerate(stocks, 1):
-            cl = float(close or 0)
-            tv = float(tval or 0) if tval else 0
-            rows += f"""<tr>
-          <td class="muted" style="width:28px;text-align:center">{i}</td>
-          <td class="td-name">
-            <a class="tbl-link" href="/stock/{code}" title="{name}">{name}</a>
-            <div class="td-sub">{code}</div>
-          </td>
-          <td>{cl:,.0f}</td>
-          <td>{_fmt_chg(chg)}</td>
-          <td class="muted">{tv/1e8:,.1f}億</td>
-        </tr>"""
-        return f"""<div class="table-wrap">
-      <table>
-        <thead><tr>
-          <th style="width:28px">#</th><th class="left">銘柄</th>
-          <th>終値</th><th>騰落率</th><th>売買代金</th>
-        </tr></thead>
-        <tbody>{rows}</tbody>
-      </table>
-    </div>"""
-
-    body = f"""\
-<div class="page-header">
-  <div class="page-title">ランキング</div>
-  <div class="page-subtitle">{latest_date} 時点</div>
-</div>
-
-<div class="grid-2">
-  <div class="card">
-    <div class="card-header">▲ 本日の値上がり TOP20</div>
-    {_rank_table(gainers)}
-  </div>
-  <div class="card">
-    <div class="card-header">▼ 本日の値下がり TOP20</div>
-    {_rank_table(losers)}
-  </div>
-</div>
-
-<div class="grid-2">
-  <div class="card">
-    <div class="card-header">▲ 週間値上がり TOP20</div>
-    {_rank_table(weekly_gainers, weekly=True)}
-  </div>
-  <div class="card">
-    <div class="card-header">▼ 週間値下がり TOP20</div>
-    {_rank_table(weekly_losers, weekly=True)}
-  </div>
-</div>"""
-
-    return _page_html(f"ランキング {latest_date}", body, active="rankings")
-
-
 # ════════════════════════════════════════════════════════════════════════
 #  イベントページ
 # ════════════════════════════════════════════════════════════════════════
@@ -1329,6 +1167,22 @@ a.ev-news-title:hover { color: #58a6ff; text-decoration: underline; }
 .ev-picks-scroll { overflow-x: auto; }
 .num-up { color: #E84040; font-weight: 600; }
 .num-down { color: #3A9FE0; font-weight: 600; }
+
+/* 騰落ランキング表（旧ランキングページの統合） */
+.ev-rank-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 18px;
+}
+.ev-rank-col { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px 12px; }
+.ev-rank-title { font-size: 12px; font-weight: 700; color: #8b949e; margin-bottom: 6px; }
+.ev-rank-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ev-rank-tbl td { padding: 3px 4px; border-bottom: 1px solid #21262d; }
+.ev-rank-tbl tr:last-child td { border-bottom: none; }
+.ev-rank-tbl a { color: #c9d1d9; text-decoration: none; }
+.ev-rank-tbl a:hover { color: #58a6ff; }
+.ev-section-lbl { font-size: 13px; font-weight: 700; color: #8b949e; margin: 4px 0 8px; }
+@media (max-width: 768px) {
+  .ev-rank-grid { grid-template-columns: 1fr; }
+}
 
 /* AI 要約ブロック */
 .ev-ai-summary {
@@ -1618,6 +1472,88 @@ def _build_event_picks_html(days: int = 60, min_mcap_oku: float = 50, top_n: int
     return html
 
 
+def _build_rank_tables(period: str, target) -> str:
+    """イベントページ上部の騰落ランキング表（旧/rankingsページを統合）。
+    理由分析がある銘柄（±10%超）はイベントカード側に詳細が出る。"""
+    import html as _html
+    conn = get_conn(); cur = conn.cursor()
+
+    if period == "daily":
+        cur.execute("""
+            SELECT dp.code, s.name, dp.change_pct
+            FROM daily_prices dp JOIN stocks s ON dp.code = s.code
+            WHERE dp.date = %s AND dp.change_pct IS NOT NULL
+              AND ABS(dp.change_pct) <= 50 AND s.is_active = TRUE
+            ORDER BY dp.change_pct DESC LIMIT 20
+        """, (target,))
+        gainers = cur.fetchall()
+        cur.execute("""
+            SELECT dp.code, s.name, dp.change_pct
+            FROM daily_prices dp JOIN stocks s ON dp.code = s.code
+            WHERE dp.date = %s AND dp.change_pct IS NOT NULL
+              AND ABS(dp.change_pct) <= 50 AND s.is_active = TRUE
+            ORDER BY dp.change_pct ASC LIMIT 20
+        """, (target,))
+        losers = cur.fetchall()
+        cur.execute("""
+            SELECT dp.code, s.name,
+                   COALESCE(dp.turnover, dp.volume * dp.close) / 1e8 AS tv
+            FROM daily_prices dp JOIN stocks s ON dp.code = s.code
+            WHERE dp.date = %s AND dp.close IS NOT NULL AND s.is_active = TRUE
+            ORDER BY tv DESC LIMIT 20
+        """, (target,))
+        turnovers = cur.fetchall()
+    else:
+        week_start = target - timedelta(days=6)
+        base_cte = """
+            WITH wp AS (
+                SELECT code,
+                    FIRST_VALUE(COALESCE(adj_close, close)) OVER (PARTITION BY code ORDER BY date) AS fc,
+                    LAST_VALUE(COALESCE(adj_close, close)) OVER (
+                        PARTITION BY code ORDER BY date
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS lc
+                FROM daily_prices
+                WHERE date BETWEEN %s AND %s AND close > 0
+            ), wk AS (
+                SELECT w.code, s.name,
+                       ROUND((MAX(w.lc) - MAX(w.fc)) / MAX(w.fc) * 100, 2) AS chg
+                FROM wp w JOIN stocks s ON w.code = s.code
+                WHERE s.is_active = TRUE
+                GROUP BY w.code, s.name HAVING MAX(w.fc) > 0
+            )
+            SELECT code, name, chg FROM wk ORDER BY chg {order} LIMIT 20
+        """
+        cur.execute(base_cte.format(order="DESC"), (week_start, target))
+        gainers = cur.fetchall()
+        cur.execute(base_cte.format(order="ASC"), (week_start, target))
+        losers = cur.fetchall()
+        turnovers = []
+    cur.close(); conn.close()
+
+    def _tbl(rows, kind):
+        if not rows:
+            return ""
+        titles = {"up": "▲ 値上がりTOP20", "down": "▼ 値下がりTOP20", "tv": "💰 売買代金TOP20"}
+        trs = []
+        for i, (code, name, v) in enumerate(rows, 1):
+            v = float(v or 0)
+            if kind == "tv":
+                val = f'<span style="color:#8b949e">{v:,.0f}億</span>'
+            else:
+                cls = "num-up" if v >= 0 else "num-down"
+                val = f'<span class="{cls}">{v:+.1f}%</span>'
+            trs.append(f'<tr><td style="color:#484f58">{i}</td>'
+                       f'<td><a href="/stock/{code}">{_html.escape((name or code)[:11])}</a></td>'
+                       f'<td style="text-align:right">{val}</td></tr>')
+        return f"""<div class="ev-rank-col">
+  <div class="ev-rank-title">{titles[kind]}</div>
+  <table class="ev-rank-tbl">{"".join(trs)}</table>
+</div>"""
+
+    cols = _tbl(gainers, "up") + _tbl(losers, "down") + _tbl(turnovers, "tv")
+    return f'<div class="ev-rank-grid">{cols}</div>' if cols else ""
+
+
 def _build_events_page(event_date_str: str = None, period: str = "daily") -> str:
     from event_researcher import (
         get_events_for_date, get_available_event_dates,
@@ -1722,6 +1658,7 @@ def _build_events_page(event_date_str: str = None, period: str = "daily") -> str
         return header + f'<div class="ev-card-list">{"".join(cards)}</div>'
 
     picks_html = _build_event_picks_html()
+    rank_html  = _build_rank_tables(period, target)
 
     body = f"""<style>{_EVENTS_CSS}</style>
 
@@ -1732,12 +1669,15 @@ def _build_events_page(event_date_str: str = None, period: str = "daily") -> str
   {period_tabs}
 </div>
 
+{rank_html}
+
+<div class="ev-section-lbl">変動理由の分析（±{threshold:.0f}%超の銘柄）</div>
 <div class="ev-grid">
   <div>{_col_cards(gainers, "up")}</div>
   <div>{_col_cards(losers,  "down")}</div>
 </div>"""
 
-    return _page_html(f"イベント {target}", body, active="events")
+    return _page_html(f"ランキング・イベント {target}", body, active="events")
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -3554,6 +3494,65 @@ _DISC_CSS = """
 """
 
 
+def _stock_disclosures_html(code: str) -> str:
+    """銘柄ページの適時開示タブ: この銘柄の開示履歴とAI考察（/disclosuresと同じ見た目）。"""
+    import html as _html
+    from disclosures import CATEGORY_LABELS
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT disclosed_at, title, pdf_url, category, sentiment, ai_summary, ai_related
+        FROM disclosures
+        WHERE code = %s
+        ORDER BY disclosed_at DESC
+        LIMIT 80
+    """, (code,))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+
+    if not rows:
+        return ('<p class="muted" style="font-size:13px;padding:20px">この銘柄の開示データはまだありません'
+                '（蓄積は2026年6月以降）。<a href="/disclosures">適時開示ページ →</a></p>')
+
+    # AI考察付きの開示はカードで上部に表示
+    ai_cards = []
+    list_rows = []
+    for dts, title, pdf, cat, senti, ai_sum, ai_rel in rows:
+        cat_lbl = CATEGORY_LABELS.get(cat, "")
+        cat_cls = "pos" if senti == 1 else ("neg" if senti == -1 else "")
+        if ai_sum and len(ai_cards) < 5:
+            ripple_html = ""
+            try:
+                rel = _json.loads(ai_rel) if ai_rel else {}
+                if rel.get("ripple"):
+                    ripple_html = f'<div class="dc-hl-ripple">💡 {_html.escape(rel["ripple"])}</div>'
+            except Exception:
+                pass
+            ai_cards.append(f"""<div class="dc-hl-card" style="border-left-color:{'#3fb950' if senti == 1 else '#8b949e'}">
+  <div class="dc-hl-top">
+    <span class="dc-cat {cat_cls}">{cat_lbl or 'その他'}</span>
+    <span style="font-size:12px;color:#8b949e">{dts.strftime("%Y/%m/%d %H:%M")}</span>
+  </div>
+  <div style="font-size:13px;color:#e6edf3;font-weight:600;margin:2px 0">{_html.escape(title)}</div>
+  <div class="dc-hl-summary">{_html.escape(ai_sum)}</div>
+  {ripple_html}
+  <div class="dc-hl-meta"><a class="dc-pdf-link" href="{_html.escape(pdf or '#')}" target="_blank" rel="noopener">開示PDF ↗</a></div>
+</div>""")
+        cat_html = f'<span class="dc-cat {cat_cls}">{cat_lbl}</span>' if cat != "other" else ""
+        list_rows.append(
+            f'<div class="dc-row"><span class="time">{dts.strftime("%m/%d %H:%M")}</span>'
+            f'{cat_html}'
+            f'<a class="title" href="{_html.escape(pdf or "#")}" target="_blank" rel="noopener">{_html.escape(title)}</a></div>'
+        )
+
+    ai_html = ""
+    if ai_cards:
+        ai_html = (f'<div class="dc-section-title">AI考察付きの開示</div>'
+                   f'<div class="dc-highlights" style="margin-bottom:16px">{"".join(ai_cards)}</div>')
+    return f"""{ai_html}
+<div class="dc-section-title">開示履歴（直近{len(rows)}件）</div>
+<div class="dc-list">{"".join(list_rows)}</div>"""
+
+
 def _build_disclosures_page(date_str: str = None, category: str = "") -> str:
     import html as _html
     from disclosures import CATEGORY_LABELS
@@ -3753,13 +3752,23 @@ def _build_disclosures_page(date_str: str = None, category: str = "") -> str:
 
         nav_prev = f'<a href="/disclosures?date={prev_d}">◀</a>' if prev_d else ""
         nav_next = f'<a href="/disclosures?date={next_d}">▶</a>' if next_d else ""
+        min_d, max_d = avail_dates[-1], avail_dates[0]
+        date_picker = (f'<input type="date" id="dcDatePick" value="{target}" min="{min_d}" max="{max_d}" '
+                       f'style="background:#21262d;border:1px solid #30363d;color:#e6edf3;'
+                       f'border-radius:6px;padding:4px 8px;font-size:13px;color-scheme:dark">')
         list_html = f"""<div>
   <div class="dc-section-title">開示一覧</div>
   <div class="dc-nav">{nav_prev}<span class="lbl">{target.strftime("%Y年%m月%d日")}</span>{nav_next}
+    {date_picker}
     <span style="font-size:11px;color:#8b949e">全{len(rows)}件（好材料を上に表示）</span></div>
   <div class="dc-filter">{"".join(filt)}</div>
   <div class="dc-list">{"".join(row_html)}</div>
-</div>"""
+</div>
+<script>
+document.getElementById('dcDatePick').addEventListener('change', function() {{
+  if (this.value) location.href = '/disclosures?date=' + this.value;
+}});
+</script>"""
 
     cur.close()
     conn.close()
@@ -5537,9 +5546,18 @@ def _build_stock_page(code: str) -> str:
                 pass
 
     per_fwd = round(cur_price / fc_eps, 1) if cur_price and fc_eps and fc_eps > 0 else None
+
+    # 配当利回りは今期予想を最優先: kabutan会社予想(fc_dps) → Yahoo予想(dividend_rate) → 実績
+    _yahoo_fwd_dps = _fv("dividend_rate")
+    _div_is_forecast = False
     if fc_dps is not None and cur_price:
         dps_use = fc_dps
         div_yld = round(fc_dps / cur_price * 100, 2)
+        _div_is_forecast = True
+    elif _yahoo_fwd_dps and cur_price:
+        dps_use = _yahoo_fwd_dps
+        div_yld = round(_yahoo_fwd_dps / cur_price * 100, 2)
+        _div_is_forecast = True
 
     fund_updated = str(fund.get("updated_at", ""))[:10] or "—"
 
@@ -5555,10 +5573,20 @@ def _build_stock_page(code: str) -> str:
         except Exception:
             return None
 
-    # 配当を年別に集計 (ex_date の年で集計)
-    _div_by_year: dict = _col.defaultdict(float)
-    for _ex_date, _amount in div_all_rows:
-        _div_by_year[str(_ex_date)[:4]] += float(_amount or 0)
+    # 配当の権利落ち日リスト（決算期ベースの集計に使う）
+    _div_events = sorted((str(_ex_date), float(_amount or 0)) for _ex_date, _amount in div_all_rows)
+
+    def _dps_for_fiscal(period_end: str) -> float:
+        """決算期末 period_end の会計年度（前期末翌日〜当期末）に権利落ちした配当の合計。
+        暦年集計だと3月決算の中間配当(9月)と期末配当(3月)が別年度に割れるため、
+        必ず会計年度で束ねる。"""
+        try:
+            pe = date.fromisoformat(period_end[:10])
+        except ValueError:
+            return 0.0
+        start = pe.replace(year=pe.year - 1)
+        s, e = str(start), str(pe)
+        return sum(a for d, a in _div_events if s < d <= e)
 
     # 通期予想DPSを年別に辞書化（実績が不完全な年度の補完用）
     _fc_dps_by_year: dict = {}
@@ -5575,9 +5603,13 @@ def _build_stock_page(code: str) -> str:
         #   [2]operating_income [3]ordinary_income [4]net_income [5]div_per_share
         # latest_te: 最新実績の自己資本（予想ROE計算用）
         result = []
+        _today = str(date.today())
         for i, r in enumerate(rows):
             period_end = str(r[0])
-            lbl = period_end[:7].replace("-", "/")
+            # kabutan由来のfinancialsは未来日付の期＝会社予想が混ざるため、
+            # 期末が未来の行は「予想」として扱う（グラフの点線・(P)ラベル対象）
+            is_future = period_end[:10] > _today
+            lbl = period_end[:7].replace("-", "/") + ("(P)" if is_future else "")
             rev  = _to_oku(r[2])
             op   = _to_oku(r[3])
             ord_ = _to_oku(r[4])
@@ -5586,10 +5618,18 @@ def _build_stock_page(code: str) -> str:
             te   = _to_oku(r[7])
             cf   = _to_oku(r[8])
             yr   = period_end[:4]
-            _actual_dps = _div_by_year.get(yr, 0.0)
+            _actual_dps = _dps_for_fiscal(period_end)
             _plan_dps   = _fc_dps_by_year.get(yr)
-            if _plan_dps is not None and _actual_dps < _plan_dps:
-                dps = round(_plan_dps, 1)   # 実績が計画未達 → 計画値で補完
+            if is_future:
+                # 未来期は実績配当が存在しない → 会社予想DPS、無ければYahoo予想DPSで補完
+                if _plan_dps is not None:
+                    dps = round(_plan_dps, 1)
+                elif _yahoo_fwd_dps:
+                    dps = round(float(_yahoo_fwd_dps), 1)
+                else:
+                    dps = None
+            elif _plan_dps is not None and _actual_dps < _plan_dps:
+                dps = round(_plan_dps, 1)   # 実績が計画未達（期中） → 計画値で補完
             else:
                 dps = round(_actual_dps, 1) if _actual_dps > 0 else None
             # ROE = 純利益 ÷ 平均自己資本（当期・前期平均）× 100
@@ -5630,10 +5670,10 @@ def _build_stock_page(code: str) -> str:
                 "dps": dps, "payout": payout_val,
                 "roe": roe_val, "roa": roa_val,
                 "eps": eps_val, "bps": bps_val_row,
-                "is_forecast": False,
+                "is_forecast": is_future,
             })
         if fc_rows:
-            for r in fc_rows:
+            for j, r in enumerate(fc_rows):
                 fend = str(r[0])
                 lbl  = fend[:7].replace("-", "/") + "(P)"
                 rev  = _to_oku(r[1])
@@ -5641,6 +5681,8 @@ def _build_stock_page(code: str) -> str:
                 ord_ = _to_oku(r[3])
                 net  = _to_oku(r[4])
                 dps  = float(r[5]) if r[5] is not None else None
+                if dps is None and j == 0 and _yahoo_fwd_dps:
+                    dps = round(float(_yahoo_fwd_dps), 1)  # 直近予想期はYahoo予想DPSで補完
                 fc_eps = None
                 if shares_cnt and r[4] is not None:
                     try:
@@ -5677,13 +5719,20 @@ def _build_stock_page(code: str) -> str:
                     row["yoy_rev"] = None
             else:
                 row["yoy_rev"] = None
-        # 重複period_end排除（実績と予想が被る場合は実績優先）
-        seen: set = set()
+        # 重複period_end排除（実績と予想が被る場合は先勝ち＝実績側優先）。
+        # ただし先勝ち行に欠けている値（dps・payout等）は後続の予想行から補完する
+        seen: dict = {}
         deduped = []
         for row in result:
-            if row["period_end"] not in seen:
-                seen.add(row["period_end"])
+            pe = row["period_end"]
+            if pe not in seen:
+                seen[pe] = row
                 deduped.append(row)
+            else:
+                keep = seen[pe]
+                for k in ("dps", "payout", "eps", "roe", "revenue", "op", "ord", "net"):
+                    if keep.get(k) is None and row.get(k) is not None:
+                        keep[k] = row[k]
         return deduped
 
     _latest_te_raw = float(fin_annual_rows[-1][7]) if fin_annual_rows and fin_annual_rows[-1][7] is not None else None
@@ -5713,6 +5762,22 @@ def _build_stock_page(code: str) -> str:
             bps_val = _r['bps']
             if cur_price and bps_val > 0:
                 pbr = round(float(cur_price) / bps_val, 2)
+
+    # 予想PERのフォールバック: kabutan通期予想が無い銘柄は
+    # financialsの未来期(会社予想) → Yahooのeps_forward の順で予想EPSを補完
+    if per_fwd is None and cur_price:
+        _fc_row = next((r for r in fin_annual_data
+                        if r.get("is_forecast") and r.get("eps") and r["eps"] > 0), None)
+        if _fc_row:
+            fc_eps  = _fc_row["eps"]
+            per_fwd = round(cur_price / fc_eps, 1)
+    if per_fwd is None and cur_price:
+        _yef = _fv("eps_forward")
+        if _yef and _yef > 0:
+            _cand = round(cur_price / _yef, 1)
+            if _cand >= 3.0:   # eps_forwardの桁異常（THEO_MIN_PER相当）を除外
+                fc_eps  = _yef
+                per_fwd = _cand
 
     fin_annual_json    = _json.dumps(fin_annual_data,    ensure_ascii=False)
     fin_quarterly_json = _json.dumps(fin_quarterly_data, ensure_ascii=False)
@@ -5747,14 +5812,21 @@ def _build_stock_page(code: str) -> str:
 </div>"""
 
     if has_fund:
-        _per_lbl  = "PER（予想）" if per_fwd else "PER（実績）"
-        _per_val  = _fmtv(per_fwd,  "{:.1f}", "倍") if per_fwd  and 0 < per_fwd  < 500 else \
-                    _fmtv(per_ttm,  "{:.1f}", "倍") if per_ttm  and 0 < per_ttm  < 500 else "—"
-        _per_sub  = f"予EPS {_fmtv(fc_eps, '{:.0f}', '円')}" if fc_eps else \
-                    f"実EPS {_fmtv(eps_ttm, '{:.2f}', '円')}"
-        _div_lbl  = "配当利回り（予）" if fc_dps is not None else "配当利回り"
-        _div_sub  = f"予想 {_fmtv(dps_use, '{:.0f}', '円')}/株" if fc_dps is not None else \
-                    f"年間 {_fmtv(dps_use, '{:.0f}', '円')}"
+        # PERは実績・予想の両方を常に表示する
+        _per_fwd_ok = per_fwd is not None and 0 < per_fwd < 500
+        _per_ttm_ok = per_ttm is not None and 0 < per_ttm < 500
+        if _per_fwd_ok:
+            _per_lbl = "PER（予想）"
+            _per_val = _fmtv(per_fwd, "{:.1f}", "倍")
+            _per_sub = (f"実績 {_fmtv(per_ttm, '{:.1f}', '倍')}（EPS {_fmtv(eps_ttm, '{:.0f}', '円')}）"
+                        if _per_ttm_ok else f"予EPS {_fmtv(fc_eps, '{:.0f}', '円')}")
+        else:
+            _per_lbl = "PER（実績）"
+            _per_val = _fmtv(per_ttm, "{:.1f}", "倍") if _per_ttm_ok else "—"
+            _per_sub = f"実EPS {_fmtv(eps_ttm, '{:.2f}', '円')}・予想データなし"
+        _div_lbl  = "配当利回り（予）" if _div_is_forecast else "配当利回り（実績）"
+        _div_sub  = f"予想 {_fmtv(dps_use, '{:.1f}', '円')}/株" if _div_is_forecast else \
+                    f"実績年間 {_fmtv(dps_use, '{:.1f}', '円')}/株"
         key_metrics_html = f"""<div class="key-metrics">
   {_km("時価総額", _mktcap(mktcap))}
   {_km(_per_lbl, _per_val, _per_sub)}
@@ -5913,24 +5985,6 @@ def _build_stock_page(code: str) -> str:
         )
     theme_html = f'<div class="theme-badges">{"".join(badges)}</div>' if badges else \
                  '<p class="muted" style="font-size:13px">テーマ未分類</p>'
-
-    # ─ 直近20日テーブル ─
-    recent20 = list(reversed(prices[-20:]))
-    trows = ""
-    for p in recent20:
-        c = float(p[6] or 0)
-        cls = "up" if c > 0 else ("dn" if c < 0 else "muted")
-        tv = float(p[5] or 0) * float(p[4] or 0)
-        tv_str = f"{tv/1e8:.2f}億" if tv >= 1e8 else (f"{tv/1e4:.0f}万" if tv > 0 else "—")
-        trows += (
-            f'<tr>'
-            f'<td class="left">{p[0]}</td>'
-            f'<td>{float(p[4] or 0):,.0f}</td>'
-            f'<td class="{cls}">{c:+.1f}%</td>'
-            f'<td class="muted" style="font-size:12px">{int(p[5] or 0):,}</td>'
-            f'<td class="muted" style="font-size:12px">{tv_str}</td>'
-            f'</tr>'
-        )
 
     # ─ 会社概要（改善版） ─
     # ファクトグリッド（構造化情報）
@@ -6308,6 +6362,7 @@ function renderFinTable(d){
   <button class="pg-tab active" data-tab="overview">概要</button>
   <button class="pg-tab" data-tab="financials">業績・財務</button>
   <button class="pg-tab" data-tab="valuation">理論株価</button>
+  <button class="pg-tab" data-tab="disclosures">適時開示</button>
 </div>
 
 <div id="tab-overview" class="pg-panel active">
@@ -6318,19 +6373,6 @@ function renderFinTable(d){
 
 <p class="price-section-header">所属テーマ</p>
 {theme_html}
-
-<p class="price-section-header">直近20営業日</p>
-<div class="table-wrap">
-  <div class="card">
-    <table>
-      <thead><tr>
-        <th class="left">日付</th><th>終値</th><th>前日比</th>
-        <th>出来高</th><th>売買代金</th>
-      </tr></thead>
-      <tbody>{trows}</tbody>
-    </table>
-  </div>
-</div>
 
 {events_html}
 
@@ -6416,7 +6458,12 @@ function renderFinTable(d){
   }});
 }})();
 </script>
-</div><!-- /tab-valuation -->"""
+</div><!-- /tab-valuation -->
+
+<div id="tab-disclosures" class="pg-panel">
+<style>{_DISC_CSS}</style>
+{_stock_disclosures_html(s_code)}
+</div><!-- /tab-disclosures -->"""
 
     return _page_html(f"{s_name_esc}（{s_code}）", body, active="")
 
@@ -6863,13 +6910,8 @@ def report(date_str: str):
 
 @app.route("/rankings")
 def rankings():
-    key  = f"rankings_{date.today()}"
-    html = _get(key)
-    if not html:
-        print("[app] ランキング生成")
-        html = _build_rankings_page()
-        _set(key, html)
-    return html
+    # ランキングはイベントページに統合済み（ブックマーク・既存リンク互換のためリダイレクト）
+    return redirect("/events")
 
 
 @app.route("/swing")
