@@ -246,6 +246,48 @@ def _fetch_triggers(cur, target: date) -> dict:
     return res
 
 
+def _fetch_revisions(cur, target: date) -> list[dict]:
+    """業績修正・増配（当日+前営業日の発表）を当日の株価反応と合わせて返す。
+    前営業日の引け後発表は当日（target）の値動きに現れるため、両日分を対象にする。"""
+    cur.execute("SELECT MAX(date) FROM daily_prices WHERE date < %s", (target,))
+    r = cur.fetchone()
+    prev_day = r[0] if r and r[0] else target
+    cur.execute("""
+        SELECT r.code, s.name, r.period_type, r.announced_at,
+               r.op_old, r.op_new, r.op_chg_pct, r.ord_chg_pct, r.net_chg_pct,
+               r.revenue_chg_pct, r.dps_old, r.dps_new, r.direction, r.is_turnaround,
+               dp.change_pct
+        FROM forecast_revisions r
+        JOIN stocks s ON s.code = r.code
+        LEFT JOIN daily_prices dp ON dp.code = r.code AND dp.date = %s
+        WHERE r.announced_at IN (%s, %s)
+        ORDER BY r.direction DESC, ABS(COALESCE(r.op_chg_pct, r.ord_chg_pct, r.net_chg_pct, 0)) DESC
+    """, (target, target, prev_day))
+    out, seen = [], set()
+    for row in cur.fetchall():
+        code = str(row[0])
+        # 同一銘柄で通期(A)と上期(H)の両方がある場合は通期を優先（ソート順で先に来た方を採用しA優先に補正）
+        key = code
+        if key in seen and row[2] != "A":
+            continue
+        if key in seen:
+            out = [o for o in out if o["code"] != code]
+        seen.add(key)
+        out.append({
+            "code": code, "name": row[1], "period_type": row[2],
+            "announced_at": row[3],
+            "op_chg": float(row[6]) if row[6] is not None else None,
+            "ord_chg": float(row[7]) if row[7] is not None else None,
+            "net_chg": float(row[8]) if row[8] is not None else None,
+            "rev_chg": float(row[9]) if row[9] is not None else None,
+            "dps_old": float(row[10]) if row[10] is not None else None,
+            "dps_new": float(row[11]) if row[11] is not None else None,
+            "direction": int(row[12] or 0), "turnaround": int(row[13] or 0),
+            "px_chg": float(row[14]) if row[14] is not None else None,
+        })
+    return out[:12]
+
+
 def _fetch_disclosures(cur, target: date) -> dict:
     """好材料開示のサマリー。当日分が未取得なら取得済みの直近日にフォールバック。"""
     cur.execute("SELECT MAX(DATE(disclosed_at)) FROM disclosures WHERE DATE(disclosed_at) <= %s", (target,))
@@ -404,6 +446,7 @@ def build_report_html(target_date: date | None = None) -> str:
         return "<p>価格データがありません</p>"
 
     indices   = _fetch_indices(cur, target)
+    revisions = _fetch_revisions(cur, target)
     breadth   = _fetch_breadth(cur, target)
     ai_res    = _fetch_ai_commentary(cur, target)
     ai_text, ai_date = (ai_res if ai_res else (None, None))
@@ -516,6 +559,41 @@ def build_report_html(target_date: date | None = None) -> str:
   {_mv_rows(movers["losers"])}
 </div>"""
 
+    # ── 4.5 業績修正・増配 ──
+    def _rev_label(rv) -> str:
+        parts = []
+        if rv["turnaround"]:
+            parts.append("黒字転換")
+        if rv["op_chg"] is not None and rv["op_chg"] != 0:
+            parts.append(f'営業益{rv["op_chg"]:+.0f}%')
+        elif rv["ord_chg"] is not None and rv["ord_chg"] != 0:
+            parts.append(f'経常益{rv["ord_chg"]:+.0f}%')
+        elif rv["net_chg"] is not None and rv["net_chg"] != 0:
+            parts.append(f'純利益{rv["net_chg"]:+.0f}%')
+        if rv["rev_chg"] is not None and rv["rev_chg"] != 0 and len(parts) < 2:
+            parts.append(f'売上{rv["rev_chg"]:+.0f}%')
+        if rv["dps_old"] is not None and rv["dps_new"] is not None and rv["dps_new"] != rv["dps_old"]:
+            parts.append(f'配当{rv["dps_old"]:.0f}→{rv["dps_new"]:.0f}円')
+        return "・".join(parts) if parts else ("上方修正" if rv["direction"] > 0 else "下方修正")
+
+    rev_rows = ""
+    for rv in revisions:
+        icon = "⤴️" if rv["direction"] > 0 else "⤵️"
+        pt_lbl = "通期" if rv["period_type"] == "A" else "上期"
+        ann = f'{rv["announced_at"].month}/{rv["announced_at"].day}発表'
+        rev_rows += f"""<div class="mv-row">
+  <div class="mv-chg">{_chg_html(rv["px_chg"])}</div>
+  <div class="mv-main">
+    <div class="mv-name">{icon} <a href="/stock/{rv["code"]}">{esc(rv["name"])}</a>
+      <span class="mv-meta">{rv["code"]} ・ {ann}</span></div>
+    <div class="mv-reason">{pt_lbl}予想 {esc(_rev_label(rv))}</div>
+  </div>
+</div>"""
+    sec_revisions = f"""<div class="rp-card">
+  <div class="rp-h">業績修正・増配 <small>直近発表の会社予想の変化と株価反応（開示検知で当日反映）</small></div>
+  {rev_rows}
+</div>""" if rev_rows else ""
+
     # ── 5. トリガー銘柄 ──
     tr_groups = ""
     for key, meta in TRIGGER_DEFS.items():
@@ -586,6 +664,7 @@ def build_report_html(target_date: date | None = None) -> str:
   {sec_numbers}
   {sec_flows}
   {sec_movers}
+  {sec_revisions}
   {sec_triggers}
   {sec_discs}
   {sec_watch}

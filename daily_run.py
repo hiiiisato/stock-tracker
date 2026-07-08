@@ -67,6 +67,16 @@ def run_evening():
         print(f"  エラー: {e}")
         _log("disclosures_evening", "failed", error=str(e))
 
+    # 夕方〜夜に出た決算・業績修正も当日中に反映（15時以降の開示が大半のためここが本命）
+    print("\n[業績反映] 当日開示銘柄の業績・予想を更新...")
+    try:
+        from earnings_refresh import refresh_from_disclosures
+        result = refresh_from_disclosures()
+        _log("earnings_refresh", "done", result.get("revisions", 0))
+    except Exception as e:
+        print(f"  エラー: {e}")
+        _log("earnings_refresh", "failed", error=str(e))
+
     print("\n[日次レポート] 確定版を保存...")
     try:
         from daily_report import save_report
@@ -349,6 +359,17 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
         except Exception as e:
             print(f"  エラー: {e}")
             _log("disclosures", "failed", error=str(e))
+
+    # 決算・業績修正のタイムリー反映（当日開示の銘柄だけkabutan再取得→修正幅を算出・蓄積）
+    if not rankings_only:
+        print("\n[業績反映] 当日開示銘柄の業績・予想を更新中...")
+        try:
+            from earnings_refresh import refresh_from_disclosures
+            result = refresh_from_disclosures()
+            _log("earnings_refresh", "done", result.get("revisions", 0))
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("earnings_refresh", "failed", error=str(e))
 
     # ニュース収集（日次＋週次 TOP15）
     if not rankings_only:
