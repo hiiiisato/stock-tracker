@@ -229,15 +229,13 @@ def scrape_one(code4: str):
     """1銘柄 → (actuals_rows, forecast_rows)。失敗時は ([], [])。"""
     try:
         time.sleep(DELAY)
-        r = requests.get(
-            f"https://kabutan.jp/stock/finance?code={code4}",
-            headers={"User-Agent": UA},
-            timeout=15,
-        )
-        if r.status_code != 200:
+        # GHAランナーIPの遮断(405)時はRenderプロキシへ自動フォールバックする共通クライアント
+        from kabutan_client import get as kabutan_get
+        status, text = kabutan_get(f"stock/finance?code={code4}", timeout=15)
+        if status != 200:
             return [], []
 
-        soup   = BeautifulSoup(r.text, 'html.parser')
+        soup   = BeautifulSoup(text, 'html.parser')
         tables = soup.find_all('table')
 
         income_actuals: dict  = {}  # (period_end, ptype) → (rev, oi, ordinary, ni)

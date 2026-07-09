@@ -482,16 +482,17 @@ def _fetch_tdnet(code: str, target_date: date, cfg: dict) -> list:
 # ══════════════════════════════════════════════════════════════
 
 def _fetch_kabutan(code: str, target_date: date, cfg: dict) -> list:
-    url = f"https://kabutan.jp/stock/news?code={code}"
     try:
-        r = requests.get(url, headers=_HEADERS, timeout=15)
-        if r.status_code != 200:
+        # GHAランナーIPの遮断(405)時はRenderプロキシへ自動フォールバックする共通クライアント
+        from kabutan_client import get as kabutan_get
+        status, text = kabutan_get(f"stock/news?code={code}", timeout=15)
+        if status != 200:
             return []
     except Exception as e:
         print(f"    [kabutan] {code}: {e}")
         return []
 
-    soup = BeautifulSoup(r.text, "html.parser")
+    soup = BeautifulSoup(text, "html.parser")
     tbl = soup.find("table", class_="s_news_list")
     if not tbl:
         return []

@@ -7181,6 +7181,34 @@ def api_search():
     return jsonify(results)
 
 
+@app.route("/internal/kabutan")
+def internal_kabutan_proxy():
+    """kabutan取得の内部プロキシ。
+    GitHub ActionsのランナーIPはkabutanにHTTP 405で遮断されるため、
+    バッチ（company_profile / financials_kabutan 等）はここ（Render）経由で取得する。
+    認証: 両環境が共有する TIDB_PASSWORD のSHA256先頭32桁をトークンとして照合
+    （新しいSecret登録を不要にするため。パスワード自体は送受信しない）。
+    """
+    import hashlib
+    import os as _os
+    pw = _os.environ.get("TIDB_PASSWORD", "")
+    expected = hashlib.sha256(pw.encode()).hexdigest()[:32] if pw else None
+    if not expected or request.args.get("token", "") != expected:
+        abort(403)
+    path = request.args.get("path", "")
+    # SSRF防止: kabutan.jp配下の想定パスのみ許可（英数と ?=&._- のみ）
+    if not re.match(r"^stock/[A-Za-z0-9?=&._\-]*$", path):
+        abort(400)
+    try:
+        r = _requests.get(
+            f"https://kabutan.jp/{path}",
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+            timeout=15)
+        return r.text, r.status_code, {"Content-Type": "text/plain; charset=utf-8"}
+    except Exception as e:
+        return f"proxy_error: {e}", 502, {"Content-Type": "text/plain; charset=utf-8"}
+
+
 @app.route("/health")
 def health():
     try:

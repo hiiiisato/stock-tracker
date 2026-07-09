@@ -66,13 +66,15 @@ def ensure_schema():
 def fetch_one(code: str) -> dict | None:
     """kabutan トップページから会社情報を取得。ページ自体が無ければ None。"""
     try:
-        r = requests.get(f"https://kabutan.jp/stock/?code={code}", headers=UA, timeout=10)
-        if r.status_code == 404:
+        # GHAランナーIPの遮断(405)時はRenderプロキシへ自動フォールバックする共通クライアント
+        from kabutan_client import get as kabutan_get
+        status, text = kabutan_get(f"stock/?code={code}", timeout=10)
+        if status == 404:
             return {}   # ページ自体が無い（PRO Market等）→ 試行済みスタンプして毎日再試行しない
-        if r.status_code != 200:
-            print(f"  [company_profile] {code}: HTTP {r.status_code}")
+        if status != 200:
+            print(f"  [company_profile] {code}: HTTP {status}")
             return None  # 一時的なエラー → 次回リトライ
-        soup = BeautifulSoup(r.text, "html.parser")
+        soup = BeautifulSoup(text, "html.parser")
         blk  = soup.select_one(".company_block")
         if not blk:
             return {}   # ページはあるが会社情報なし（ETF等）→ 試行済みとして記録
