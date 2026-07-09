@@ -153,6 +153,11 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   分割処理は必ず「実際の価格変化と期待比率の照合」(`splits._verify_split_reflected`)を通す
 - **financialsに未来日付の期が入っている**（会社予想）。実績として使う時は `period_end <= CURDATE()` で除外
 - **バックテストの先読み防止**: ファンダは期末+45日を公開日とみなす（PIT補正）。price_stats_history生成時に適用済み
+- **業績修正・増配のバックテストは必ず `forecast_revisions.reaction_date` を基準にする**。
+  発表時刻(disclosed_at)から場中/引け後(session)を判定済みで、reaction_date=「実際に売買できる最初の営業日」。
+  場中発表は当日株価に既に織り込まれ、引け後発表は翌営業日に反応する。announced_at（発表日）で
+  エントリーを測ると引け後発表分を「発表日に買えた」と誤計上する先読みバイアスになる。
+  reaction_dateの始値エントリーで測れば場中/引け後を問わず先読みしない
 - **フォーム値をJSの状態として使わない**: bfcacheが復元して壊れる。純粋JSオブジェクトで管理
 - J-Quants無料枠はレート制限が厳しい。大量アクセス後は`Rate limit exceeded`が数時間続く
 - **kabutan の `/stock/info?code=` は廃止(404)**。会社概要はトップページ `/stock/?code=` の
