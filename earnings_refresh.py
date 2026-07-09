@@ -74,6 +74,31 @@ def _disclosed_codes(cur, target_date: date) -> list[str]:
     return [r[0] for r in cur.fetchall()]
 
 
+def _pending_codes(cur, days_back: int = 8) -> list[str]:
+    """
+    【自己修復】業績・配当の開示があったのに、その開示日以降の会社予想がまだDBに無い銘柄。
+
+    kabutanが発表当日に未反映だった / 取得に失敗した銘柄を、反映されるまで数日間
+    毎回追いかける。kabutanに反映され新しい announced_at の予想が入った時点で
+    NOT EXISTS が偽になり、自動的に対象から外れる（無限リトライしない）。
+    days_back日を過ぎても未反映なら諦める（週次の全銘柄取得が最終的に拾う）。
+    """
+    ph = ",".join(["%s"] * len(EARNINGS_CATEGORIES))
+    cur.execute(f"""
+        SELECT DISTINCT d.code
+        FROM disclosures d
+        JOIN stocks s ON s.code = d.code AND s.is_active = 1
+        WHERE DATE(d.disclosed_at) >= %s
+          AND d.category IN ({ph})
+          AND NOT EXISTS (
+              SELECT 1 FROM financials_forecast f
+              WHERE f.code = d.code
+                AND f.announced_at >= DATE(d.disclosed_at)
+          )
+    """, (date.today() - timedelta(days=days_back), *EARNINGS_CATEGORIES))
+    return [r[0] for r in cur.fetchall()]
+
+
 def _chg_pct(old, new):
     """予想値の変化率(%)。旧値がゼロ以下（赤字・ゼロ）の場合は率が無意味なのでNone。"""
     if old is None or new is None or old <= 0:
@@ -184,23 +209,29 @@ def refresh_from_disclosures(target_date: date | None = None) -> dict:
     target = target_date or date.today()
     conn = get_conn()
     cur  = conn.cursor()
-    codes = _disclosed_codes(cur, target)
+    codes_today   = _disclosed_codes(cur, target)
+    codes_pending = _pending_codes(cur, days_back=8)   # 過去8日で未反映のもの（自己修復）
     cur.close()
     conn.close()
 
+    # 当日開示 + 未反映の過去開示（重複排除・当日を優先して順序保持）
+    today_set = set(codes_today)
+    codes = codes_today + [c for c in codes_pending if c not in today_set]
+    n_retry = len(codes) - len(codes_today)
+
     if not codes:
-        print(f"  {target} の業績関連開示なし")
+        print(f"  {target} の業績関連開示なし・未反映銘柄なし")
         return {"codes": 0, "revisions": 0}
     if len(codes) > MAX_CODES_PER_RUN:
         print(f"  対象 {len(codes)} 銘柄 → 上限 {MAX_CODES_PER_RUN} 件に制限（残りは翌日・週次で反映）")
         codes = codes[:MAX_CODES_PER_RUN]
 
-    print(f"  {target} の業績関連開示: {len(codes)} 銘柄を再取得...")
+    print(f"  {target} の業績関連開示 {len(codes_today)}銘柄 + 未反映リトライ {n_retry}銘柄 を再取得...")
     from financials_kabutan import run as kabutan_run
     kabutan_run(target_codes=codes)
 
-    n_rev = detect_revisions(days_back=7)
-    return {"codes": len(codes), "revisions": n_rev}
+    n_rev = detect_revisions(days_back=8)
+    return {"codes": len(codes), "retry": n_retry, "revisions": n_rev}
 
 
 if __name__ == "__main__":

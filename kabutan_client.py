@@ -17,9 +17,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+# BOT遮断を避けるため実ブラウザに近いヘッダ一式を送る（UAのみだと簡易ボット判定に掛かりやすい）
+UA = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+    "Referer": "https://kabutan.jp/",
+}
 PROXY_BASE = os.environ.get("KABUTAN_PROXY_BASE", "https://stock-tracker-rfqn.onrender.com")
-_BLOCKED_STATUSES = (403, 405)
+_BLOCKED_STATUSES = (403, 405, 429)
 
 # 一度遮断を検知したらプロセス内では以後プロキシ直行（毎回2往復しない）
 _use_proxy = False
