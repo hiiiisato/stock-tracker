@@ -62,9 +62,15 @@ def update_stock_master() -> int:
         update_cols=["name", "name_en", "market_id", "sector_id", "is_active"])
 
     # APIに存在しない銘柄 → 上場廃止フラグ
+    #   ただし末尾アルファベットの新コード体系（2024年以降上場）は、J-Quants無料枠の
+    #   約12週遅延で「まだ収録されていないだけ」の新規上場が大半。これを廃止と誤判定すると
+    #   is_active=0 → 価格取得対象外 → サイト未表示、という連鎖が起きる（例: 584A LINKX）。
+    #   新コード銘柄はここでは廃止せず、後段の _refresh_alpha_listings が Yahoo で
+    #   生存確認して本当に消えたものだけ is_active=0 にする。
     cur.execute("SELECT code FROM stocks WHERE is_active = TRUE")
     db_active = {r[0] for r in cur.fetchall()}
-    delisted = db_active - active_codes
+    delisted = {c for c in (db_active - active_codes)
+                if not re.match(r'^[0-9]+[A-Z]$', c)}
     if delisted:
         placeholders = ",".join(["%s"] * len(delisted))
         cur.execute(
@@ -77,10 +83,15 @@ def update_stock_master() -> int:
     cur.close()
     conn.close()
 
-    # J-Quants未収録の新規上場をYahoo Financeで補完
+    # J-Quants未収録の新規上場をYahoo Financeで補完（連番スキャンで新規発見）
     n_new = _scan_new_alpha_listings()
     if n_new:
-        print(f"  Yahoo補完: {n_new} 件の新規上場を追加")
+        print(f"  Yahoo補完(新規): {n_new} 件")
+
+    # 既存の新コード銘柄のうち名称未取得・非アクティブのものをYahooで再確認・補完
+    n_ref = _refresh_alpha_listings()
+    if n_ref:
+        print(f"  Yahoo補完(名称・生存): {n_ref} 件")
 
     return len(rows) + n_new
 
@@ -182,6 +193,57 @@ def _scan_new_alpha_listings(max_scan: int = 200, max_consecutive_miss: int = 50
     conn.close()
 
     return len(new_rows)
+
+
+def _refresh_alpha_listings() -> int:
+    """
+    既存の末尾アルファベットコード銘柄のうち、名称が未取得（=コードのまま）または
+    非アクティブのものを Yahoo Finance で再照会し、生存確認と名称補完を行う。
+
+    新規上場直後は Yahoo 側の longName/shortName が未整備でコードのまま登録されるが、
+    数日〜数週で正式名称が付く。これを追いかけて名称を更新し、
+    Yahoo に存在する（=生存）銘柄は is_active=TRUE を維持する。
+    Yahoo にも存在しない場合のみ、真の廃止として is_active=FALSE にする。
+    戻り値=名称・生存を更新した件数。
+    """
+    conn = get_conn()
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT code, name, is_active FROM stocks
+        WHERE code REGEXP '^[0-9]+[A-Z]$'
+          AND (name = code OR is_active = FALSE)
+    """)
+    targets = cur.fetchall()
+    cur.close()
+    conn.close()
+    if not targets:
+        return 0
+
+    updates, delist = [], []
+    for code, name, is_active in targets:
+        time.sleep(0.15)  # Yahoo レート制限対策
+        info = _yahoo_stock_info(code)
+        if info:
+            updates.append((info["name"], code))     # 生存 → 名称更新＆is_active=TRUE
+        elif is_active:
+            delist.append(code)                       # Yahooにも無い → 真の廃止
+
+    conn = get_conn()
+    cur  = conn.cursor()
+    for name, code in updates:
+        cur.execute(
+            "UPDATE stocks SET name=%s, is_active=TRUE, delisted_date=NULL WHERE code=%s",
+            (name, code))
+    if delist:
+        ph = ",".join(["%s"] * len(delist))
+        cur.execute(
+            f"UPDATE stocks SET is_active=FALSE, delisted_date=CURDATE() WHERE code IN ({ph})",
+            delist)
+        print(f"    真の廃止(Yahoo未存在): {len(delist)} 件")
+    conn.commit()
+    cur.close()
+    conn.close()
+    return len(updates)
 
 
 def update_trading_calendar(date_from: date = None, date_to: date = None) -> int:
