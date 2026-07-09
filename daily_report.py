@@ -256,7 +256,7 @@ def _fetch_revisions(cur, target: date) -> list[dict]:
         SELECT r.code, s.name, r.period_type, r.announced_at,
                r.op_old, r.op_new, r.op_chg_pct, r.ord_chg_pct, r.net_chg_pct,
                r.revenue_chg_pct, r.dps_old, r.dps_new, r.direction, r.is_turnaround,
-               dp.change_pct
+               dp.change_pct, r.session
         FROM forecast_revisions r
         JOIN stocks s ON s.code = r.code
         LEFT JOIN daily_prices dp ON dp.code = r.code AND dp.date = %s
@@ -284,8 +284,29 @@ def _fetch_revisions(cur, target: date) -> list[dict]:
             "dps_new": float(row[11]) if row[11] is not None else None,
             "direction": int(row[12] or 0), "turnaround": int(row[13] or 0),
             "px_chg": float(row[14]) if row[14] is not None else None,
+            "session": row[15],
         })
     return out[:12]
+
+
+def _attach_series(cur, target: date, items: list[dict]) -> None:
+    """items（'code'キーを持つdictのリスト）に直近30営業日の終値系列 'series' を付与する。
+    ミニチャート（スパークライン）描画用。値上がりTOP5と同じ見せ方を各セクションで共有する。"""
+    codes = list({it["code"] for it in items if it.get("code")})
+    if not codes:
+        return
+    ph = ",".join(["%s"] * len(codes))
+    cur.execute(f"""
+        SELECT code, COALESCE(adj_close, close)
+        FROM daily_prices
+        WHERE code IN ({ph}) AND date > %s AND date <= %s AND close > 0
+        ORDER BY code, date
+    """, (*codes, target - timedelta(days=45), target))
+    ser: dict = {}
+    for c, cl in cur.fetchall():
+        ser.setdefault(str(c), []).append(float(cl))
+    for it in items:
+        it["series"] = ser.get(it["code"], [])
 
 
 def _fetch_disclosures(cur, target: date) -> dict:
@@ -455,6 +476,9 @@ def build_report_html(target_date: date | None = None) -> str:
     triggers  = _fetch_triggers(cur, target)
     discs     = _fetch_disclosures(cur, target)
     watch     = _fetch_watchlist(cur, target)
+    # 業績修正・トリガー銘柄にもミニチャート（値上がりTOP5と同じ30日スパークライン）を付与
+    _attach_series(cur, target, revisions)
+    _attach_series(cur, target, [it for lst in triggers.values() for it in lst])
     cur.close(); conn.close()
 
     esc = _html.escape
@@ -580,14 +604,17 @@ def build_report_html(target_date: date | None = None) -> str:
     for rv in revisions:
         icon = "⤴️" if rv["direction"] > 0 else "⤵️"
         pt_lbl = "通期" if rv["period_type"] == "A" else "上期"
+        sess = {"intraday": "場中", "after": "引け後"}.get(rv.get("session"), "")
+        sess_html = f' <span class="mut">{sess}発表</span>' if sess else ""
         ann = f'{rv["announced_at"].month}/{rv["announced_at"].day}発表'
         rev_rows += f"""<div class="mv-row">
   <div class="mv-chg">{_chg_html(rv["px_chg"])}</div>
   <div class="mv-main">
     <div class="mv-name">{icon} <a href="/stock/{rv["code"]}">{esc(rv["name"])}</a>
-      <span class="mv-meta">{rv["code"]} ・ {ann}</span></div>
+      <span class="mv-meta">{rv["code"]} ・ {ann}{sess_html}</span></div>
     <div class="mv-reason">{pt_lbl}予想 {esc(_rev_label(rv))}</div>
   </div>
+  {_spark_svg(rv.get("series", []))}
 </div>"""
     sec_revisions = f"""<div class="rp-card">
   <div class="rp-h">業績修正・増配 <small>直近発表の会社予想の変化と株価反応（開示検知で当日反映）</small></div>
@@ -600,16 +627,25 @@ def build_report_html(target_date: date | None = None) -> str:
         items = triggers.get(key, [])
         if not items:
             continue
-        chips = "".join(
-            f'<span class="tr-chip"><a href="/stock/{t["code"]}">{esc(t["name"])}</a> '
-            f'{_chg_html(t["chg"])}'
-            + (f' <span class="mut">出来高{t["volr"]:.1f}x</span>' if t.get("volr") else "")
-            + (f' <span class="mut">{esc(t["note"])}</span>' if t.get("note") else "")
-            + '</span>'
-            for t in items)
+        rows = ""
+        for t in items:
+            meta_bits = []
+            if t.get("volr"):
+                meta_bits.append(f'出来高{t["volr"]:.1f}x')
+            if t.get("note"):
+                meta_bits.append(esc(t["note"]))
+            meta_html = f' <span class="mv-meta">{" ・ ".join(meta_bits)}</span>' if meta_bits else ""
+            rows += f"""<div class="mv-row">
+  <div class="mv-chg">{_chg_html(t["chg"])}</div>
+  <div class="mv-main">
+    <div class="mv-name"><a href="/stock/{t["code"]}">{esc(t["name"])}</a>
+      <span class="mv-meta">{t["code"]}</span>{meta_html}</div>
+  </div>
+  {_spark_svg(t.get("series", []))}
+</div>"""
         tr_groups += f"""<div class="tr-group">
   <div class="tr-lbl">{meta["label"]}<span class="tr-desc">{meta["desc"]}</span></div>
-  <div class="tr-items">{chips}</div>
+  {rows}
 </div>"""
     if not tr_groups:
         tr_groups = '<div class="mut" style="font-size:12px">本日トリガーに掛かった銘柄はありません</div>'
