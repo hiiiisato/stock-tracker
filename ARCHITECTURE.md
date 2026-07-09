@@ -157,6 +157,10 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - J-Quants無料枠はレート制限が厳しい。大量アクセス後は`Rate limit exceeded`が数時間続く
 - **kabutan の `/stock/info?code=` は廃止(404)**。会社概要はトップページ `/stock/?code=` の
   `.company_block` から取得する（company_profile.py）。ライブ取得はせずDB保存値を表示する
+- **GitHub ActionsランナーIP→kabutanはHTTP 405で一律遮断される**（2026-07-09実測。RenderのAWS IPは通る）。
+  kabutan取得は必ず `kabutan_client.get()` を使うこと（直接→遮断検知でRenderの
+  `/internal/kabutan` プロキシへ自動切替。認証はTIDB_PASSWORDのSHA256先頭32桁）。
+  requests直叩きで新規コードを書くとGHA上で沈黙失敗する
 - **edinetdb.jp 無料枠は300件/月（実質10件/日）**で全銘柄カバー不能。事業内容の一括取得は
   EDINET公式API（edinet_business.py・無料キー）を使う。名証など東証外単独上場はマスタ対象外
 - **Gemini無料枠はモデルごとに独立したRPD枠で、gemini-2.5-flashは20回/日しかない**。
