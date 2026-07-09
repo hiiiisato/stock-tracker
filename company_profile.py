@@ -21,6 +21,7 @@ kabutan 銘柄トップページから会社概要（簡単な事業内容）・
   python3 company_profile.py --backfill    # 全アクティブ銘柄（初回一括、約1時間）
   python3 company_profile.py               # 日次分（150件）
 """
+import re
 import sys
 import time
 import requests
@@ -79,6 +80,11 @@ def fetch_one(code: str) -> dict | None:
         if not blk:
             return {}   # ページはあるが会社情報なし（ETF等）→ 試行済みとして記録
         data: dict = {"themes": []}
+        # 市場区分（東証Ｐ/Ｓ/Ｇ）→ J-Quants市場コード。IPO直後でJ-Quants未収録の
+        # 銘柄はmarket_idがNULLでランキングから漏れるため、kabutan表記から暫定補完する。
+        mseg = re.search(r"東証([ＰＳＧ])", text)
+        if mseg:
+            data["market_code"] = {"Ｐ": "0111", "Ｓ": "0112", "Ｇ": "0113"}.get(mseg.group(1))
         for tr in blk.find_all("tr"):
             th, td = tr.find("th"), tr.find("td")
             if not (th and td):
@@ -111,6 +117,16 @@ def _save(code: str, data: dict, now: str):
                                      profile_updated_at = %s
                    WHERE code = %s""",
                 (data.get("summary"), data.get("website"), now, code))
+            # 市場区分の暫定補完: market_idがNULLの銘柄だけkabutan表記から埋める
+            # （J-Quants公式が入っている銘柄は上書きしない）
+            mcode = data.get("market_code")
+            if mcode:
+                cur.execute("""
+                    UPDATE stocks s
+                    JOIN markets m ON m.code = %s
+                    SET s.market_id = m.id
+                    WHERE s.code = %s AND s.market_id IS NULL
+                """, (mcode, code))
             themes = data.get("themes") or []
             if themes:
                 cur.execute("DELETE FROM kabutan_themes WHERE code = %s", (code,))
