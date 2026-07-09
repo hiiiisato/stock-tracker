@@ -109,30 +109,29 @@ def _fetch_ai_commentary(cur, target: date) -> tuple[str, date] | None:
 
 
 def _fetch_flow_changes(cur, target: date) -> dict:
-    """資金フロー: 直近週 vs 前週のテーマ別 flow_ratio 変化。"""
-    cur.execute("SELECT DISTINCT week_end FROM money_flow_weekly ORDER BY week_end DESC LIMIT 2")
-    wks = [r[0] for r in cur.fetchall()]
-    if len(wks) < 2:
-        return {"accel": [], "decel": [], "size_note": "", "weeks": wks}
-    w_now, w_prev = wks[0], wks[1]
+    """資金フロー: 最新週の「本物の資金流入(買い優勢)」と「投げ売り警戒(大商い×下落)」。
+    Zスコア（母数非依存の流入強度）でノイズ（小グループの偶然のブレ）を排除する。"""
+    cur.execute("SELECT MAX(week_end) FROM money_flow_weekly")
+    r = cur.fetchone()
+    w_now = r[0] if r and r[0] else None
+    if not w_now:
+        return {"inflow": [], "dump": [], "size_note": "", "week": None}
 
     cur.execute("""
-        SELECT a.group_label, a.flow_ratio, b.flow_ratio, a.ret_median, a.turnover, a.group_key
-        FROM money_flow_weekly a
-        JOIN money_flow_weekly b
-          ON b.week_end = %s AND b.group_type = a.group_type AND b.group_key = a.group_key
-        WHERE a.week_end = %s AND a.group_type = 'theme'
-          AND a.flow_ratio IS NOT NULL AND b.flow_ratio IS NOT NULL
-          AND a.turnover >= 100 AND a.n_stocks >= 5
-    """, (w_prev, w_now))
-    rows = [{"label": r[0], "now": float(r[1]), "prev": float(r[2]),
-             "ret": float(r[3] or 0), "tv": float(r[4] or 0), "delta": float(r[1]) - float(r[2]),
-             "key": r[5]}
+        SELECT group_label, group_key, flow_ratio, zscore, ret_median, breadth, turnover, n_stocks, flow_class
+        FROM money_flow_weekly
+        WHERE week_end = %s AND group_type = 'theme' AND zscore IS NOT NULL
+    """, (w_now,))
+    rows = [{"label": r[0], "key": r[1], "flow": float(r[2] or 0), "z": float(r[3] or 0),
+             "ret": float(r[4] or 0), "breadth": float(r[5] or 0), "tv": float(r[6] or 0),
+             "n": int(r[7] or 0), "cls": r[8]}
             for r in cur.fetchall()]
-    accel = sorted([r for r in rows if r["now"] >= 1.05 and r["delta"] > 0.05],
-                   key=lambda r: -r["delta"])[:5]
-    decel = sorted([r for r in rows if r["prev"] >= 1.05 and r["delta"] < -0.05],
-                   key=lambda r: r["delta"])[:3]
+    # 本物の資金流入: 買い優勢(inflow) かつ 規模足切り(100億+・8銘柄+)、Zスコア順
+    inflow = sorted([r for r in rows if r["cls"] == "inflow" and r["tv"] >= 100 and r["n"] >= 8],
+                    key=lambda r: -r["z"])[:6]
+    # 投げ売り警戒: 大商い×下落(dump)、Zスコア順（貴重な逆張り/警戒情報として保持）
+    dump = sorted([r for r in rows if r["cls"] == "dump" and r["tv"] >= 100],
+                  key=lambda r: -r["z"])[:4]
 
     # 規模ローテーション一言（大型 vs 小型+超小型）
     size_note = ""
@@ -148,7 +147,7 @@ def _fetch_flow_changes(cur, target: date) -> dict:
         size_note = "小型株に資金が波及（物色相場・個人優位）"
     elif big < 0.97 and small < 0.97:
         size_note = "大型・小型とも売買代金シェア低下（方向感の乏しい相場）"
-    return {"accel": accel, "decel": decel, "size_note": size_note, "weeks": wks}
+    return {"inflow": inflow, "dump": dump, "size_note": size_note, "week": w_now}
 
 
 def _extract_reason(ai_summary: str | None) -> str | None:
@@ -533,29 +532,27 @@ def build_report_html(target_date: date | None = None) -> str:
     # ── 3. 資金フロー ──
     from urllib.parse import quote as _q
 
-    def _fl_rows(items, sign):
+    def _fl_rows(items):
         rows = ""
         for r in items:
-            arrow = "↑" if sign > 0 else "↓"
-            cls = "pos" if sign > 0 else "neg"
             rows += f"""<div class="fl-row">
   <span class="fl-name"><a href="/screen?gtype=theme&gkey={_q(str(r.get("key", r["label"])))}" style="color:inherit">{esc(r["label"])}</a></span>
-  <span class="mut" style="font-size:11px">{r["prev"]:.2f}x→{r["now"]:.2f}x</span>
-  <span class="fl-delta {cls}">{arrow}{abs(r["delta"]):.2f}</span>
-  <span style="width:56px;text-align:right">{_chg_html(r["ret"])}</span>
+  <span class="mut" style="font-size:11px">{r["flow"]:.2f}x・{r["n"]}銘柄</span>
+  <span class="fl-delta" style="color:#8b949e">勢いZ{r["z"]:+.1f}</span>
+  <span style="width:100px;text-align:right">{_chg_html(r["ret"])} <span class="mut" style="font-size:11px">上昇{r["breadth"]:.0f}%</span></span>
 </div>"""
         return rows
     flow_body = ""
-    if flows["accel"]:
-        flow_body += f'<div class="tr-lbl pos" style="margin-bottom:2px">流入が加速中</div>{_fl_rows(flows["accel"], 1)}'
-    if flows["decel"]:
-        flow_body += f'<div class="tr-lbl neg" style="margin:8px 0 2px">流入が減速・流出へ</div>{_fl_rows(flows["decel"], -1)}'
+    if flows["inflow"]:
+        flow_body += f'<div class="tr-lbl pos" style="margin-bottom:2px">🔥 本物の資金流入（買われて上昇中）</div>{_fl_rows(flows["inflow"])}'
+    if flows["dump"]:
+        flow_body += f'<div class="tr-lbl neg" style="margin:8px 0 2px">⚠️ 投げ売り警戒（大商いだが下落）</div>{_fl_rows(flows["dump"])}'
     if flows["size_note"]:
         flow_body += f'<div class="breadth-note" style="margin-top:8px">🔄 {esc(flows["size_note"])}</div>'
     if not flow_body:
-        flow_body = '<div class="mut" style="font-size:12px">今週は目立ったトレンド変化なし</div>'
+        flow_body = '<div class="mut" style="font-size:12px">今週は目立った資金流入・投げ売りなし</div>'
     sec_flows = f"""<div class="rp-card">
-  <div class="rp-h">資金フローの変化 <small>今週 vs 前週の売買代金シェア（<a href="/flows">詳細</a>）</small></div>
+  <div class="rp-h">資金フロー <small>Zスコア×株価上昇で「買い優勢」を抽出・投げ売りは別枠（<a href="/flows">詳細</a>）</small></div>
   {flow_body}
 </div>"""
 

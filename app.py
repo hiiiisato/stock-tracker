@@ -3458,11 +3458,13 @@ def _build_flows_page(week_str: str | None = None) -> str:
 
     cur.execute("""
         SELECT group_type, group_key, group_label, n_stocks, turnover, turnover_share,
-               flow_ratio, ret_median, breadth, excess_topix, last_trade_date, top_stocks
+               flow_ratio, zscore, ret_median, breadth, excess_topix,
+               flow_class, last_trade_date, top_stocks
         FROM money_flow_weekly WHERE week_end = %s
     """, (sel_week,))
     cols = ["group_type","group_key","group_label","n_stocks","turnover","turnover_share",
-            "flow_ratio","ret_median","breadth","excess_topix","last_trade_date","top_stocks"]
+            "flow_ratio","zscore","ret_median","breadth","excess_topix",
+            "flow_class","last_trade_date","top_stocks"]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
 
     # スパークライン用: 選択週までの8週分の flow_ratio 履歴
@@ -3479,14 +3481,23 @@ def _build_flows_page(week_str: str | None = None) -> str:
 
     f = lambda v: float(v) if v is not None else None
 
-    def _flow_badge(fr):
+    def _flow_badge(r):
+        """流入度バッジ。flow_classで色を決める（inflow=赤/dump=青警戒/outflow=薄青/neutral=灰）。"""
+        fr = f(r["flow_ratio"])
         if fr is None:
             return '<span class="fl-badge fl-neutral">—</span>'
-        if fr >= 1.2:  cls = "fl-in-strong"
-        elif fr >= 1.05: cls = "fl-in-mild"
-        elif fr >= 0.95: cls = "fl-neutral"
-        else: cls = "fl-out"
+        klass = r.get("flow_class")
+        cls = {"inflow": "fl-in-strong", "dump": "fl-out",
+               "outflow": "fl-out", "neutral": "fl-neutral"}.get(klass, "fl-neutral")
         return f'<span class="fl-badge {cls}">{fr:.2f}x</span>'
+
+    def _z_span(z):
+        """Zスコア（母数非依存の流入強度）。2.0以上を強調。"""
+        z = f(z)
+        if z is None:
+            return '<span class="fl-n">—</span>'
+        col = "#f85149" if z >= 2.0 else ("#e0806b" if z >= 1.0 else "#8b949e")
+        return f'<span style="color:{col};font-weight:700">{z:+.1f}</span>'
 
     def _pct_span(v, suffix="%"):
         if v is None:
@@ -3529,7 +3540,8 @@ def _build_flows_page(week_str: str | None = None) -> str:
         return f"""<tr>
   <td><a class="fl-glabel" href="{gurl}">{_html.escape(r["group_label"] or r["group_key"])}</a> <span class="fl-n">{r["n_stocks"]}銘柄</span></td>
   <td>{f(r["turnover"]):,.0f}億</td>
-  <td>{_flow_badge(f(r["flow_ratio"]))}</td>
+  <td>{_flow_badge(r)}</td>
+  <td>{_z_span(r["zscore"])}</td>
   <td>{_spark(hist.get(key))}</td>
   <td>{_pct_span(f(r["ret_median"]))}</td>
   <td>{f(r["breadth"]) or 0:.0f}%</td>
@@ -3537,7 +3549,7 @@ def _build_flows_page(week_str: str | None = None) -> str:
   <td class="fl-tops">{_tops_html(r["top_stocks"])}</td>
 </tr>"""
 
-    _THEAD = """<tr><th>グループ</th><th>週間売買代金</th><th>資金流入度</th><th>8週推移</th>
+    _THEAD = """<tr><th>グループ</th><th>週間売買代金</th><th>資金流入度</th><th>勢い(Z)</th><th>8週推移</th>
 <th>騰落率(中央値)</th><th>上昇銘柄比率</th><th>対TOPIX</th><th>主な売買銘柄</th></tr>"""
 
     def _section(title: str, sub: str, rlist: list) -> str:
@@ -3552,26 +3564,47 @@ def _build_flows_page(week_str: str | None = None) -> str:
         if r["group_type"] in by_type:
             by_type[r["group_type"]].append(r)
 
-    def _sorted_flow(rlist, min_turnover=0.0):
-        eligible = [r for r in rlist if f(r["flow_ratio"]) is not None and f(r["turnover"]) >= min_turnover]
-        return sorted(eligible, key=lambda r: -f(r["flow_ratio"]))
+    # 規模足切り: テーマは小グループのノイズ（紳士靴5銘柄等）を除くため売買代金100億+かつ8銘柄+。
+    # 業種・規模・スタイルは母数が大きいので足切り不要。
+    def _big_enough(r) -> bool:
+        if r["group_type"] == "theme":
+            return f(r["turnover"]) >= 100 and (r["n_stocks"] or 0) >= 8
+        return True
 
-    themes_in  = _sorted_flow(by_type["theme"], min_turnover=30)
-    theme_rows = themes_in[:15] + list(reversed(themes_in[-5:])) if len(themes_in) > 20 else themes_in
-    sector_rows = _sorted_flow(by_type["sector"])
-    size_rows   = _sorted_flow(by_type["size"])
-    style_rows  = _sorted_flow(by_type["style"])
+    def _inflow(rlist):
+        el = [r for r in rlist if r.get("flow_class") == "inflow" and _big_enough(r)]
+        return sorted(el, key=lambda r: -(f(r["zscore"]) or 0))
 
-    # ヒーロー: テーマ・業種横断の流入TOP10（規模・スタイルは母数が大きく1近傍のため除外）
-    hero_pool = [r for r in themes_in + sector_rows if f(r["turnover"]) >= 50]
-    hero_pool.sort(key=lambda r: -f(r["flow_ratio"]))
+    def _dump(rlist):
+        el = [r for r in rlist if r.get("flow_class") == "dump" and f(r["turnover"]) >= 100]
+        return sorted(el, key=lambda r: -(f(r["zscore"]) or 0))
+
+    def _by_z(rlist):
+        el = [r for r in rlist if f(r["zscore"]) is not None]
+        return sorted(el, key=lambda r: -(f(r["zscore"]) or 0))
+
+    theme_inflow = _inflow(by_type["theme"])[:20]
+    dump_all = _dump(by_type["theme"] + by_type["sector"])[:12]
+    sector_rows = _by_z(by_type["sector"])
+    size_rows   = _by_z(by_type["size"])
+    style_rows  = _by_z(by_type["style"])
+
+    # ヒーロー: テーマ・業種横断の「本物の資金流入」Zスコア上位（買い優勢のみ）
+    hero_pool = _inflow(by_type["theme"] + by_type["sector"])
     type_lbl = {"theme": "テーマ", "sector": "業種", "size": "規模", "style": "スタイル"}
     hero_cards = "".join(f"""<div class="fl-hero-card">
-  <span class="fl-hero-type">{type_lbl[r["group_type"]]}</span>
+  <span class="fl-hero-type">{type_lbl[r["group_type"]]} ・ 勢いZ{f(r["zscore"]):+.1f}</span>
   <span class="fl-hero-name"><a href="/screen?gtype={r["group_type"]}&gkey={_q(str(r["group_key"]))}" style="color:inherit">{_html.escape(r["group_label"] or r["group_key"])}</a></span>
-  <span class="fl-hero-flow" style="color:{'#f85149' if f(r["flow_ratio"]) >= 1.05 else '#8b949e'}">{f(r["flow_ratio"]):.2f}x</span>
-  <span class="fl-hero-sub">{_pct_span(f(r["ret_median"]))} ・ {f(r["turnover"]):,.0f}億円</span>
-</div>""" for r in hero_pool[:10])
+  <span class="fl-hero-flow" style="color:#f85149">{f(r["flow_ratio"]):.2f}x</span>
+  <span class="fl-hero-sub">{_pct_span(f(r["ret_median"]))} ・ {f(r["turnover"]):,.0f}億円 ・ 上昇{f(r["breadth"]) or 0:.0f}%</span>
+</div>""" for r in hero_pool[:10]) or '<div class="fl-n" style="padding:12px">該当なし</div>'
+
+    dump_section = ""
+    if dump_all:
+        dump_section = _section(
+            "⚠️ 投げ売り警戒（大商いだが下落）",
+            "売買代金は膨らんでいるが株価は下落＝売り優勢。逆張りの妙味 or さらなる下落の入口。半導体などセクター単位で出やすい",
+            dump_all)
 
     week_opts = "".join(
         f'<option value="{w}"{" selected" if w == sel_week else ""}>'
@@ -3582,7 +3615,7 @@ def _build_flows_page(week_str: str | None = None) -> str:
     body = f"""<style>{_FLOW_CSS}</style>
 <div class="page-header">
   <div class="page-title">資金フロー — どこにお金が流れているか</div><!-- flows-page -->
-  <div class="page-subtitle">週間売買代金シェアの変化から、資金が集まっているテーマ・業種・スタイルを捉える（スイングの初動探し）</div>
+  <div class="page-subtitle">「買われて集まっている」グループを Zスコア×株価上昇で抽出。売られて出来高が膨らむ「投げ売り」は別枠で警戒表示</div>
 </div>
 <div class="fl-wrap">
   <div class="fl-week-bar">
@@ -3591,19 +3624,21 @@ def _build_flows_page(week_str: str | None = None) -> str:
     {live_badge}
   </div>
   <div>
-    <div class="fl-section-title" style="margin-bottom:8px">🔥 今、資金流入が強いグループ TOP10</div>
+    <div class="fl-section-title" style="margin-bottom:8px">🔥 本物の資金流入 TOP10（買われて上昇中）</div>
     <div class="fl-hero">{hero_cards}</div>
   </div>
-  {_section("テーマ別", "kabutanテーマタグ基準・売買代金30億円以上。上位15=流入 / 下位5=流出", theme_rows)}
-  {_section("業種別（東証33業種）", "", sector_rows)}
+  {_section("資金流入テーマ（買い優勢）", "kabutanテーマ・売買代金100億+かつ8銘柄+。勢い(Z)＝過去13週の変動幅の何σ分か。母数の小さいノイズを排除し、上昇を伴うものだけ", theme_inflow)}
+  {dump_section}
+  {_section("業種別（東証33業種）", "勢い(Z)順。色: 赤=買い流入 / 青=売り優勢", sector_rows)}
   {_section("規模別（時価総額帯）", "大型に集まる=指数相場 / 小型に広がる=物色相場", size_rows)}
   {_section("スタイル別", "高配当・バリュー・グロース等。銘柄は複数スタイルに重複所属します", style_rows)}
   <div class="fl-help">
-    <b>資金流入度</b> = そのグループの週間売買代金シェア ÷ 過去13週の平均シェア。
-    <b>1.2x以上</b>なら明確に資金が向かっている状態。騰落率がプラスで上昇銘柄比率も高ければ「買われて集まっている」、
-    騰落率マイナスなら「売られて出来高が膨らんでいる（逃げ場・投げ）」の可能性が高い。<br>
-    スイング狙いは「流入度が1.05→1.2xへ上がり始め・騰落率プラス・上昇銘柄比率60%超」の組み合わせが初動シグナル。
-    8週推移の折れ線が右肩上がりなら資金シフトの持続性がある。
+    <b>資金流入度</b> = 週間売買代金シェア ÷ 過去13週平均シェア。<b>勢い(Z)</b> = 今週シェアが過去の変動幅の何σ分か
+    （母数の大小に依存せず「そのグループにとって異常な流入か」を測る。小グループの偶然のブレを排除）。<br>
+    売買代金だけでは「買われた」と「売られた」を区別できない。このページは<b>騰落率プラス・上昇銘柄比率高</b>を
+    満たす「買い優勢」だけを資金流入とし、<b>大商いだが下落</b>のものは「投げ売り警戒」に分けている。<br>
+    スイング狙いは「勢いZが2以上・8週推移が右肩上がり・上昇銘柄比率60%超」が初動シグナル。
+    投げ売り警戒は、下げ止まれば反発の起点になりうる（逆張り）ため要監視。
   </div>
 </div>"""
     return _page_html("資金フロー", body, active="flows")

@@ -31,7 +31,7 @@ import json
 import sys
 from collections import defaultdict
 from datetime import date, timedelta
-from statistics import median
+from statistics import median, pstdev
 from config import get_conn
 
 LOOKBACK_WEEKS = 26      # 計算対象の週数（13週ベースライン + 表示13週）
@@ -63,16 +63,27 @@ def ensure_table():
             turnover     DOUBLE,                 -- 億円
             turnover_share DOUBLE,               -- %
             flow_ratio   DOUBLE,                 -- 対13週平均シェア比
+            zscore       DOUBLE,                 -- 今週シェアの対過去13週 Zスコア（母数非依存の流入強度）
             ret_median   DOUBLE,                 -- %
             ret_mean     DOUBLE,                 -- %
             breadth      DOUBLE,                 -- %
             excess_topix DOUBLE,                 -- %pt
+            flow_class   VARCHAR(10),            -- inflow=流入 / dump=投げ売り / outflow=流出 / neutral
             last_trade_date DATE,                -- 週内の最終取引日
             top_stocks   TEXT,                   -- JSON [{code,name,ret,tv}]
             updated_at   DATETIME,
             PRIMARY KEY (week_end, group_type, group_key)
         )
     """)
+    # 既存テーブルへのカラム追加（初回マイグレーション）
+    for col, typedef in [
+        ("zscore", "DOUBLE"),
+        ("flow_class", "VARCHAR(10)"),
+    ]:
+        try:
+            cur.execute(f"ALTER TABLE money_flow_weekly ADD COLUMN {col} {typedef}")
+        except Exception:
+            pass
     conn.commit()
     cur.close()
     conn.close()
@@ -287,10 +298,36 @@ def compute(weeks: int = LOOKBACK_WEEKS) -> int:
         cur_share = sh_map.get(wk)
         past = [sh_map[w] for w in week_list[max(0, idx - BASELINE_WEEKS):idx] if w in sh_map]
         flow_ratio = (cur_share / (sum(past) / len(past))) if (cur_share and len(past) >= 4 and sum(past) > 0) else None
+
+        # Zスコア: 今週シェアが過去の変動幅の何σ分か。母数(銘柄数・売買代金)の大小に
+        # 依存せず「そのグループにとって異常な流入か」を測る。過去も普段からブレていた
+        # 小グループ（紳士靴等）は普段のσが大きいため、多少のシェア増ではZが上がらない＝ノイズ抑制。
+        zscore = None
+        if cur_share is not None and len(past) >= 4:
+            mean = sum(past) / len(past)
+            sd = pstdev(past)
+            if sd > 1e-9:
+                zscore = (cur_share - mean) / sd
+
         ret_med  = median(rets)
         ret_mean = sum(rets) / len(rets)
         breadth  = sum(1 for r in rets if r > 0) / len(rets) * 100
         excess   = (ret_med - topix_ret[wk]) if wk in topix_ret else None
+
+        # 資金フロー分類（表示・スコアリング用の一次判定）:
+        #   inflow  = 資金流入（買い優勢）: 流入が有意(Z高 or 流入度高) かつ 上昇・広がりあり
+        #   dump    = 投げ売り警戒（売り優勢の大商い）: 流入が有意 かつ 明確に下落 ← 貴重な逆張り/警戒情報
+        #   outflow = 流出（冷却）: シェア低下
+        #   neutral = それ以外
+        flow_class = "neutral"
+        strong = (zscore is not None and zscore >= 1.0) or (flow_ratio is not None and flow_ratio >= 1.15)
+        if strong and ret_med > 0 and breadth >= 50:
+            flow_class = "inflow"
+        elif strong and ret_med <= -3:
+            flow_class = "dump"
+        elif flow_ratio is not None and flow_ratio < 0.9:
+            flow_class = "outflow"
+
         tops = sorted(a["tops"], reverse=True)
         top_json = json.dumps([
             {"code": c, "name": names.get(c, c), "ret": round(r, 1), "tv": round(tv_ / 1e8, 1)}
@@ -301,24 +338,27 @@ def compute(weeks: int = LOOKBACK_WEEKS) -> int:
             wk, gtype, gkey, labels.get((gtype, gkey), gkey), len(rets),
             round(a["tv"] / 1e8, 1), round(cur_share, 3) if cur_share else None,
             round(flow_ratio, 3) if flow_ratio else None,
+            round(zscore, 2) if zscore is not None else None,
             round(ret_med, 2), round(ret_mean, 2), round(breadth, 1),
             round(excess, 2) if excess is not None else None,
-            last_dt, top_json, now,
+            flow_class, last_dt, top_json, now,
         ))
 
     cur.executemany("""
         INSERT INTO money_flow_weekly
             (week_end, group_type, group_key, group_label, n_stocks,
-             turnover, turnover_share, flow_ratio,
+             turnover, turnover_share, flow_ratio, zscore,
              ret_median, ret_mean, breadth, excess_topix,
-             last_trade_date, top_stocks, updated_at)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+             flow_class, last_trade_date, top_stocks, updated_at)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON DUPLICATE KEY UPDATE
             group_label=VALUES(group_label), n_stocks=VALUES(n_stocks),
             turnover=VALUES(turnover), turnover_share=VALUES(turnover_share),
-            flow_ratio=VALUES(flow_ratio), ret_median=VALUES(ret_median),
+            flow_ratio=VALUES(flow_ratio), zscore=VALUES(zscore),
+            ret_median=VALUES(ret_median),
             ret_mean=VALUES(ret_mean), breadth=VALUES(breadth),
-            excess_topix=VALUES(excess_topix), last_trade_date=VALUES(last_trade_date),
+            excess_topix=VALUES(excess_topix), flow_class=VALUES(flow_class),
+            last_trade_date=VALUES(last_trade_date),
             top_stocks=VALUES(top_stocks), updated_at=VALUES(updated_at)
     """, upserts)
     saved = len(upserts)
