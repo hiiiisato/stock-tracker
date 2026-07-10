@@ -2263,17 +2263,20 @@ _STOCK_CSS = """
   border-left: 2px solid #30363d; padding-left: 14px;
 }
 
-/* ─ 事業セグメント構成 ─ */
+/* ─ 事業セグメント構成（100%積み上げ棒 × 年度推移） ─ */
 .seg-box { margin-top: 14px; }
 .seg-title { font-size: 11px; font-weight: 600; color: #8b949e; margin-bottom: 8px; }
 .seg-title small { font-weight: 400; color: #484f58; }
-.seg-row { margin-bottom: 9px; }
-.seg-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 3px; }
-.seg-name { font-size: 12px; font-weight: 600; color: #c9d1d9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.seg-rev { font-size: 11px; color: #8b949e; white-space: nowrap; flex-shrink: 0; }
-.seg-bar { height: 6px; background: #21262d; border-radius: 3px; overflow: hidden; }
-.seg-bar-fill { height: 100%; border-radius: 3px; }
-.seg-stats { font-size: 11px; color: #8b949e; margin-top: 3px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.seg-yrow { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.seg-ylbl { font-size: 10px; color: #6e7681; width: 32px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.seg-ylbl-latest { color: #c9d1d9; font-weight: 600; }
+.seg-ybar { display: flex; flex: 1; height: 18px; border-radius: 4px; overflow: hidden; gap: 1px; }
+.seg-cell { display: flex; align-items: center; justify-content: center; min-width: 0; }
+.seg-cell span { font-size: 9px; color: rgba(13,17,23,0.85); font-weight: 700; white-space: nowrap; overflow: hidden; }
+.seg-legend { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+.seg-lg { font-size: 11px; color: #8b949e; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.seg-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; align-self: center; }
+.seg-lg-name { color: #c9d1d9; font-weight: 600; }
 .seg-up { color: #3fb950; }
 .seg-down { color: #f85149; }
 
@@ -5707,7 +5710,7 @@ def _build_stock_page(code: str) -> str:
     except Exception:
         pass
 
-    # 事業セグメント（edinet_segments.py が保存・最新年度のみ表示）
+    # 事業セグメント（edinet_segments.py が保存・直近3年分の構成比推移を表示）
     # テーブル未作成でも銘柄ページが落ちないようフォールバックする
     segments = []
     try:
@@ -5716,8 +5719,8 @@ def _build_stock_page(code: str) -> str:
                    revenue_yoy, oi_yoy, fiscal_year
             FROM company_segments
             WHERE code = %s AND segment_type IN ('reportable', 'other')
-              AND fiscal_year = (SELECT MAX(fiscal_year) FROM company_segments WHERE code = %s)
-            ORDER BY revenue DESC
+              AND fiscal_year > (SELECT MAX(fiscal_year) - 3 FROM company_segments WHERE code = %s)
+            ORDER BY fiscal_year, revenue DESC
         """, (code, code))
         segments = cur.fetchall()
     except Exception:
@@ -6490,46 +6493,76 @@ def _build_stock_page(code: str) -> str:
         kab_themes_html = f'<div class="co-theme-chips">{chips}</div>'
 
     # 事業セグメント構成（company_segments・edinet_segments.py が日次で更新）
+    # 直近3年の売上構成比を「100%積み上げ棒 × 年度」で並べて推移を見せる。
+    # 利益率・増収率は凡例（最新年度の数値）に集約してスペースを抑える。
     seg_html = ""
     if segments:
         seg_colors = ["#58a6ff", "#3fb950", "#d29922", "#bc8cff", "#f778ba", "#79c0ff", "#56d364", "#e3b341"]
 
-        def _yen(v):
-            if v is None:
-                return "-"
-            if abs(v) >= 1e12:
-                return f"{v/1e12:,.2f}兆円"
-            if abs(v) >= 1e8:
-                return f"{v/1e8:,.0f}億円"
-            return f"{v/1e6:,.0f}百万円"
+        # 年度→セグメント一覧（各年度は売上降順で入っている）
+        seg_by_year: dict[int, list] = {}
+        for name, rev, share, margin, rev_yoy, oi_yoy, fy in segments:
+            seg_by_year.setdefault(fy, []).append((name, rev, share, margin, rev_yoy, oi_yoy))
+        seg_years  = sorted(seg_by_year)
+        seg_latest = seg_years[-1]
 
-        def _pct_chg(v, label):
-            if v is None:
-                return ""
-            cls = "seg-up" if v >= 0 else "seg-down"
-            return f'<span>{label} <span class="{cls}">{v*100:+.1f}%</span></span>'
+        # 色はセグメント名単位で固定（年度間で同じ色 → 推移が追える）。
+        # 最新年度の売上降順を基準に、過去年度にしかないセグメントは末尾に足す。
+        seg_order = [s[0] for s in seg_by_year[seg_latest]]
+        for y in reversed(seg_years[:-1]):
+            for s in seg_by_year[y]:
+                if s[0] not in seg_order:
+                    seg_order.append(s[0])
+        seg_color_of = {n: seg_colors[i % len(seg_colors)] for i, n in enumerate(seg_order)}
 
-        seg_rows = []
-        for i, (name, rev, share, margin, rev_yoy, oi_yoy, _fy) in enumerate(segments):
-            share_pct = f"{share*100:.1f}%" if share is not None else "-"
-            width     = max(1.5, min(100, (share or 0) * 100))
-            color     = seg_colors[i % len(seg_colors)]
-            if margin is None:
-                margin_html = ""
-            elif margin < 0:
-                margin_html = '<span>利益率 <span class="seg-down">赤字</span></span>'
-            else:
-                margin_html = f"<span>利益率 {margin*100:.1f}%</span>"
-            stats = margin_html + _pct_chg(rev_yoy, "増収") + _pct_chg(oi_yoy, "増益")
-            seg_rows.append(f"""<div class="seg-row">
-  <div class="seg-head"><span class="seg-name">{_html_mod.escape(name)}</span><span class="seg-rev">{_yen(rev)}（{share_pct}）</span></div>
-  <div class="seg-bar"><div class="seg-bar-fill" style="width:{width:.1f}%;background:{color}"></div></div>
-  {f'<div class="seg-stats">{stats}</div>' if stats else ""}
-</div>""")
-        seg_fy = segments[0][6]
+        # 年度ごとの100%積み上げ棒（構成比は表示セグメント合計で正規化して満杯にする）
+        seg_bar_rows = []
+        for y in seg_years:
+            rows = [s for s in seg_by_year[y] if (s[2] or 0) > 0 or (s[1] or 0) > 0]
+            use_share = any(s[2] is not None for s in rows)
+            total = sum((s[2] if use_share else s[1]) or 0 for s in rows)
+            if total <= 0:
+                continue
+            cells = []
+            for s in sorted(rows, key=lambda s: seg_order.index(s[0])):
+                name = s[0]
+                w = ((s[2] if use_share else s[1]) or 0) / total * 100
+                if w < 0.5:
+                    continue
+                inner = f"<span>{w:.0f}%</span>" if w >= 14 else ""
+                cells.append(
+                    f'<div class="seg-cell" style="width:{w:.2f}%;background:{seg_color_of[name]}" '
+                    f'title="{_html_mod.escape(name)} {w:.1f}%（{y}年度）">{inner}</div>'
+                )
+            lbl_cls = "seg-ylbl seg-ylbl-latest" if y == seg_latest else "seg-ylbl"
+            seg_bar_rows.append(
+                f'<div class="seg-yrow"><span class="{lbl_cls}">{y}</span>'
+                f'<div class="seg-ybar">{"".join(cells)}</div></div>'
+            )
+
+        # 凡例（最新年度の構成比・利益率・増収率）
+        seg_legend = []
+        for name, _rev, share, margin, rev_yoy, _oi_yoy in seg_by_year[seg_latest]:
+            parts = []
+            if margin is not None:
+                parts.append('利益率 <span class="seg-down">赤字</span>' if margin < 0
+                             else f"利益率 {margin*100:.1f}%")
+            if rev_yoy is not None:
+                cls = "seg-up" if rev_yoy >= 0 else "seg-down"
+                parts.append(f'増収 <span class="{cls}">{rev_yoy*100:+.1f}%</span>')
+            share_lbl = f"{share*100:.1f}%" if share is not None else ""
+            stats = f'<span>（{"・".join(parts)}）</span>' if parts else ""
+            seg_legend.append(
+                f'<div class="seg-lg"><span class="seg-dot" style="background:{seg_color_of[name]}"></span>'
+                f'<span class="seg-lg-name">{_html_mod.escape(name)}</span>'
+                f'<span>{share_lbl}</span>{stats}</div>'
+            )
+
+        note = f"売上構成比の推移・数値は{seg_latest}年度" if len(seg_years) > 1 else f"売上構成比・{seg_latest}年度"
         seg_html = f"""<hr class="co-biz-divider"><div class="seg-box">
-  <div class="seg-title">事業セグメント構成 <small>（{seg_fy}年度・有価証券報告書より）</small></div>
-  {"".join(seg_rows)}
+  <div class="seg-title">事業セグメント構成 <small>（{note}・有価証券報告書より）</small></div>
+  {"".join(seg_bar_rows)}
+  <div class="seg-legend">{"".join(seg_legend)}</div>
 </div>"""
 
     biz_block = biz_summary_html or biz_full_html
