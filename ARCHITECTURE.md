@@ -30,6 +30,7 @@ J-Quants 無料枠・EDINET）のみで構成。
 | daily.yml | 平日17:00 リトライ | 同上 | GHA cron遅延・失敗への保険。daily_run側の重複ガードで完了済みならスキップ |
 | daily.yml | 平日20:30 イブニング便 | `python daily_run.py --evening` | 夜間の適時開示回収→市況考察→日次レポート確定版を上書き保存 |
 | misc_batch.yml | 毎日23:45 | `python edinet_texts.py --all` | EDINET本文ドリップ取得（edinetdb.jp 10件/日） |
+| misc_batch.yml | 毎日23:45 | `python edinet_segments.py --all` | 事業セグメント時系列（80件/日→90日周期巡回。edinetdb.jp 無料枠100/日をtextsと分け合う） |
 | misc_batch.yml | 5/15/25日 6:00 | `python fund_watch.py` | ファンド月次レポート取込 |
 
 **GitHub Actions cron の注意**: 発火は数十分〜数時間遅延することがある（実測で2時間超）。
@@ -76,6 +77,10 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - `fundamentals.py` — PER/PBR/時価総額等 → `stock_fundamentals`
 - `market_indices.py` — 海外・国内指数 → `market_index_prices`
 - `edinet_texts.py` — EDINET有報の定性テキスト全17セクション → `edinet_text_blocks`（edinetdb.jp経由・10件/日制限）
+- `edinet_segments.py` — 事業セグメント別の売上・利益・構成比の時系列（約7年分）→ `company_segments`
+  ＋取得状態 `company_segments_meta`（単一セグメント企業は404→`no_data`記録で再取得ループ防止）。
+  80件/日ドリップ（未取得は時価総額の大きい順→90日周期で巡回更新）。edinetdb.jp無料枠100コール/日をtextsと分け合う。
+  銘柄ページ「会社概要」内にセグメント構成バーとして表示（app.py `_build_stock_page`）
 - `edinet_business.py` — **EDINET公式API直接**で有報「事業の内容」→ `stocks.business_description`（詳細な事業内容）。
   日次は増分（直近7日の提出分のみ→各社年1回自動更新）。初回は `--backfill` で過去380日を一括。要 `EDINET_API_KEY`（無料）
 - `company_profile.py` — kabutan銘柄トップページから会社概要（簡単な事業内容）・kabutanテーマタグ・会社サイト
@@ -145,6 +150,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | テーマ | `kabutan_themes` | company_profile.py（kabutan付与タグ・1500超テーマ。資金フロー分析用） |
 | 分析 | `money_flow_weekly` | money_flow.py（グループ別の週次資金フロー） |
 | テキスト | `edinet_text_blocks` | edinet_texts.py |
+| 会社情報 | `company_segments` `company_segments_meta` | edinet_segments.py（セグメント別売上・利益の時系列） |
 | 開示 | `disclosures` `market_summary` | disclosures.py（TDnet全開示の蓄積＋日次市況考察） |
 | 会社情報 | `stocks.business_summary/website`（カラム） | company_profile.py（簡単な事業内容=kabutan概要） |
 | 会社情報 | `stocks.business_description`（カラム） | edinet_business.py / edinet_texts.py（詳細=有報「事業の内容」） |

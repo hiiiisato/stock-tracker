@@ -2236,6 +2236,20 @@ _STOCK_CSS = """
   border-left: 2px solid #30363d; padding-left: 14px;
 }
 
+/* ─ 事業セグメント構成 ─ */
+.seg-box { margin-top: 14px; }
+.seg-title { font-size: 11px; font-weight: 600; color: #8b949e; margin-bottom: 8px; }
+.seg-title small { font-weight: 400; color: #484f58; }
+.seg-row { margin-bottom: 9px; }
+.seg-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 3px; }
+.seg-name { font-size: 12px; font-weight: 600; color: #c9d1d9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seg-rev { font-size: 11px; color: #8b949e; white-space: nowrap; flex-shrink: 0; }
+.seg-bar { height: 6px; background: #21262d; border-radius: 3px; overflow: hidden; }
+.seg-bar-fill { height: 100%; border-radius: 3px; }
+.seg-stats { font-size: 11px; color: #8b949e; margin-top: 3px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.seg-up { color: #3fb950; }
+.seg-down { color: #f85149; }
+
 /* ─ 業績タブ ─ */
 .fin-ctrl-bar {
   display: flex; align-items: center; justify-content: space-between;
@@ -5651,6 +5665,22 @@ def _build_stock_page(code: str) -> str:
     cur.execute("SELECT theme FROM kabutan_themes WHERE code = %s ORDER BY theme", (code,))
     kab_themes = [r[0] for r in cur.fetchall()]
 
+    # 事業セグメント（edinet_segments.py が保存・最新年度のみ表示）
+    # テーブル未作成でも銘柄ページが落ちないようフォールバックする
+    segments = []
+    try:
+        cur.execute("""
+            SELECT segment_name, revenue, revenue_share, oi_margin,
+                   revenue_yoy, oi_yoy, fiscal_year
+            FROM company_segments
+            WHERE code = %s AND segment_type IN ('reportable', 'other')
+              AND fiscal_year = (SELECT MAX(fiscal_year) FROM company_segments WHERE code = %s)
+            ORDER BY revenue DESC
+        """, (code, code))
+        segments = cur.fetchall()
+    except Exception:
+        pass
+
     # 価格データ（直近3年）— adj_closeで連続チャートを表示（株式分割対応）
     # close/adj_closeの比率をopen/high/lowにも適用し、分割前後で連続した表示にする
     from_dt = date.today() - timedelta(days=365 * 3)
@@ -6376,11 +6406,55 @@ def _build_stock_page(code: str) -> str:
         chips = "".join(f'<span class="co-theme-chip">{_html_mod.escape(t)}</span>' for t in kab_themes)
         kab_themes_html = f'<div class="co-theme-chips">{chips}</div>'
 
+    # 事業セグメント構成（company_segments・edinet_segments.py が日次で更新）
+    seg_html = ""
+    if segments:
+        seg_colors = ["#58a6ff", "#3fb950", "#d29922", "#bc8cff", "#f778ba", "#79c0ff", "#56d364", "#e3b341"]
+
+        def _yen(v):
+            if v is None:
+                return "-"
+            if abs(v) >= 1e12:
+                return f"{v/1e12:,.2f}兆円"
+            if abs(v) >= 1e8:
+                return f"{v/1e8:,.0f}億円"
+            return f"{v/1e6:,.0f}百万円"
+
+        def _pct_chg(v, label):
+            if v is None:
+                return ""
+            cls = "seg-up" if v >= 0 else "seg-down"
+            return f'<span>{label} <span class="{cls}">{v*100:+.1f}%</span></span>'
+
+        seg_rows = []
+        for i, (name, rev, share, margin, rev_yoy, oi_yoy, _fy) in enumerate(segments):
+            share_pct = f"{share*100:.1f}%" if share is not None else "-"
+            width     = max(1.5, min(100, (share or 0) * 100))
+            color     = seg_colors[i % len(seg_colors)]
+            if margin is None:
+                margin_html = ""
+            elif margin < 0:
+                margin_html = '<span>利益率 <span class="seg-down">赤字</span></span>'
+            else:
+                margin_html = f"<span>利益率 {margin*100:.1f}%</span>"
+            stats = margin_html + _pct_chg(rev_yoy, "増収") + _pct_chg(oi_yoy, "増益")
+            seg_rows.append(f"""<div class="seg-row">
+  <div class="seg-head"><span class="seg-name">{_html_mod.escape(name)}</span><span class="seg-rev">{_yen(rev)}（{share_pct}）</span></div>
+  <div class="seg-bar"><div class="seg-bar-fill" style="width:{width:.1f}%;background:{color}"></div></div>
+  {f'<div class="seg-stats">{stats}</div>' if stats else ""}
+</div>""")
+        seg_fy = segments[0][6]
+        seg_html = f"""<hr class="co-biz-divider"><div class="seg-box">
+  <div class="seg-title">事業セグメント構成 <small>（{seg_fy}年度・有価証券報告書より）</small></div>
+  {"".join(seg_rows)}
+</div>"""
+
     biz_block = biz_summary_html or biz_full_html
     co_html = f"""<div class="co-box">
   <div class="co-section-title">会社概要</div>
   {f'<div class="co-facts-grid">{facts_html}</div>' if facts_html else ""}
   {f'<hr class="co-biz-divider"><div class="co-biz-summary">{biz_summary_html}</div>{biz_full_html}' if biz_block else ""}
+  {seg_html}
   {kab_themes_html}
 </div>"""
 

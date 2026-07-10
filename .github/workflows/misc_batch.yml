@@ -49,6 +49,9 @@ jobs:
             python fund_watch.py
           else
             python edinet_texts.py --all
+            # 事業セグメント（80件/日 ≒ 40日で全銘柄一巡 → 以後90日周期で巡回更新）。
+            # edinetdb.jp 無料枠100コール/日を edinet_texts(10件/日) と分け合う。
+            python edinet_segments.py --all
             # 会社概要・kabutanテーマタグの定期メンテ（150件/日 ≒ 月次で全銘柄一巡）。
             # 市場時間と無関係なので夕方のメイン便ではなく夜間に実行する。
             python company_profile.py
