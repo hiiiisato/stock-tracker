@@ -558,6 +558,25 @@ def _ensure_watchlist():
     conn.close()
 
 
+def _ensure_business_overviews():
+    conn = get_conn()
+    cur  = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS business_overviews (
+            code              VARCHAR(10) PRIMARY KEY,
+            overview          TEXT,
+            points_json       TEXT,
+            source_hash       CHAR(64),
+            source_updated_at DATETIME,
+            generated_by      VARCHAR(20),
+            updated_at        DATETIME
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 # ════════════════════════════════════════════════════════════════════════
 #  ホーム（ダッシュボード）
 # ════════════════════════════════════════════════════════════════════════
@@ -2218,6 +2237,14 @@ _STOCK_CSS = """
 .co-fact-val { font-size: 13px; font-weight: 600; color: #c9d1d9; }
 .co-biz-divider { border: none; border-top: 1px solid #21262d; margin: 14px 0; }
 .co-biz-summary { font-size: 13px; color: #c9d1d9; line-height: 1.75; }
+.co-biz-source { font-size: 11px; color: #6e7681; margin-top: 6px; }
+.co-biz-points { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; margin-top: 12px; }
+.co-biz-point-title { font-size: 11px; color: #8b949e; font-weight: 600; margin-bottom: 4px; }
+.co-biz-point-list { list-style: none; display: flex; flex-wrap: wrap; gap: 5px; }
+.co-biz-point-list li {
+  font-size: 11px; color: #c9d1d9; background: #0d1117;
+  border: 1px solid #21262d; border-radius: 10px; padding: 2px 8px;
+}
 .co-biz-toggle { margin-top: 10px; }
 .co-biz-toggle summary {
   font-size: 12px; color: #388bfd; cursor: pointer; user-select: none;
@@ -2295,7 +2322,10 @@ _STOCK_CSS = """
 .fin-forecast-row td { color: #ffa657 !important; }
 
 @media (max-width: 900px) { .fin-charts-grid { grid-template-columns: 1fr; } .fin-chart-box.full { grid-column: auto; } }
-@media (max-width: 768px) { .co-facts-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 768px) {
+  .co-facts-grid { grid-template-columns: repeat(2, 1fr); }
+  .co-biz-points { grid-template-columns: 1fr; }
+}
 """
 
 
@@ -5665,6 +5695,18 @@ def _build_stock_page(code: str) -> str:
     cur.execute("SELECT theme FROM kabutan_themes WHERE code = %s ORDER BY theme", (code,))
     kab_themes = [r[0] for r in cur.fetchall()]
 
+    # Codexが整理した事業概要（business_overviews）。未作成環境でも表示を継続する。
+    biz_overview = None
+    try:
+        cur.execute("""
+            SELECT overview, points_json, source_updated_at, generated_by
+            FROM business_overviews
+            WHERE code = %s
+        """, (code,))
+        biz_overview = cur.fetchone()
+    except Exception:
+        pass
+
     # 事業セグメント（edinet_segments.py が保存・最新年度のみ表示）
     # テーブル未作成でも銘柄ページが落ちないようフォールバックする
     segments = []
@@ -6381,12 +6423,50 @@ def _build_stock_page(code: str) -> str:
     ) if co_facts else ""
 
     # 事業内容:
+    #   整理 = business_overviews.overview（Codexが有報原文から整理）
     #   簡単 = stocks.business_summary（kabutan概要・company_profile.py が月次一巡で更新）
     #   詳細 = stocks.business_description（EDINET有報「事業の内容」・edinet_texts.py）
     biz_summary_html = ""
+    biz_points_html  = ""
     biz_full_html    = ""
-    if s_biz_summary:
+
+    if biz_overview and biz_overview[0]:
+        bo_text, bo_points_raw, bo_source_updated, _bo_generated_by = biz_overview
+        biz_summary_html = f'<p>{_html_mod.escape(bo_text)}</p>'
+        source_date = str(bo_source_updated)[:10] if bo_source_updated else (str(s_biz_updated)[:10] if s_biz_updated else "")
+        source_label = f"AI整理（有報 {source_date} 時点）" if source_date else "AI整理（有報時点）"
+        biz_summary_html += f'<div class="co-biz-source">{_html_mod.escape(source_label)}</div>'
+
+        try:
+            points = _json.loads(bo_points_raw) if bo_points_raw else {}
+        except Exception:
+            points = {}
+        point_defs = [
+            ("main_businesses", "主な事業"),
+            ("products_services", "商材・サービス"),
+            ("customers_or_channels", "顧客・販売先"),
+            ("features", "特徴"),
+        ]
+        point_blocks = []
+        for key, label in point_defs:
+            vals = points.get(key) if isinstance(points, dict) else None
+            if not isinstance(vals, list):
+                continue
+            chips = []
+            for v in vals[:8]:
+                text = str(v).strip()
+                if text:
+                    chips.append(f"<li>{_html_mod.escape(text)}</li>")
+            if chips:
+                point_blocks.append(
+                    f'<div class="co-biz-point"><div class="co-biz-point-title">{label}</div>'
+                    f'<ul class="co-biz-point-list">{"".join(chips)}</ul></div>'
+                )
+        if point_blocks:
+            biz_points_html = f'<div class="co-biz-points">{"".join(point_blocks)}</div>'
+    elif s_biz_summary:
         biz_summary_html = f'<p>{_html_mod.escape(s_biz_summary)}</p>'
+
     if s_biz_desc:
         biz_updated_str = str(s_biz_updated)[:10] if s_biz_updated else ""
         biz_src_note = f'（有価証券報告書 {biz_updated_str}）' if biz_updated_str else "（有価証券報告書）"
@@ -6398,7 +6478,10 @@ def _build_stock_page(code: str) -> str:
   <div class="co-biz-full">{body}</div>
 </details>"""
         if not biz_summary_html:
-            biz_summary_html = f'<p>{paragraphs[0]}</p>'
+            excerpt = paragraphs[0]
+            if len(excerpt) > 1200:
+                excerpt = excerpt[:1200] + "..."
+            biz_summary_html = f'<p>{excerpt}</p>'
 
     # kabutanテーマタグ（チップ表示）
     kab_themes_html = ""
@@ -6453,7 +6536,7 @@ def _build_stock_page(code: str) -> str:
     co_html = f"""<div class="co-box">
   <div class="co-section-title">会社概要</div>
   {f'<div class="co-facts-grid">{facts_html}</div>' if facts_html else ""}
-  {f'<hr class="co-biz-divider"><div class="co-biz-summary">{biz_summary_html}</div>{biz_full_html}' if biz_block else ""}
+  {f'<hr class="co-biz-divider"><div class="co-biz-summary">{biz_summary_html}{biz_points_html}</div>{biz_full_html}' if biz_block else ""}
   {seg_html}
   {kab_themes_html}
 </div>"""
@@ -7732,7 +7815,7 @@ def memo_delete():
 @app.route("/stock/<code>")
 def stock_detail(code: str):
     key  = f"stock_{code}"
-    html = _get(key)
+    html = None if request.args.get("refresh") == "1" else _get(key)
     if not html:
         html = _build_stock_page(code)
         _set(key, html)
@@ -7745,4 +7828,5 @@ def stock_detail(code: str):
 
 if __name__ == "__main__":
     _ensure_watchlist()
+    _ensure_business_overviews()
     app.run(debug=True, host="0.0.0.0", port=5001)
