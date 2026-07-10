@@ -214,10 +214,10 @@ def _target_codes(force: bool) -> list[str]:
     cur  = conn.cursor()
     cur.execute("""
         SELECT s.code FROM stocks s
-        LEFT JOIN price_stats p ON p.code = s.code
+        LEFT JOIN stock_fundamentals f ON f.code = s.code
         WHERE s.is_active = 1 AND s.edinet_code IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM company_segments_meta m WHERE m.code = s.code)
-        ORDER BY p.market_cap DESC
+        ORDER BY f.market_cap DESC
     """)
     new_codes = [r[0] for r in cur.fetchall()]
 
