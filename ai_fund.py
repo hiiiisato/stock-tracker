@@ -175,6 +175,18 @@ def ensure_tables():
             PRIMARY KEY (bench_date, rank_no)
         )
     """)
+    # 観点タグ別の実測エッジ（週次スナップショットで20営業日後リターンを実測。週1再計算）
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ai_fund_edge (
+            view_tag     VARCHAR(20) PRIMARY KEY,
+            horizon_days INT,
+            n            INT,
+            avg_ret      DOUBLE,
+            med_ret      DOUBLE,
+            win_rate     DOUBLE,
+            computed_at  DATETIME
+        )
+    """)
     # 決算発表予定日（kabutanのfinanceページから取得・キャッシュ。決算跨ぎのリスク管理用）
     cur.execute("""
         CREATE TABLE IF NOT EXISTS earnings_schedule (
@@ -489,6 +501,114 @@ def _candidates(cur, exclude: set[str]) -> list[dict]:
     return list(cands.values())[:36]
 
 
+# 観点タグ→過去スナップショットでの再現条件（price_stats_historyの列で表現できるもののみ。
+# 「AIの語るエッジ」を実測値で裏付ける／反証するための検証基盤）
+EDGE_VIEWS = {
+    "momentum": "chg25d >= 10 AND rsi14 < 78 AND close > ma25 AND chg5d > -4",
+    "dip":      "ma200_slope > 0 AND close > ma200 AND rsi14 < 42 AND chg25d > -12",
+    "breakout": "break_65d = 1 AND vol20_ratio >= 1.4 AND rsi14 < 80",
+    "baseline": "1 = 1",  # 全銘柄平均（比較基準）
+}
+EDGE_HORIZON = 20  # 営業日
+
+
+def _refresh_edge_stats(cur, conn, force: bool = False) -> None:
+    """観点タグ別の実測エッジを週次スナップショット×20営業日後リターンで計測し
+    ai_fund_edge に保存する（週1回再計算）。流動性・価格帯は候補生成と同じ足切り。"""
+    cur.execute("SELECT MAX(computed_at) FROM ai_fund_edge")
+    r = cur.fetchone()
+    if not force and r and r[0] and (datetime.now() - r[0]).days < 7:
+        return
+
+    print("  [AIファンド] 観点タグ別エッジを再計測中（週次）...")
+    cur.execute("SELECT DISTINCT date FROM daily_prices WHERE date >= '2024-10-01' ORDER BY date")
+    tdays = [row[0] for row in cur.fetchall()]
+    tidx = {d: i for i, d in enumerate(tdays)}
+    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history ORDER BY snapshot_date")
+    snaps = [row[0] for row in cur.fetchall()]
+
+    for tag, cond in EDGE_VIEWS.items():
+        rets: list[float] = []
+        for d0 in snaps:
+            i = tidx.get(d0)
+            if i is None or i + EDGE_HORIZON >= len(tdays):
+                continue
+            d2 = tdays[i + EDGE_HORIZON]
+            cur.execute(f"""
+                SELECT h.code, h.close FROM price_stats_history h
+                WHERE h.snapshot_date = %s AND h.turnover_20d >= 3
+                  AND h.close BETWEEN 300 AND 24000 AND {cond}
+            """, (d0,))
+            rows = cur.fetchall()
+            if not rows:
+                continue
+            codes = [row[0] for row in rows]
+            px0 = {row[0]: float(row[1]) for row in rows}
+            fmt = ",".join(["%s"] * len(codes))
+            cur.execute(f"""
+                SELECT code, COALESCE(adj_close, close) FROM daily_prices
+                WHERE date = %s AND code IN ({fmt})
+            """, [d2] + codes)
+            for code, px2 in cur.fetchall():
+                if px2 and px0.get(code, 0) > 0:
+                    rets.append((float(px2) / px0[code] - 1) * 100)
+        if not rets:
+            continue
+        rets.sort()
+        n = len(rets)
+        cur.execute("""
+            INSERT INTO ai_fund_edge (view_tag, horizon_days, n, avg_ret, med_ret, win_rate, computed_at)
+            VALUES (%s,%s,%s,%s,%s,%s,NOW())
+            ON DUPLICATE KEY UPDATE horizon_days=VALUES(horizon_days), n=VALUES(n),
+                avg_ret=VALUES(avg_ret), med_ret=VALUES(med_ret),
+                win_rate=VALUES(win_rate), computed_at=NOW()
+        """, (tag, EDGE_HORIZON, n, round(sum(rets) / n, 2), round(rets[n // 2], 2),
+              round(sum(1 for x in rets if x > 0) / n * 100, 1)))
+        print(f"    {tag}: 平均{sum(rets)/n:+.2f}% 中央値{rets[n//2]:+.2f}% 勝率{sum(1 for x in rets if x>0)/n*100:.0f}% (n={n})")
+    conn.commit()
+
+
+def _edge_summary(cur) -> str:
+    """プロンプト注入用のエッジ実測サマリー。"""
+    cur.execute("SELECT view_tag, horizon_days, n, avg_ret, med_ret, win_rate FROM ai_fund_edge")
+    rows = cur.fetchall()
+    if not rows:
+        return ""
+    parts = []
+    for tag, hz, n, avg, med, wr in sorted(rows, key=lambda r: r[0] != "baseline"):
+        label = "全銘柄平均" if tag == "baseline" else tag
+        parts.append(f"{label}: 平均{float(avg):+.1f}%/中央値{float(med):+.1f}%/勝率{float(wr):.0f}%(n={n})")
+    return f"当サイトの週次スナップショットで実測した{rows[0][1]}営業日後リターン（過去約1年半） — " + " ／ ".join(parts)
+
+
+def _progress_note(cur, code: str) -> str:
+    """通期会社予想に対する営業益の進捗率（コンセンサス不在の代替指標）。
+    例: ' 進捗率:営業益54%(Q2終了・単純按分50%)' — 按分超なら上振れ気配。"""
+    try:
+        cur.execute("""
+            SELECT period_end, operating_income FROM financials
+            WHERE code = %s AND period_type = 'A' AND period_end > CURDATE()
+            ORDER BY period_end LIMIT 1
+        """, (code,))
+        fc = cur.fetchone()
+        if not fc or not fc[1] or float(fc[1]) <= 0:
+            return ""
+        fy_end, op_fc = fc[0], float(fc[1])
+        cur.execute("""
+            SELECT COUNT(*), SUM(operating_income) FROM financials
+            WHERE code = %s AND period_type = 'Q'
+              AND period_end > DATE_SUB(%s, INTERVAL 1 YEAR) AND period_end <= CURDATE()
+              AND operating_income IS NOT NULL
+        """, (code, fy_end))
+        n_q, op_sum = cur.fetchone()
+        if not n_q or n_q == 0 or n_q >= 4 or op_sum is None:
+            return ""
+        progress = float(op_sum) / op_fc * 100
+        return f" 進捗率:営業益{progress:.0f}%(Q{n_q}終了・単純按分{n_q*25}%)"
+    except Exception:
+        return ""
+
+
 def _earnings_dates(cur, conn, codes: list[str]) -> dict:
     """各銘柄の次回決算発表予定日を返す。kabutanのfinanceページから取得し
     earnings_schedule にキャッシュ（3日で再取得・過ぎた日付も再取得）。
@@ -553,8 +673,10 @@ def _fnum(v, nd=1):
 
 
 def _build_prompt(state, positions, cands, market_ctx, n_slots, est_cash,
-                  policy_prev, feedback, inflow_themes, movers, earn_map=None) -> str:
+                  policy_prev, feedback, inflow_themes, movers, earn_map=None,
+                  edge_line="", prog_map=None) -> str:
     earn_map = earn_map or {}
+    prog_map = prog_map or {}
     pos_lines = []
     for p in positions:
         style_tag = f"[{p.get('style') or '通常'}] " if p.get("style") == "先回り" else ""
@@ -573,7 +695,7 @@ def _build_prompt(state, positions, cands, market_ctx, n_slots, est_cash,
             f"5日{_fnum(c['chg5d'])}% 25日{_fnum(c['chg25d'])}% 75日{_fnum(c['chg75d'])}% RSI{_fnum(c['rsi14'],0)} "
             f"52週高値比{_fnum(c['dev_high52w'])}% 出来高比{_fnum(c['vol20_ratio'])}x 売買代金{_fnum(c['turnover_20d'],0)}億 "
             f"PER{_fnum(c['per'])} ROE{_fnum(c['roe'])}% 理論株価比{_fnum(c['theo_ratio'],2)} 営業益成長{_fnum(c['op_growth'],0)}%"
-            f"{_earn_note(earn_map, c['code'])}{extra}"
+            f"{_earn_note(earn_map, c['code'])}{prog_map.get(c['code'], '')}{extra}"
         )
     return f"""あなたは日本株のファンドマネージャーです。模擬ファンドを運用しています。
 
@@ -604,6 +726,11 @@ def _build_prompt(state, positions, cands, market_ctx, n_slots, est_cash,
 {market_ctx}
 - 資金流入テーマ: {inflow_themes or '—'}
 - 直近1週間の上昇上位: {movers or '—'}
+
+# 観点タグ別の実測エッジ（重要: カタリストや投資基準で統計を語るときは、この実測値を引用する。
+# 実測が「全銘柄平均」を上回らない観点を過信しない。数値の創作は厳禁）
+{edge_line or '（計測データなし）'}
+※候補行の「進捗率」= 通期会社予想の営業益に対する四半期累計の消化率。単純按分を大きく超えていれば上方修正の素地
 
 # 現在のポートフォリオ（現金 {state['cash']/10000:,.0f}万円）
 {chr(10).join(pos_lines) if pos_lines else '（なし・初回構築）'}
@@ -736,7 +863,13 @@ def decide() -> int:
             cands.append(cands_extra)
 
     # ── 決算発表予定日（保有＋候補。決算跨ぎの判断材料） ──
-    earn_map = _earnings_dates(cur, conn, sorted(held | {c["code"] for c in cands}))
+    all_codes = sorted(held | {c["code"] for c in cands})
+    earn_map = _earnings_dates(cur, conn, all_codes)
+
+    # ── 実測エッジ（週1再計測）と通期予想への進捗率 ──
+    _refresh_edge_stats(cur, conn)
+    edge_line = _edge_summary(cur)
+    prog_map = {c2: _progress_note(cur, c2) for c2 in all_codes}
 
     # ── 市況コンテキスト（AI考察 + TOPIXレジーム） ──
     cur.execute("SELECT ai_commentary FROM market_summary ORDER BY summary_date DESC LIMIT 1")
@@ -791,7 +924,8 @@ def decide() -> int:
     est_cash = state["cash"] + sum(p["close"] * p["shares"] * 0.98 for p in forced_sells)
 
     prompt = _build_prompt(state, positions, cands, market_ctx, n_slots, est_cash,
-                           policy_prev, feedback, inflow_themes, movers, earn_map)
+                           policy_prev, feedback, inflow_themes, movers, earn_map,
+                           edge_line, prog_map)
     out = _call_gemini(prompt)
 
     sells, buys, market_view, policy_new, bench_out = [], [], "", "", []
