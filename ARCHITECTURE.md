@@ -70,7 +70,12 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 ### データ取得
 - `master.py` — 銘柄マスタ・取引カレンダー（J-Quants）
 - `prices_yahoo.py` — 日次価格（Yahoo Finance chart API・並列・差分）
-- `splits.py` — 株式分割・併合。J-Quants公式(AdjFactor/AdjC)を正とし、日次はYahoo splitsで暫定検知。`_verify_split_reflected()` が実際の価格変化を検証してから調整適用（二重調整防止）
+- `splits.py` — 株式分割・併合。CRSP等の業界標準（生値＋調整係数分離・イベントは公式コーポレートアクション由来）に倣った多層防御:
+  1. **J-Quants公式**(AdjFactor/AdjC)が正（12週遅延）。AdjC採用日には係数を重ねない
+  2. 直近窓はYahoo splitsで暫定検知 → **TDnet適時開示（disclosures・事前公表）で裏取り**。
+     裏取りあり=通常帯(0.7-1.4)/なし=厳格帯(0.85-1.18)で `_verify_split_reflected()` の段差検証
+  3. 係数の**適用時にも毎回検証**（登録済みイベントでもcloseに段差が無ければ適用しない＝最後の防波堤）
+  4. `run_integrity_check()` — 「closeは正常なのにadjだけ跳ねる」箇所を毎晩スキャン→自動修復（daily_runから呼出）
 - `split_backfill.py` — splits.py から `recompute_change_pct` が使われる（他は初期バックフィルの名残）
 - `dividends.py` / `financials.py` — J-Quants 配当・財務
 - `financials_kabutan.py` — kabutan スクレイピングで業績実績+会社予想（financialsに未来日付期=予想として入る）

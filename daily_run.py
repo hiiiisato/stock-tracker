@@ -194,7 +194,7 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
     #   - 週次で J-Quants 公式(AdjC)に同期して確定・上書き（splits.run_daily 内は日次の暫定のみ）。
     #   価格急変ヒューリスティックは値幅制限撤廃等で誤判定するため廃止。
     if not rankings_only:
-        print("\n[分割対応] 直近窓の新規分割を確認中（J-Quants/Yahoo）...")
+        print("\n[分割対応] 直近窓の新規分割を確認中（J-Quants/Yahoo・TDnet裏取り）...")
         try:
             from splits import run_daily as splits_run_daily
             n_changed = splits_run_daily()
@@ -203,6 +203,15 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
             print(f"  エラー: {e}")
             traceback.print_exc()
             _log("splits_daily", "failed", error=str(e))
+
+        # 調整アーティファクト監視（closeは正常なのにadjだけ跳ねる箇所を検出→自動修復）
+        try:
+            from splits import run_integrity_check
+            n_fixed = run_integrity_check()
+            _log("splits_integrity", "done", n_fixed)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("splits_integrity", "failed", error=str(e))
 
     # 4. 配当・財務・ファンダメンタルズ更新（毎週月曜のみ）
     if datetime.now().weekday() == 0 and not rankings_only:

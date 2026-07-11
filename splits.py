@@ -183,7 +183,8 @@ def _bulk_upsert_adj(rows: list[tuple]) -> int:
     return done
 
 
-def _verify_split_reflected(series: list[tuple], ex_date: str, ratio: float) -> bool:
+def _verify_split_reflected(series: list[tuple], ex_date: str, ratio: float,
+                            band: tuple[float, float] = (0.7, 1.4)) -> bool:
     """Yahoo の close 系列(dateでソート済み, [(date_str, close), ...])を見て、
     ex_date の除権が「生 close にそのまま反映されている(=段差がある)」か検証する。
 
@@ -210,11 +211,40 @@ def _verify_split_reflected(series: list[tuple], ex_date: str, ratio: float) -> 
     if 0.75 < expected < 1.333:
         return False
     rel = actual / expected
-    # 実際の変化率が期待比率の 0.7〜1.4 倍に収まる場合のみ「反映されている」とみなす。
+    # 実際の変化率が期待比率の band（既定 0.7〜1.4倍）に収まる場合のみ「反映されている」とみなす。
     # 上限1.4が重要: 1:2分割(ratio=0.5)が close に未反映だと rel≈2.0 になるため、
     # 旧上限2.0では素通りして二重調整を起こしていた（8031三井物産などで実害）。
     # 下限0.7も同様に 2:1併合(ratio=2.0) の未反映(rel≈0.5)を弾く。
-    return 0.7 <= rel <= 1.4
+    # band はTDnet裏取りの有無で切り替える（裏取りなし→(0.85,1.18)の厳格帯）。
+    return band[0] <= rel <= band[1]
+
+
+def _tdnet_split_disclosed(cur, code: str, ex_date: str) -> bool | None:
+    """除権日 ex_date の分割/併合について、TDnet適時開示（事前公表）の裏取りを取る。
+
+    日本では分割・併合は効力発生日の数週間〜数ヶ月前に適時開示で確定するため、
+    disclosures テーブル（毎日蓄積）に開示があるはず。
+    戻り値: True=開示あり / False=開示なし / None=判定不能（開示DBのカバー期間外）
+    """
+    ex = datetime.strptime(ex_date, "%Y-%m-%d")
+    cur.execute("""
+        SELECT COUNT(*) FROM disclosures
+        WHERE code = %s AND disclosed_at BETWEEN %s AND %s
+          AND (title LIKE '%%株式分割%%' OR title LIKE '%%株式併合%%'
+               OR title LIKE '%%投資口分割%%' OR title LIKE '%%投資口併合%%')
+    """, (code, ex - timedelta(days=120), ex))
+    if cur.fetchone()[0] > 0:
+        return True   # 開示が見つかった → カバー期間に関係なく裏取り成立
+
+    # 見つからなかった場合のみ、開示DBのカバー期間を考慮する。
+    # 開示は通常、除権日の2週間以上前に出るため、探索窓の大半が
+    # カバー範囲より前なら「無いことを確認できた」とは言えない（判定不能）。
+    cur.execute("SELECT MIN(disclosed_at) FROM disclosures")
+    row = cur.fetchone()
+    coverage_start = row[0] if row else None
+    if coverage_start is None or ex - timedelta(days=30) < coverage_start:
+        return None
+    return False
 
 
 def rebuild(codes4: list[str] | None = None, full: bool = True, use_jquants: bool = True):
@@ -418,12 +448,25 @@ def run_daily(weeks: int = 16) -> int:
         series_by_code[c].append((str(dt), float(close)))
     cur.close(); conn.close()
 
+    # 二段構えの採用判定（業界標準に倣い、価格からの推測イベントは公式情報で裏取りする）:
+    #  1. TDnet適時開示（事前公表・disclosuresテーブル）に分割/併合の開示があるか
+    #  2. close 系列に期待比率どおりの段差が実在するか
+    # 裏取りが取れた場合は通常帯(0.7-1.4)、取れない/判定不能の場合は厳格帯(0.85-1.18)で
+    # 段差検証する（外部証拠が弱いほど内部証拠に強さを求める）。
+    conn = get_conn(); cur = conn.cursor()
     verified = []
     for c, dt, r, src in yahoo_new:
-        if _verify_split_reflected(series_by_code.get(c, []), dt, r):
+        series = series_by_code.get(c, [])
+        tdnet = _tdnet_split_disclosed(cur, c, dt)
+        band = (0.7, 1.4) if tdnet else (0.85, 1.18)
+        if _verify_split_reflected(series, dt, r, band=band):
+            label = "TDnet裏取りあり" if tdnet else ("TDnet裏取りなし→厳格帯で採用" if tdnet is False else "TDnet判定不能→厳格帯で採用")
+            print(f"  [分割] 採用 {c} {dt} ratio={r}（{label}）")
             verified.append((c, dt, r, src))
         else:
-            print(f"  [分割] 除外 {c} {dt}: close に段差なし（偽イベント/調整済みcloseの疑い） ratio={r}")
+            reason = "close に段差なし" if tdnet else "close の段差が厳格帯外（TDnet裏取りなし）"
+            print(f"  [分割] 除外 {c} {dt}: {reason} ratio={r}")
+    cur.close(); conn.close()
     if not verified:
         print("  [分割] 検証を通過した新規分割なし")
         return 0
@@ -440,11 +483,49 @@ def run_daily(weeks: int = 16) -> int:
     return len(changed)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 整合性監視: 調整アーティファクトの検出と自己修復
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_integrity_check(days: int = 45) -> int:
+    """「close の日次変化は通常なのに adj_close だけが跳ねている」箇所
+    （＝調整の掛け間違いアーティファクト）を直近 days 日からスキャンし、
+    検出銘柄の adj_close を再構築して自己修復する。
+
+    正常な分割調整は逆パターン（close に段差・adj は連続）なので誤検出しない。
+    2026-07 の二重調整障害（フジクラ等）を受けて導入した恒常監視。
+    夜間バッチ (daily_run) が毎日呼ぶ。データ品質の最後の砦。"""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT code FROM (
+          SELECT code,
+                 adj_close / LAG(adj_close) OVER w AS ra,
+                 close     / LAG(close)     OVER w AS rc
+          FROM daily_prices
+          WHERE date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+            AND close > 0 AND adj_close > 0
+          WINDOW w AS (PARTITION BY code ORDER BY date)
+        ) t
+        WHERE rc BETWEEN 0.7 AND 1.4 AND (ra < 0.7 OR ra > 1.4)
+    """, (days,))
+    bad = sorted(r[0] for r in cur.fetchall())
+    cur.close(); conn.close()
+    if not bad:
+        print("  [整合性] 調整アーティファクトなし")
+        return 0
+    print(f"  [整合性] 調整アーティファクト検出: {len(bad)}銘柄 {bad[:10]} → adj_close を再構築して修復")
+    rebuild(bad, full=False)
+    return len(bad)
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     if "--backfill" in args:
         rebuild(full=True, use_jquants="--no-jquants" not in args)
     elif "--daily" in args:
         run_daily()
+        run_integrity_check()
+    elif "--check" in args:
+        run_integrity_check()
     else:
-        print("使い方: python splits.py [--backfill [--no-jquants] | --daily]")
+        print("使い方: python splits.py [--backfill [--no-jquants] | --daily | --check]")
