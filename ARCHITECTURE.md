@@ -122,6 +122,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | `/` | ホーム（指数・注目銘柄） |
 | `/stock/<code>` | 銘柄詳細（チャート・業績・理論株価・メモ） |
 | `/screen` + `/api/screen` | スクリーニング（条件stateはDOM非依存のJSオブジェクト `_cmin/_cmax/_cflg`） |
+| `/api/period_stats` | 任意期間（days=N or from=日付）の騰落率・高安レンジ幅。スクリーニングの期間騰落条件📅で使用。バックテストでは期間条件は無視される |
 | `/api/screen_asof` `/api/backtest` `/api/backtest_dates` | バックテスト（週次スナップショット、TOPIX ETF 1306がベンチマーク） |
 | `/valuation` + `/api/theoretical/<code>` | 理論株価ランキング・個別シミュレーション |
 | `/disclosures` | 適時開示（市況考察・好材料ハイライト・関連銘柄サジェスト・全開示一覧） |

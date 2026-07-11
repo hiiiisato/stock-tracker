@@ -2461,6 +2461,15 @@ input.sc-range-input::-moz-range-thumb {
 
 /* ── 結果ヘッダー ── */
 .sc-result-header { display:flex; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px; }
+.sc-period-bar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+.sc-period-lbl { font-size:12px; color:#8b949e; font-weight:600; }
+.sc-period-btn {
+  background:#21262d; border:1px solid #30363d; border-radius:12px;
+  color:#8b949e; font-size:12px; padding:3px 12px; cursor:pointer; transition:all 0.15s;
+}
+.sc-period-btn:hover { border-color:#58a6ff; color:#58a6ff; }
+.sc-period-btn.active { background:#1f6feb; border-color:#1f6feb; color:#fff; }
+.sc-period-note { font-size:11px; color:#6e7681; }
 .sc-count { font-size:13px; color:#8b949e; }
 .sc-sort { background:#21262d; border:1px solid #30363d; border-radius:5px; color:#c9d1d9; font-size:13px; padding:4px 8px; cursor:pointer; margin-left:auto; }
 
@@ -4365,6 +4374,17 @@ def _build_screen_page() -> str:
     </div>
   </div>
 
+  <div class="sc-period-bar" id="scPeriodBar">
+    <span class="sc-period-lbl">📅 期間騰落:</span>
+    <button class="sc-period-btn active" data-days="">なし</button>
+    <button class="sc-period-btn" data-days="30">1ヶ月</button>
+    <button class="sc-period-btn" data-days="60">2ヶ月</button>
+    <button class="sc-period-btn" data-days="90">3ヶ月</button>
+    <button class="sc-period-btn" data-days="180">半年</button>
+    <button class="sc-period-btn" data-days="ytd">年初来</button>
+    <span class="sc-period-note" id="scPeriodNote"></span>
+  </div>
+
   <div class="sc-result-header">
     <span class="sc-count" id="sc-count">読み込み中...</span>
     <div style="display:flex;gap:4px;margin:0 6px">
@@ -4377,6 +4397,9 @@ def _build_screen_page() -> str:
       <option value="chg25d-desc">25日騰落 高い順</option>
       <option value="chg25d-asc">25日騰落 低い順</option>
       <option value="chg75d-desc">75日騰落 高い順</option>
+      <option value="period_chg-desc">期間騰落 高い順</option>
+      <option value="period_chg-asc">期間騰落 低い順</option>
+      <option value="period_range-asc">期間高安幅 狭い順</option>
       <option value="vol20_ratio-desc">出来高比 高い順</option>
       <option value="turnover_20d-desc">売買代金 高い順</option>
       <option value="rsi14-asc">RSI 低い順</option>
@@ -4439,6 +4462,8 @@ def _build_screen_page() -> str:
     <input id="f-vr625-min" type="hidden"><input id="f-vr625-max" type="hidden">
     <input id="f-turn-min" type="hidden"><input id="f-turn-max" type="hidden">
     <input id="f-chg25-min" type="hidden"><input id="f-chg25-max" type="hidden">
+    <input id="f-pchg-min" type="hidden"><input id="f-pchg-max" type="hidden">
+    <input id="f-prange-min" type="hidden"><input id="f-prange-max" type="hidden">
     <input id="f-stk-min" type="hidden"><input id="f-stk-max" type="hidden">
     <input id="f-vol60-min" type="hidden"><input id="f-vol60-max" type="hidden">
     <input id="f-ytdh-min" type="hidden"><input id="f-ytdl-min" type="hidden">
@@ -4553,6 +4578,7 @@ def _build_screen_page() -> str:
     code:{{h:'コード',cls:'sc-code'}},name:{{h:'銘柄名',cls:'sc-name'}},market:{{h:'市場',cls:''}},
     close:{{h:'株価',cls:'num'}},change_pct:{{h:'前日比',cls:'num'}},
     chg5d:{{h:'5日',cls:'num'}},chg25d:{{h:'25日',cls:'num'}},chg75d:{{h:'75日',cls:'num'}},
+    period_chg:{{h:'期間騰落',cls:'num'}},period_range:{{h:'期間高安幅',cls:'num'}},
     dev_ma25:{{h:'MA25乖離',cls:'num'}},dev_ma75:{{h:'MA75乖離',cls:'num'}},
     dev_high52w:{{h:'52週高値乖離',cls:'num'}},rsi14:{{h:'RSI',cls:'num'}},
     macd:{{h:'MACD',cls:'num'}},macd_signal:{{h:'Signal',cls:'num'}},macd_gc:{{h:'GC',cls:'num'}},
@@ -4575,6 +4601,7 @@ def _build_screen_page() -> str:
     'f-vol-min','f-vol-max','f-vr625-min','f-vr625-max',
     'f-turn-min','f-turn-max',
     'f-chg25-min','f-chg25-max',
+    'f-pchg-min','f-pchg-max','f-prange-min','f-prange-max',
     'f-stk-min','f-stk-max','f-vol60-min','f-vol60-max',
     'f-ytdh-min','f-ytdl-min','f-nkrel-min','f-nkrel-max',
     'f-per-min','f-per-max','f-pbr-min','f-pbr-max',
@@ -4728,7 +4755,8 @@ def _build_screen_page() -> str:
     }}
     if(col==='market')return'<span style="font-size:11px;color:#8b949e">'+escHtml(s.market)+'</span>';
     if(col==='close')return v?v.toLocaleString('ja-JP',{{maximumFractionDigits:0}}):dash;
-    if(['change_pct','chg5d','chg25d','chg75d','dev_ma25','dev_ma75','dev_high52w'].indexOf(col)>=0)return fmtPct(v);
+    if(['change_pct','chg5d','chg25d','chg75d','dev_ma25','dev_ma75','dev_high52w','period_chg'].indexOf(col)>=0)return fmtPct(v);
+    if(col==='period_range')return fmtNum(v,1,'%');
     if(['roe','op_margin','roic','rev_growth','op_growth','eps_growth'].indexOf(col)>=0)return fmtGrowth(v);
     if(col==='rsi14')return fmtNum(v,1,'');
     if(col==='macd'||col==='macd_signal')return fmtNum(v,2,'');
@@ -4783,6 +4811,10 @@ def _build_screen_page() -> str:
     if(!mx('turnover_20d','f-turn-max'))return false;
     if(!mn('chg25d','f-chg25-min'))return false;
     if(!mx('chg25d','f-chg25-max'))return false;
+    if(!mn('period_chg','f-pchg-min'))return false;
+    if(!mx('period_chg','f-pchg-max'))return false;
+    if(!mn('period_range','f-prange-min'))return false;
+    if(!mx('period_range','f-prange-max'))return false;
     if(!mn('stoch_k','f-stk-min'))return false;
     if(!mx('stoch_k','f-stk-max'))return false;
     if(!mn('volatility_60d','f-vol60-min'))return false;
@@ -4858,6 +4890,8 @@ def _build_screen_page() -> str:
   }}
 
   function render(){{
+    /* 期間騰落条件が有効なのに期間未選択なら、1ヶ月を自動選択してデータ取得後に再描画 */
+    if(!_pSel&&!_pLoading&&periodCondActive()){{setPeriod('30');return;}}
     var cols=getCols();
     var filtered=stocks.filter(passFilter);
     filtered.sort(function(a,b){{
@@ -4914,6 +4948,8 @@ def _build_screen_page() -> str:
     {{cat:'テクニカル',id:'d52h',  lbl:'52週高値乖離',field:'dev_high52w', minId:'f-d52h-min', maxId:'f-d52h-max', unit:'%', step:1}},
     {{cat:'テクニカル',id:'d52l',  lbl:'52週安値上昇',field:'dev_low52w',  minId:'f-d52l-min', maxId:'f-d52l-max', unit:'%', step:1}},
     {{cat:'テクニカル',id:'chg25', lbl:'25日騰落',   field:'chg25d',       minId:'f-chg25-min',maxId:'f-chg25-max',unit:'%', step:1}},
+    {{cat:'テクニカル',id:'pchg',  lbl:'期間騰落率📅', field:'period_chg',   minId:'f-pchg-min', maxId:'f-pchg-max', unit:'%', step:1}},
+    {{cat:'テクニカル',id:'prange',lbl:'期間高安幅📅', field:'period_range', minId:'f-prange-min',maxId:'f-prange-max',unit:'%',step:1}},
     {{cat:'テクニカル',id:'vol',   lbl:'出来高比(20日)',field:'vol20_ratio',minId:'f-vol-min',maxId:'f-vol-max',unit:'x', step:0.1}},
     {{cat:'テクニカル',id:'vr625', lbl:'出来高比(6/25日)',field:'vol_ratio_6_25',minId:'f-vr625-min',maxId:'f-vr625-max',unit:'x',step:0.1}},
     {{cat:'テクニカル',id:'stk',   lbl:'ストキャス%K', field:'stoch_k',    minId:'f-stk-min',  maxId:'f-stk-max',  unit:'',  step:1}},
@@ -5127,6 +5163,10 @@ def _build_screen_page() -> str:
     fill.style.width=Math.max(0,Math.min(100,p2-p1))+'%';
   }}
   function showHistPanel(cond){{
+    /* 期間騰落系の条件は先に期間データを取得（未選択なら1ヶ月を自動選択） */
+    if((cond.id==='pchg'||cond.id==='prange')&&!_pSel&&!_pLoading&&stocks.length){{
+      setPeriod('30',function(){{showHistPanel(cond);}});return;
+    }}
     document.getElementById('scCondPicker').style.display='none';
     scHistCond=cond;
     var wrap=document.getElementById('scHistWrap');wrap.style.display='';
@@ -5443,8 +5483,53 @@ def _build_screen_page() -> str:
   var scPgNext=document.getElementById('sc-pg-next');
   if(scPgNext)scPgNext.addEventListener('click',function(){{SC_PAGE++;refreshScGrid();}});
 
+  /* ── 期間騰落（任意期間の騰落率・高安幅） ── */
+  /* 状態はDOMでなくJS変数で保持（bfcache対策の既存方針に合わせる） */
+  var _pSel=null,_pLoading=false;
+  function periodCondActive(){{
+    return _cmin['pchg']!==undefined||_cmax['pchg']!==undefined||
+           _cmin['prange']!==undefined||_cmax['prange']!==undefined;
+  }}
+  function setPeriod(sel,cb){{
+    _pSel=sel||null;
+    document.querySelectorAll('.sc-period-btn').forEach(function(b){{
+      b.classList.toggle('active',(b.dataset.days||'')===(sel||''));
+    }});
+    var note=document.getElementById('scPeriodNote');
+    if(!_pSel){{
+      stocks.forEach(function(s){{s.period_chg=undefined;s.period_range=undefined;}});
+      var i=DEFAULT_COLS.indexOf('period_chg');
+      if(i>=0)DEFAULT_COLS.splice(i,2);
+      if(note)note.textContent='';
+      render();return;
+    }}
+    var q=(sel==='ytd')?('from='+(new Date()).getFullYear()+'-01-01'):('days='+sel);
+    _pLoading=true;
+    if(note)note.textContent='計算中…';
+    fetch('/api/period_stats?'+q).then(function(r){{return r.json();}}).then(function(d){{
+      _pLoading=false;
+      var st=d.stats||{{}};
+      stocks.forEach(function(s){{
+        var v=st[s.code];
+        s.period_chg=v?v[0]:null;s.period_range=v?v[1]:null;
+      }});
+      if(note)note.textContent=(d.from||'')+' 〜 '+(d.to||'');
+      if(DEFAULT_COLS.indexOf('period_chg')<0)DEFAULT_COLS.splice(4,0,'period_chg','period_range');
+      render();
+      if(cb)cb();
+    }}).catch(function(){{
+      _pLoading=false;
+      if(note)note.textContent='取得に失敗しました';
+    }});
+  }}
+  document.querySelectorAll('.sc-period-btn').forEach(function(b){{
+    b.addEventListener('click',function(){{setPeriod(b.dataset.days||null);}});
+  }});
+
   fetch('/api/screen').then(function(r){{return r.json();}}).then(function(data){{
-    stocks=data;render();
+    stocks=data;
+    if(_pSel){{setPeriod(_pSel);return;}}
+    render();
     STRATS.forEach(function(st,idx){{
       var card=document.querySelector('.sc-preset-card[data-strat="'+idx+'"]');
       if(!card)return;
@@ -5497,9 +5582,11 @@ def _build_screen_page() -> str:
     var note=document.getElementById('scBtNote'), res=document.getElementById('scBtResult');
     if(!d1||!d2){{ note.textContent='開始日・終了日を選んでください。'; return; }}
     if(d1>=d2){{ note.textContent='開始日は終了日より前にしてください。'; return; }}
-    // 理論株価系の条件は過去データが無いため一時的に外す
+    // 理論株価系・期間騰落系の条件は過去スナップショットに無いため一時的に外す
     var theoActive=(_cmin['theoratio']!==undefined||_cmin['theo3y']!==undefined||_cflg['theopass']);
-    note.textContent=theoActive?'※ 理論株価系の条件は過去データが無いため、バックテストでは無視されます。':'';
+    var perActive=periodCondActive();
+    note.textContent=(theoActive?'※ 理論株価系の条件は過去データが無いため、バックテストでは無視されます。':'')
+                    +(perActive?'※ 期間騰落系の条件はバックテストでは無視されます。':'');
     res.innerHTML='<div class="sc-bt-loading">計算中…（'+d1+' → '+d2+'）</div>';
     document.getElementById('scBtRun').disabled=true;
 
@@ -5510,13 +5597,19 @@ def _build_screen_page() -> str:
       document.getElementById('scBtRun').disabled=false;
       var snap=arr[0], bt=arr[1];
       if(bt.error){{ res.innerHTML='<div class="sc-bt-loading">エラー: '+bt.error+'</div>'; return; }}
-      // 理論条件を一時退避してD1時点で合致銘柄を判定
-      var saved={{a:_cmin['theoratio'],b:_cmin['theo3y'],c:_cflg['theopass']}};
+      // 理論・期間騰落条件を一時退避してD1時点で合致銘柄を判定
+      var saved={{a:_cmin['theoratio'],b:_cmin['theo3y'],c:_cflg['theopass'],
+                 d:_cmin['pchg'],e:_cmax['pchg'],f:_cmin['prange'],g:_cmax['prange']}};
       delete _cmin['theoratio']; delete _cmin['theo3y']; delete _cflg['theopass'];
+      delete _cmin['pchg']; delete _cmax['pchg']; delete _cmin['prange']; delete _cmax['prange'];
       var matched=(snap.stocks||[]).filter(function(s){{return passFilter(s);}});
       if(saved.a!==undefined)_cmin['theoratio']=saved.a;
       if(saved.b!==undefined)_cmin['theo3y']=saved.b;
       if(saved.c)_cflg['theopass']=saved.c;
+      if(saved.d!==undefined)_cmin['pchg']=saved.d;
+      if(saved.e!==undefined)_cmax['pchg']=saved.e;
+      if(saved.f!==undefined)_cmin['prange']=saved.f;
+      if(saved.g!==undefined)_cmax['prange']=saved.g;
 
       var rets=bt.returns||{{}};
       var vals=[], best=null, worst=null, delN=0;
@@ -7162,6 +7255,77 @@ def api_screen():
         })
     import json as _json
     payload = _json.dumps(results, ensure_ascii=False)
+    _set(key, payload)
+    return payload, 200, {"Content-Type": "application/json"}
+
+
+@app.route("/api/period_stats")
+def api_period_stats():
+    """任意期間の騰落率・高安レンジ幅を全銘柄分返す（スクリーニングの期間騰落条件用）。
+
+    パラメータ: days=カレンダー日数(7〜730) または from=YYYY-MM-DD（年初来など）
+    返り値: {"from": 実際の起点日, "to": 最新取引日, "stats": {code: [騰落率%, 高安幅%]}}
+      騰落率 = 期間初日の調整後終値 → 最新日の調整後終値
+      高安幅 = (期間高値 − 期間安値) / 期間安値。往って来いの「動きの大きさ」を捉える
+    期間の頭から価格が無い銘柄（期間中の新規上場）や取引停止中はnull扱い（除外）。
+    """
+    days   = request.args.get("days", type=int)
+    from_s = request.args.get("from", "").strip()
+
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT MAX(date) FROM daily_prices")
+    latest = cur.fetchone()[0]
+    if latest is None:
+        cur.close(); conn.close()
+        return _json.dumps({"error": "no data"}), 200, {"Content-Type": "application/json"}
+
+    if from_s and re.match(r"^\d{4}-\d{2}-\d{2}$", from_s):
+        start_req = datetime.strptime(from_s, "%Y-%m-%d").date()
+    elif days and 7 <= days <= 730:
+        start_req = latest - timedelta(days=days)
+    else:
+        cur.close(); conn.close()
+        return _json.dumps({"error": "days(7-730) か from(YYYY-MM-DD) を指定"}), 400, \
+               {"Content-Type": "application/json"}
+
+    key = f"period_stats_{start_req}_{latest}"
+    cached = _get(key)
+    if cached:
+        cur.close(); conn.close()
+        return cached, 200, {"Content-Type": "application/json"}
+
+    # 銘柄ごとに 期間内の初日/最終日/高値/安値 を1クエリで取得（adj_closeで分割対応）
+    cur.execute("""
+        SELECT g.code, g.d0, g.d1,
+               COALESCE(s.adj_close, s.close) AS px0,
+               COALESCE(e.adj_close, e.close) AS px1,
+               g.hi, g.lo
+        FROM (
+            SELECT code, MIN(date) AS d0, MAX(date) AS d1,
+                   MAX(COALESCE(adj_close, close)) AS hi,
+                   MIN(COALESCE(adj_close, close)) AS lo
+            FROM daily_prices
+            WHERE date >= %s AND close IS NOT NULL AND close > 0
+            GROUP BY code
+        ) g
+        JOIN daily_prices s ON s.code = g.code AND s.date = g.d0
+        JOIN daily_prices e ON e.code = g.code AND e.date = g.d1
+    """, (start_req,))
+
+    stats = {}
+    ok_start = start_req + timedelta(days=10)   # 期間の頭をカバーしているか（連休を考慮し10日猶予）
+    ok_end   = latest - timedelta(days=10)      # 直近まで取引があるか（取引停止・廃止を除外）
+    for code, d0, d1, px0, px1, hi, lo in cur.fetchall():
+        if d0 > ok_start or d1 < ok_end:
+            continue
+        if not px0 or not px1 or not lo or px0 <= 0 or lo <= 0:
+            continue
+        px0, px1, hi, lo = float(px0), float(px1), float(hi), float(lo)
+        stats[code] = [round((px1 / px0 - 1) * 100, 2), round((hi / lo - 1) * 100, 2)]
+    cur.close(); conn.close()
+
+    payload = _json.dumps({"from": str(start_req), "to": str(latest), "stats": stats},
+                          ensure_ascii=False)
     _set(key, payload)
     return payload, 200, {"Content-Type": "application/json"}
 
