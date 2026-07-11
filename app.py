@@ -4451,24 +4451,28 @@ Plotly.newPlot('afChart', [
     else:
         pos_html = '<div class="af-section">💼 保有銘柄</div><div class="af-empty">初回の買い付け待ちです（次の営業日の寄付で約定）。</div>'
 
-    # ── 控え（ベンチ）銘柄 ──
+    # ── 控え（ベンチ）銘柄（ミニチャート付き） ──
     bench_html = ""
     if bench_rows:
+        conn3 = get_conn(); cur3 = conn3.cursor()
         items_b = []
         for rank, code, name, style, reason, close_at, bdate, close_now in bench_rows:
             chg_html = ""
             if close_at and close_now:
                 chg = (float(close_now) / float(close_at) - 1) * 100
                 chg_html = f'<span class="af-bench-chg {_pnl_cls(chg)}">{chg:+.1f}%</span>'
+            spark = _af_sparkline(cur3, code, bdate, float(close_at)) if close_at else ""
             items_b.append(f"""<div class="af-pos">
   <div class="af-pos-head">
     <span class="af-pos-name">{rank}. <a href="/stock/{code}">{_html.escape(name)}</a> <span style="color:#8b949e;font-size:11px;font-weight:400">{code}</span>{_style_badge(style)}</span>
     {chg_html}
   </div>
+  {spark}
   <div class="af-pos-reason">{_html.escape(reason or '')}</div>
 </div>""")
+        cur3.close(); conn3.close()
         bdate0 = bench_rows[0][6]
-        bench_html = f"""<div class="af-section">🪑 控え銘柄（保有8に次ぐ候補・{_html.escape(str(bdate0))}選定）<small style="color:#6e7681;font-weight:400">　騰落は選定日終値比</small></div>
+        bench_html = f"""<div class="af-section">🪑 控え銘柄（保有8に次ぐ候補・{_html.escape(str(bdate0))}選定）<small style="color:#6e7681;font-weight:400">　騰落は選定日終値比・チャートは直近75日（点線=選定日終値・●=選定日）</small></div>
 <div class="af-pos-grid">{''.join(items_b)}</div>"""
 
     # ── 売買履歴 ──
