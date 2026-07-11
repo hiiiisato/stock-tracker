@@ -174,6 +174,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | ファンド | `fund_master` `fund_reports` | fund_watch.py |
 | アプリ | `watchlist` `stock_memos` `fetch_logs` | app.py / daily_run.py |
 | AIファンド | `ai_fund_state` `ai_fund_positions` `ai_fund_orders` `ai_fund_trades` `ai_fund_nav` `ai_fund_policy` `ai_fund_bench` | ai_fund.py（模擬運用・全売買に理由を記録・投資基準と控え銘柄を日次蓄積） |
+| 決算予定 | `earnings_schedule` | ai_fund.py `_earnings_dates`（kabutan financeページの決算発表予定日・3日キャッシュ。J-Quants無料枠のearnings-calendarは12週遅延固定で使用不可） |
 
 ## 落とし穴（過去に踏んだもの）
 

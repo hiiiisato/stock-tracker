@@ -4320,14 +4320,20 @@ def _build_aifund_page() -> str:
         bench_ret = (float(nav_rows[-1][2]) / float(nav_rows[0][2]) - 1) if nav_rows[-1][2] else 0
         vs_topix = (fund_ret - bench_ret) * 100
 
-    # 売買履歴
+    # 売買履歴（全件遡れるように多めに取得）＋実現損益サマリー
     cur.execute("""
         SELECT t.trade_date, t.side, t.code, s.name, t.shares, t.price,
                t.pnl, t.pnl_pct, t.hold_days, t.reason, t.buy_reason
         FROM ai_fund_trades t JOIN stocks s ON s.code = t.code
-        ORDER BY t.trade_date DESC, t.id DESC LIMIT 60
+        ORDER BY t.trade_date DESC, t.id DESC LIMIT 500
     """)
     trades = cur.fetchall()
+    cur.execute("""
+        SELECT COUNT(*), COALESCE(SUM(pnl),0),
+               SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END), AVG(hold_days)
+        FROM ai_fund_trades WHERE side = 'sell'
+    """)
+    n_sell, pnl_sum, n_win, avg_hold = cur.fetchone()
     cur.close(); conn.close()
 
     def _pnl_cls(v):
@@ -4401,8 +4407,9 @@ def _build_aifund_page() -> str:
         orders_html = f"""<div class="af-section">📋 次の売買予定（未約定）</div>
 <div class="af-orders">{''.join(items)}</div>"""
 
-    # ── NAVチャート ──
-    chart_html = ""
+    # ── NAVチャート（総資産推移は常設セクション） ──
+    chart_html = f"""<div class="af-section">📈 資産推移（設定来・100起点）</div>
+<div class="af-chart"><div class="af-empty" style="padding:24px 0">約定開始後、毎営業日のNAVがここに刻まれます（vs TOPIX）。</div></div>"""
     if len(nav_rows) >= 2:
         dates = [str(r[0]) for r in nav_rows]
         navs  = [round(float(r[1]) / float(nav_rows[0][1]) * 100, 2) for r in nav_rows]
@@ -4475,8 +4482,8 @@ Plotly.newPlot('afChart', [
         bench_html = f"""<div class="af-section">🪑 控え銘柄（保有8に次ぐ候補・{_html.escape(str(bdate0))}選定）<small style="color:#6e7681;font-weight:400">　騰落は選定日終値比・チャートは直近75日（点線=選定日終値・●=選定日）</small></div>
 <div class="af-pos-grid">{''.join(items_b)}</div>"""
 
-    # ── 売買履歴 ──
-    hist_html = ""
+    # ── 売買履歴（常設セクション） ──
+    hist_html = '<div class="af-section">📜 売買履歴</div><div class="af-empty">約定が発生すると、購入理由から売却理由まで全履歴がここに残ります。</div>'
     if trades:
         rows_h = []
         for td, side, code, name, shares, price, pnl, pnl_pct, hold_days, reason, buy_reason in trades:
@@ -4497,7 +4504,13 @@ Plotly.newPlot('afChart', [
   <td class="num">{pnl_html}</td>
   <td class="af-trade-reason">{reason_html}</td>
 </tr>""")
-        hist_html = f"""<div class="af-section">📜 売買履歴</div>
+        stats_html = ""
+        if n_sell:
+            win_rate = int(n_win) / int(n_sell) * 100
+            stats_html = (f'<small style="color:#8b949e;font-weight:400">　決済{n_sell}回・実現損益 '
+                          f'<span class="{_pnl_cls(float(pnl_sum))}">{float(pnl_sum)/1e4:+,.1f}万円</span>'
+                          f'・勝率{win_rate:.0f}%・平均保有{float(avg_hold or 0):.0f}日</small>')
+        hist_html = f"""<div class="af-section">📜 売買履歴{stats_html}</div>
 <div style="overflow-x:auto"><table class="af-table">
 <tr><th>約定日</th><th>売買</th><th>銘柄</th><th class="num">株数</th><th class="num">約定値</th><th class="num">実現損益</th><th>理由</th></tr>
 {''.join(rows_h)}
@@ -6523,7 +6536,11 @@ def _build_stock_page(code: str) -> str:
             pe = date.fromisoformat(period_end[:10])
         except ValueError:
             return 0.0
-        start = pe.replace(year=pe.year - 1)
+        try:
+            start = pe.replace(year=pe.year - 1)
+        except ValueError:
+            # うるう日期末（2/29決算。トレファク3093等の2月末決算×うるう年）は前年に2/29が無い
+            start = pe.replace(year=pe.year - 1, day=28)
         s, e = str(start), str(pe)
         return sum(a for d, a in _div_events if s < d <= e)
 

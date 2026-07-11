@@ -457,6 +457,61 @@ def _judge_mood(indices: list[dict], breadth: dict) -> tuple[str, str]:
     return ("まちまち — 方向感なし", "#8b949e")
 
 
+def _fetch_ai_fund(cur, target: date) -> dict | None:
+    """AIファンドの当日サマリー（NAV・当日約定・翌日予定・保有損益）。未稼働ならNone。"""
+    try:
+        cur.execute("SELECT cash FROM ai_fund_state WHERE id = 1")
+        st = cur.fetchone()
+    except Exception:
+        return None
+    if not st:
+        return None
+
+    out = {"nav": None, "pnl_pct": None, "vs_topix": None,
+           "fills": [], "pending": [], "best": None, "worst": None}
+    cur.execute("SELECT nav FROM ai_fund_nav WHERE nav > 0 ORDER BY date LIMIT 1")
+    first = cur.fetchone()
+    cur.execute("SELECT nav, bench FROM ai_fund_nav WHERE nav > 0 AND date <= %s ORDER BY date DESC LIMIT 1", (target,))
+    last = cur.fetchone()
+    if last:
+        out["nav"] = float(last[0])
+        out["pnl_pct"] = (float(last[0]) / 10_000_000 - 1) * 100
+        cur.execute("SELECT bench FROM ai_fund_nav WHERE nav > 0 AND bench IS NOT NULL ORDER BY date LIMIT 1")
+        b0 = cur.fetchone()
+        if first and b0 and last[1]:
+            fund_ret = float(last[0]) / float(first[0]) - 1
+            bench_ret = float(last[1]) / float(b0[0]) - 1
+            out["vs_topix"] = (fund_ret - bench_ret) * 100
+
+    # 当日の約定
+    cur.execute("""
+        SELECT t.side, t.code, s.name, t.shares, t.price, t.pnl_pct, t.reason
+        FROM ai_fund_trades t JOIN stocks s ON s.code = t.code
+        WHERE t.trade_date = %s ORDER BY t.side DESC
+    """, (target,))
+    out["fills"] = cur.fetchall()
+
+    # 翌営業日の売買予定
+    cur.execute("""
+        SELECT o.side, o.code, s.name, o.reason
+        FROM ai_fund_orders o JOIN stocks s ON s.code = o.code
+        WHERE o.status = 'pending' ORDER BY o.side DESC
+    """)
+    out["pending"] = cur.fetchall()
+
+    # 保有中のベスト/ワースト
+    cur.execute("""
+        SELECT p.code, s.name, p.avg_cost,
+               (SELECT close FROM daily_prices d WHERE d.code = p.code AND d.date <= %s ORDER BY d.date DESC LIMIT 1)
+        FROM ai_fund_positions p JOIN stocks s ON s.code = p.code
+    """, (target,))
+    pos = [(c, n, (float(cl) / float(ac) - 1) * 100) for c, n, ac, cl in cur.fetchall() if cl]
+    if pos:
+        pos.sort(key=lambda x: -x[2])
+        out["best"], out["worst"] = pos[0], pos[-1]
+    return out
+
+
 def build_report_html(target_date: date | None = None) -> str:
     conn = get_conn()
     cur  = conn.cursor()
@@ -475,6 +530,7 @@ def build_report_html(target_date: date | None = None) -> str:
     triggers  = _fetch_triggers(cur, target)
     discs     = _fetch_disclosures(cur, target)
     watch     = _fetch_watchlist(cur, target)
+    aifund    = _fetch_ai_fund(cur, target)
     # 業績修正・トリガー銘柄にもミニチャート（値上がりTOP5と同じ30日スパークライン）を付与
     _attach_series(cur, target, revisions)
     _attach_series(cur, target, [it for lst in triggers.values() for it in lst])
@@ -680,6 +736,35 @@ def build_report_html(target_date: date | None = None) -> str:
   {wl_rows}
 </div>""" if wl_rows else ""
 
+    # ── 8. AIファンド ──
+    sec_aifund = ""
+    if aifund and aifund["nav"]:
+        af_head = (f'総資産 <b>{aifund["nav"]/1e4:,.0f}万円</b>（{_chg_html(aifund["pnl_pct"])}）'
+                   + (f'　対TOPIX {_chg_html(aifund["vs_topix"])}' if aifund["vs_topix"] is not None else ""))
+        fills_html = ""
+        for side, code, name, shares, price, pnl_pct, reason in aifund["fills"]:
+            act = "🟢買" if side == "buy" else "🔴売"
+            pnlp = f'（{_chg_html(float(pnl_pct))}）' if side == "sell" and pnl_pct is not None else ""
+            fills_html += (f'<div style="font-size:12.5px;margin:3px 0">{act} <a href="/stock/{code}">{esc(name)}</a> '
+                           f'{shares}株 @{float(price):,.0f}円{pnlp}<br>'
+                           f'<span class="mut" style="font-size:11.5px">{esc((reason or "")[:80])}</span></div>')
+        pend_html = ""
+        if aifund["pending"]:
+            names = "、".join(f'{"買" if s == "buy" else "売"}:{esc(n)}' for s, c, n, _r in aifund["pending"][:8])
+            pend_html = f'<div style="font-size:12px;margin-top:6px"><span class="mut">明日の予定:</span> {names}</div>'
+        bw_html = ""
+        if aifund["best"]:
+            b, w = aifund["best"], aifund["worst"]
+            bw_html = (f'<div style="font-size:12px;margin-top:4px"><span class="mut">保有ベスト:</span> {esc(b[1])} {_chg_html(b[2])}'
+                       f'　<span class="mut">ワースト:</span> {esc(w[1])} {_chg_html(w[2])}</div>')
+        sec_aifund = f"""<div class="rp-card">
+  <div class="rp-h">🤖 AIファンド <small>（<a href="/aifund">詳細</a>）</small></div>
+  <div style="font-size:13px;margin-bottom:4px">{af_head}</div>
+  {fills_html or '<div class="mut" style="font-size:12px">本日の約定はありません</div>'}
+  {bw_html}
+  {pend_html}
+</div>"""
+
     # ── 組み立て ──
     # <!--DATENAV--> は配信時(app.py)に前日/翌日ナビへ置換されるプレースホルダ
     return f"""<!DOCTYPE html>
@@ -700,6 +785,7 @@ def build_report_html(target_date: date | None = None) -> str:
   {sec_revisions}
   {sec_triggers}
   {sec_discs}
+  {sec_aifund}
   {sec_watch}
   <div class="rp-card">
     <div class="rp-h">もっと詳しく</div>
