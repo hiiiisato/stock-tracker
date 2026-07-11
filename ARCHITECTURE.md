@@ -161,7 +161,15 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 ## 落とし穴（過去に踏んだもの）
 
 - **daily_prices.close は生値とは限らない**。Yahooのcloseは銘柄により生値/調整済みが混在。
-  分割処理は必ず「実際の価格変化と期待比率の照合」(`splits._verify_split_reflected`)を通す
+  分割処理は必ず「実際の価格変化と期待比率の照合」(`splits._verify_split_reflected`)を通す。
+  **検証はどの経路でも省略禁止**（2026-07: J-Quants経路と日次検知が無検証で係数を掛け、
+  フジクラ5803等178イベント・約130銘柄のadj_closeが二重調整で汚染された）。教訓3点:
+  (1) Yahooは偽の分割イベントを返す（3/30に51件の偽クラスタ等）
+  (2) 検証の許容帯は狭く。旧0.5〜2.0倍では「1:2分割が未反映(rel≈2.0)」が素通りした（8031で実害）
+  (3) J-QuantsのAdjCは「価格データ窓より未来の除権日」まで反映済み。AdjCの上に係数を重ねない
+- **Yahooのadjcloseは配当・分配金まで調整する**ため採用しない（方針は分割のみ調整）。
+  prices_yahoo は adj_close=close で書き、調整は splits.run_daily が一元管理
+  （大型分配のインフラファンド9282でadjがズレた実害から修正）
 - **financialsに未来日付の期が入っている**（会社予想）。実績として使う時は `period_end <= CURDATE()` で除外
 - **バックテストの先読み防止**: ファンダは期末+45日を公開日とみなす（PIT補正）。price_stats_history生成時に適用済み
 - **業績修正・増配のバックテストは必ず `forecast_revisions.reaction_date` を基準にする**。

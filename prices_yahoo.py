@@ -69,8 +69,6 @@ def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
             lows       = quotes.get("low",    [])
             closes     = quotes.get("close",  [])
             volumes    = quotes.get("volume", [])
-            # adjclose: 株式分割・配当調整済終値
-            adjcloses  = res.get("indicators", {}).get("adjclose", [{}])[0].get("adjclose", [])
 
             rows = []
             for i, ts in enumerate(timestamps):
@@ -79,10 +77,15 @@ def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
                     continue
                 dt = datetime.fromtimestamp(ts).date()
 
-                adj_c = adjcloses[i] if (i < len(adjcloses) and adjcloses[i] is not None) else close
-                adj_c = round(adj_c, 4)
-                # adj_factor = adjclose / close（分割前: < 1.0、通常: 1.0）
-                adj_factor = round(adj_c / close, 6) if close != 0 else 1.0
+                # adj_close は close と同値で書く（調整はしない）。
+                # 理由: Yahoo の adjclose は「配当・分配金」まで調整に含めるため、
+                # 本システムの方針（分割のみ調整）と食い違う。大型分配のある銘柄
+                # （例: 9282 インフラファンドの分配落ち-14%）で adj がズレる実害が出た。
+                # 分割の調整は同じ夜間バッチの後段 splits.run_daily が一元管理する
+                # （取得窓が分割除権日をまたいだ場合も、Yahoo splits 検知→検証→
+                #  該当銘柄の adj_close 再構築で自己修復される）。
+                adj_c = round(close, 4)
+                adj_factor = 1.0
 
                 rows.append({
                     "code":       code4,

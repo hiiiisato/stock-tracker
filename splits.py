@@ -205,10 +205,16 @@ def _verify_split_reflected(series: list[tuple], ex_date: str, ratio: float) -> 
     expected = ratio
     if expected <= 0:
         return False
-    # 実際の変化率が期待比率の 0.5〜2.0 倍の範囲に収まっていれば「反映されている」とみなす
-    # （同日の通常の値動きも加味した緩めの許容範囲）
+    # 比率が1に近いイベント（±25%程度）は通常の値動きと区別できず検証不能のため
+    # 採用しない（誤適用の影響も小さい。公式ソースの反映を待つ）。
+    if 0.75 < expected < 1.333:
+        return False
     rel = actual / expected
-    return 0.5 <= rel <= 2.0
+    # 実際の変化率が期待比率の 0.7〜1.4 倍に収まる場合のみ「反映されている」とみなす。
+    # 上限1.4が重要: 1:2分割(ratio=0.5)が close に未反映だと rel≈2.0 になるため、
+    # 旧上限2.0では素通りして二重調整を起こしていた（8031三井物産などで実害）。
+    # 下限0.7も同様に 2:1併合(ratio=2.0) の未反映(rel≈0.5)を弾く。
+    return 0.7 <= rel <= 1.4
 
 
 def rebuild(codes4: list[str] | None = None, full: bool = True, use_jquants: bool = True):
@@ -300,14 +306,14 @@ def rebuild(codes4: list[str] | None = None, full: bool = True, use_jquants: boo
         by_code[code].append((str(dt), float(close)))
     cur.close(); conn.close()
 
-    # Yahoo新規分割イベントごとに「close に反映済みか」を検証し、OKのものだけ採用してDB登録
+    # Yahoo新規分割イベントごとに「close に反映済みか」を検証し、OKのものだけ採用してDB登録。
+    # 注意: J-Quants経路でも検証は必須（かつては直近窓を無検証で信頼していたが、
+    # DB構築時に Yahoo が「調整済み close」を返した銘柄は段差が存在せず、
+    # 係数を掛けると二重調整でチャートが壊れる。2026-07 フジクラ5803等51銘柄の障害の根本原因）。
     accepted_new = []
     rejected = 0
     for code, ex_date, ratio, src in yahoo_new:
-        if use_jquants:
-            ok = True  # J-Quants経路: 直近窓のみなので検証せず信頼する（従来通り）
-        else:
-            ok = _verify_split_reflected(by_code.get(code, []), ex_date, ratio)
+        ok = _verify_split_reflected(by_code.get(code, []), ex_date, ratio)
         if ok:
             accepted_new.append((code, ex_date, ratio, src))
         else:
@@ -336,21 +342,31 @@ def rebuild(codes4: list[str] | None = None, full: bool = True, use_jquants: boo
         # J-Quants全量経路のみ: 分割の無い銘柄も対象（真の生closeで factor=1.0 に統一）
         targets = set(codes4)
     elif explicit_codes:
-        # 呼び出し元が特定銘柄を明示指定した場合は、分割イベントの有無に関わらず
-        # 必ず対象に含める（既存イベントを削除したが新規も見つからなかった銘柄が
-        # 再計算から漏れて古い誤った adj_close/adj_factor が残るのを防ぐ）
-        targets |= set(codes4)
+        # 呼び出し元が特定銘柄を明示指定した場合は、その銘柄「だけ」を対象にする。
+        # 分割イベントの有無に関わらず必ず含める（イベント削除後の再計算漏れ防止）一方、
+        # close系列を読み込んでいない指定外の銘柄が splits_by_code 経由で混ざるのを防ぐ。
+        targets = set(codes4)
 
     upd = []
     for code in targets:
         series = by_code.get(code, [])
-        events = splits_by_code.get(code, [])
+        # 適用時検証: 登録済みイベントもソース（jquants/yahoo）を問わず、
+        # close 系列に実際に段差が確認できたものだけを係数適用の対象にする。
+        # close が調整済みスケールで連続している銘柄（DB構築時期による）に
+        # 過去イベントを機械的に掛けると二重調整になるため、ここが最後の防波堤。
+        events = [(ex, r) for ex, r in splits_by_code.get(code, [])
+                  if _verify_split_reflected(series, ex, r)]
         for ds, close in series:
-            base = jq_adjc.get((code, ds), close)
+            has_adjc = (code, ds) in jq_adjc
+            # J-Quants の AdjC は現在判明している全分割（価格データ窓より未来の
+            # 除権日を含む）を反映済みの公式調整値。イベントを重ねると二重調整に
+            # なるため、AdjC を採用する日付には係数を一切掛けない（1436で実害確認）。
+            base = jq_adjc[(code, ds)] if has_adjc else close
             factor = 1.0
-            for ex_date, ratio in events:
-                if ex_date > ds:
-                    factor *= ratio
+            if not has_adjc:
+                for ex_date, ratio in events:
+                    if ex_date > ds:
+                        factor *= ratio
             adj = round(base * factor, 4)
             af = round(adj / close, 6) if close else 1.0
             # 安全弁: DECIMAL(12,6)の範囲外になる異常値はDBエラーの元になるため除外
@@ -388,13 +404,37 @@ def run_daily(weeks: int = 16) -> int:
     if not yahoo_new:
         print("  [分割] 直近窓の新規分割なし")
         return 0
+
+    # 登録前に「close に段差が実在するか」を必ず検証する。
+    # Yahoo は偽の分割イベントを返すことがあり、また close が調整済みスケールの
+    # 銘柄では実分割でも段差が無い。未検証のまま登録→係数適用すると二重調整で
+    # チャートが壊れる（2026-07 の51銘柄障害の再発防止）。
+    cand_codes = sorted({c for c, *_ in yahoo_new})
+    conn = get_conn(); cur = conn.cursor()
+    fmt = ",".join(["%s"] * len(cand_codes))
+    cur.execute(f"SELECT code, date, close FROM daily_prices WHERE code IN ({fmt}) AND close IS NOT NULL ORDER BY code, date", cand_codes)
+    series_by_code = defaultdict(list)
+    for c, dt, close in cur.fetchall():
+        series_by_code[c].append((str(dt), float(close)))
+    cur.close(); conn.close()
+
+    verified = []
+    for c, dt, r, src in yahoo_new:
+        if _verify_split_reflected(series_by_code.get(c, []), dt, r):
+            verified.append((c, dt, r, src))
+        else:
+            print(f"  [分割] 除外 {c} {dt}: close に段差なし（偽イベント/調整済みcloseの疑い） ratio={r}")
+    if not verified:
+        print("  [分割] 検証を通過した新規分割なし")
+        return 0
+
     conn = get_conn(); cur = conn.cursor()
     changed = set()
-    for c, dt, r, src in yahoo_new:
+    for c, dt, r, src in verified:
         cur.execute("INSERT IGNORE INTO stock_splits (code,ex_date,split_ratio,source) VALUES (%s,%s,%s,%s)", (c, dt, r, src))
         changed.add(c)
     conn.commit(); cur.close(); conn.close()
-    print(f"  [分割] 新規分割 {len(yahoo_new)}件 / {len(changed)}銘柄 → adj_close 再計算")
+    print(f"  [分割] 新規分割 {len(verified)}件 / {len(changed)}銘柄 → adj_close 再計算")
     # 該当銘柄のみ J-Quants 主軸で再構築（fullではない）
     rebuild(sorted(changed), full=False)
     return len(changed)
