@@ -4170,6 +4170,23 @@ _AIFUND_CSS = """
 .af-trade-reason { font-size:11.5px; color:#8b949e; line-height:1.6; max-width:520px; }
 .af-empty { text-align:center; color:#8b949e; padding:50px 0; font-size:14px; }
 .af-note { font-size:11px; color:#6e7681; margin:6px 0 0; }
+.af-spark { width:100%; height:54px; display:block; margin:8px 0 2px; background:#0d1117;
+  border:1px solid #21262d; border-radius:6px; }
+.af-policy { background:#161b22; border:1px solid #30363d; border-left:3px solid #d29922;
+  border-radius:8px; padding:12px 16px; margin-bottom:16px; font-size:13px; color:#c9d1d9; line-height:1.8; }
+.af-policy-title { font-weight:700; color:#e6edf3; margin-bottom:6px; }
+.af-policy details { margin-top:8px; }
+.af-policy summary { font-size:11px; color:#388bfd; cursor:pointer; }
+.af-policy-old { font-size:12px; color:#8b949e; border-left:2px solid #30363d; padding-left:10px; margin:8px 0; line-height:1.7; }
+.af-style-badge { font-size:10px; color:#bc8cff; border:1px solid #bc8cff55; border-radius:8px;
+  padding:1px 7px; vertical-align:middle; }
+.af-bench-chg { font-weight:700; font-size:13px; white-space:nowrap; }
+.af-catalyst { font-size:12px; color:#d29922; line-height:1.6; margin-top:6px;
+  background:#d2992210; border-radius:6px; padding:6px 9px; }
+.af-charter { margin-bottom:16px; }
+.af-charter summary { font-size:12px; color:#388bfd; cursor:pointer; }
+.af-charter-body { font-size:12px; color:#8b949e; line-height:1.9; margin-top:8px;
+  background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px 16px; white-space:pre-line; }
 @media (max-width:768px) {
   .af-cards { grid-template-columns:repeat(2,1fr); }
   .af-pos-grid { grid-template-columns:1fr; }
@@ -4178,6 +4195,39 @@ _AIFUND_CSS = """
   .af-hide-sp { display:none; }
 }
 """
+
+
+def _af_sparkline(cur, code: str, buy_date, buy_price: float) -> str:
+    """保有銘柄カード用ミニチャート（直近75日・買値の点線・取得日マーカー付き）"""
+    cur.execute("""
+        SELECT date, COALESCE(adj_close, close) FROM daily_prices
+        WHERE code = %s AND date >= DATE_SUB(CURDATE(), INTERVAL 75 DAY)
+          AND close > 0 ORDER BY date
+    """, (code,))
+    rows = [(r[0], float(r[1])) for r in cur.fetchall() if r[1]]
+    if len(rows) < 2:
+        return ""
+    vals = [v for _, v in rows]
+    lo, hi = min(vals + [buy_price]), max(vals + [buy_price])
+    if hi <= lo:
+        return ""
+    W, H = 260, 54
+    n = len(rows)
+
+    def _y(v):
+        return H - (v - lo) / (hi - lo) * (H - 8) - 4
+
+    pts = " ".join(f"{i/(n-1)*W:.1f},{_y(v):.1f}" for i, (_, v) in enumerate(rows))
+    color = "#3fb950" if vals[-1] >= buy_price else "#f85149"
+    by = _y(buy_price)
+    marker = ""
+    for i, (d, v) in enumerate(rows):
+        if buy_date and str(d) >= str(buy_date):
+            marker = f'<circle cx="{i/(n-1)*W:.1f}" cy="{_y(v):.1f}" r="3" fill="#58a6ff"/>'
+            break
+    return f"""<svg class="af-spark" viewBox="0 0 {W} {H}" preserveAspectRatio="none">
+<line x1="0" y1="{by:.1f}" x2="{W}" y2="{by:.1f}" stroke="#8b949e" stroke-width="0.7" stroke-dasharray="3,3" opacity="0.6"/>
+<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.6"/>{marker}</svg>"""
 
 
 def _build_aifund_page() -> str:
@@ -4203,19 +4253,20 @@ def _build_aifund_page() -> str:
 
     # 保有ポジション（現値・評価）
     cur.execute("""
-        SELECT p.code, s.name, p.shares, p.avg_cost, p.buy_date, p.buy_reason, p.thesis,
+        SELECT p.code, s.name, p.shares, p.avg_cost, p.buy_date, p.buy_reason, p.thesis, p.style, p.catalyst,
                (SELECT close FROM daily_prices d WHERE d.code = p.code ORDER BY d.date DESC LIMIT 1)
         FROM ai_fund_positions p JOIN stocks s ON s.code = p.code
     """)
     positions = []
     total_mv = 0.0
-    for code, name, shares, avg_cost, buy_date, buy_reason, thesis, close in cur.fetchall():
+    for code, name, shares, avg_cost, buy_date, buy_reason, thesis, style, catalyst, close in cur.fetchall():
         close = float(close) if close else float(avg_cost)
         mv = int(shares) * close
         total_mv += mv
         positions.append({"code": code, "name": name, "shares": int(shares),
                           "avg_cost": float(avg_cost), "buy_date": buy_date,
                           "buy_reason": buy_reason or "", "thesis": thesis or "",
+                          "style": style or "通常", "catalyst": catalyst or "",
                           "close": close, "mv": mv,
                           "pnl_pct": (close / float(avg_cost) - 1) * 100})
     positions.sort(key=lambda p: -p["mv"])
@@ -4225,11 +4276,35 @@ def _build_aifund_page() -> str:
 
     # 明日の売買予定（pending注文）
     cur.execute("""
-        SELECT o.code, s.name, o.side, o.budget, o.shares, o.reason, o.thesis, o.decided_date
+        SELECT o.code, s.name, o.side, o.budget, o.shares, o.reason, o.thesis, o.decided_date, o.style, o.catalyst
         FROM ai_fund_orders o JOIN stocks s ON s.code = o.code
         WHERE o.status = 'pending' ORDER BY o.side DESC, o.id
     """)
     pending = cur.fetchall()
+
+    # 投資基準（最新＋蓄積履歴）
+    policy_rows, policy_total = [], 0
+    try:
+        cur.execute("SELECT policy_date, statement FROM ai_fund_policy ORDER BY policy_date DESC LIMIT 6")
+        policy_rows = cur.fetchall()
+        cur.execute("SELECT COUNT(*) FROM ai_fund_policy")
+        policy_total = cur.fetchone()[0]
+    except Exception:
+        pass
+
+    # 控え（ベンチ）銘柄
+    bench_rows = []
+    try:
+        cur.execute("""
+            SELECT b.rank_no, b.code, s.name, b.style, b.reason, b.close_at, b.bench_date,
+                   (SELECT close FROM daily_prices d WHERE d.code = b.code ORDER BY d.date DESC LIMIT 1)
+            FROM ai_fund_bench b JOIN stocks s ON s.code = b.code
+            WHERE b.bench_date = (SELECT MAX(bench_date) FROM ai_fund_bench)
+            ORDER BY b.rank_no
+        """)
+        bench_rows = cur.fetchall()
+    except Exception:
+        pass
 
     # NAV推移＋ベンチマーク
     cur.execute("SELECT date, nav, bench, market_view FROM ai_fund_nav WHERE nav > 0 ORDER BY date")
@@ -4280,17 +4355,47 @@ def _build_aifund_page() -> str:
         view_html = f"""<div class="af-view">🧠 <b>AIの見立て</b>: {_html.escape(market_view)}
   <br><small>最終判断: {_html.escape(str(last_decided or '—'))} ／ 意思決定の翌営業日の寄付で約定（決定日の価格は使いません）</small></div>"""
 
+    # ── 投資基準（AIが毎晩アップデート・履歴蓄積） ──
+    def _pol_fmt(s):
+        # 改行（実改行・エスケープ残り両方）を<br>に。エスケープ後に置換するので安全
+        return _html.escape(s or "").replace("\\n", "<br>").replace("\n", "<br>")
+
+    policy_html = ""
+    if policy_rows:
+        pd0, stmt0 = policy_rows[0]
+        old_html = ""
+        if len(policy_rows) > 1:
+            olds = "".join(
+                f'<div class="af-policy-old"><b>{_html.escape(str(pd))}</b><br>{_pol_fmt(st)}</div>'
+                for pd, st in policy_rows[1:]
+            )
+            old_html = f"""<details><summary>過去の投資基準を見る（全{policy_total}件を蓄積中）</summary>{olds}</details>"""
+        policy_html = f"""<div class="af-policy">
+  <div class="af-policy-title">📐 現在の投資基準 <small style="color:#6e7681;font-weight:400">（{_html.escape(str(pd0))}時点・毎晩AIが相場環境と成績を踏まえて更新）</small></div>
+  {_pol_fmt(stmt0)}
+  {old_html}
+</div>"""
+
+    def _style_badge(style):
+        return ' <span class="af-style-badge">🔮 先回り（予測）</span>' if style == "先回り" else ""
+
+    def _catalyst_html(catalyst):
+        if not catalyst:
+            return ""
+        return f'<div class="af-catalyst">🎯 <b>カタリスト</b>: {_html.escape(catalyst)}</div>'
+
     # ── 明日の売買予定 ──
     orders_html = ""
     if pending:
         items = []
-        for code, name, side, budget, shares, reason, thesis, decided in pending:
+        for code, name, side, budget, shares, reason, thesis, decided, style, catalyst in pending:
             act = f"買い（予算 {float(budget)/1e4:,.0f}万円）" if side == "buy" else f"売り（{shares}株）"
             icon = "🟢" if side == "buy" else "🔴"
             th = f'<div class="af-pos-thesis">シナリオ: {_html.escape(thesis)}</div>' if thesis else ""
             items.append(f"""<div class="af-order {side}">
-  <div class="af-order-head">{icon} <a href="/stock/{code}">{_html.escape(name)}</a> <span style="color:#8b949e;font-size:11px">{code}</span> — {act}</div>
-  {_html.escape(reason or '')}{th}
+  <div class="af-order-head">{icon} <a href="/stock/{code}">{_html.escape(name)}</a> <span style="color:#8b949e;font-size:11px">{code}</span> — {act}{_style_badge(style)}</div>
+  {_html.escape(reason or '')}
+  {_catalyst_html(catalyst)}{th}
   <div class="af-note">決定日: {_html.escape(str(decided))} → 翌営業日の寄付で約定予定</div>
 </div>""")
         orders_html = f"""<div class="af-section">📋 次の売買予定（未約定）</div>
@@ -4317,15 +4422,17 @@ Plotly.newPlot('afChart', [
     font: {{size: 11}}}}, {{displayModeBar: false, responsive: true}});
 </script>"""
 
-    # ── 保有銘柄カード ──
+    # ── 保有銘柄カード（ミニチャート付き） ──
     pos_html = ""
     if positions:
+        conn2 = get_conn(); cur2 = conn2.cursor()
         cards_p = []
         for p in positions:
             w = p["mv"] / nav_now * 100 if nav_now else 0
+            spark = _af_sparkline(cur2, p["code"], p["buy_date"], p["avg_cost"])
             cards_p.append(f"""<div class="af-pos">
   <div class="af-pos-head">
-    <span class="af-pos-name"><a href="/stock/{p['code']}">{_html.escape(p['name'])}</a> <span style="color:#8b949e;font-size:11px;font-weight:400">{p['code']}</span></span>
+    <span class="af-pos-name"><a href="/stock/{p['code']}">{_html.escape(p['name'])}</a> <span style="color:#8b949e;font-size:11px;font-weight:400">{p['code']}</span>{_style_badge(p['style'])}</span>
     <span class="af-pos-pnl {_pnl_cls(p['pnl_pct'])}">{p['pnl_pct']:+.1f}%</span>
   </div>
   <div class="af-pos-meta">
@@ -4333,13 +4440,36 @@ Plotly.newPlot('afChart', [
     <span>現在 {p['close']:,.0f}円</span>
     <span>{p['shares']}株・{p['mv']/1e4:,.0f}万円（{w:.0f}%）</span>
   </div>
+  {spark}
   <div class="af-pos-reason">{_html.escape(p['buy_reason'])}</div>
+  {_catalyst_html(p['catalyst'])}
   {f'<div class="af-pos-thesis">シナリオ: {_html.escape(p["thesis"])}</div>' if p['thesis'] else ''}
 </div>""")
-        pos_html = f"""<div class="af-section">💼 保有銘柄（{len(positions)}/8）</div>
+        cur2.close(); conn2.close()
+        pos_html = f"""<div class="af-section">💼 保有銘柄（{len(positions)}/8）<small style="color:#6e7681;font-weight:400">　チャートは直近75日・点線=取得単価・●=取得日</small></div>
 <div class="af-pos-grid">{''.join(cards_p)}</div>"""
     else:
         pos_html = '<div class="af-section">💼 保有銘柄</div><div class="af-empty">初回の買い付け待ちです（次の営業日の寄付で約定）。</div>'
+
+    # ── 控え（ベンチ）銘柄 ──
+    bench_html = ""
+    if bench_rows:
+        items_b = []
+        for rank, code, name, style, reason, close_at, bdate, close_now in bench_rows:
+            chg_html = ""
+            if close_at and close_now:
+                chg = (float(close_now) / float(close_at) - 1) * 100
+                chg_html = f'<span class="af-bench-chg {_pnl_cls(chg)}">{chg:+.1f}%</span>'
+            items_b.append(f"""<div class="af-pos">
+  <div class="af-pos-head">
+    <span class="af-pos-name">{rank}. <a href="/stock/{code}">{_html.escape(name)}</a> <span style="color:#8b949e;font-size:11px;font-weight:400">{code}</span>{_style_badge(style)}</span>
+    {chg_html}
+  </div>
+  <div class="af-pos-reason">{_html.escape(reason or '')}</div>
+</div>""")
+        bdate0 = bench_rows[0][6]
+        bench_html = f"""<div class="af-section">🪑 控え銘柄（保有8に次ぐ候補・{_html.escape(str(bdate0))}選定）<small style="color:#6e7681;font-weight:400">　騰落は選定日終値比</small></div>
+<div class="af-pos-grid">{''.join(items_b)}</div>"""
 
     # ── 売買履歴 ──
     hist_html = ""
@@ -4369,15 +4499,24 @@ Plotly.newPlot('afChart', [
 {''.join(rows_h)}
 </table></div>"""
 
+    from ai_fund import CHARTER as _af_charter
+    charter_html = f"""<details class="af-charter">
+  <summary>📜 ファンド運営方針（全ルールを見る）</summary>
+  <div class="af-charter-body">{_html.escape(_af_charter)}</div>
+</details>"""
+
     body = f"""<style>{_AIFUND_CSS}</style>
 <h1 class="page-title">🤖 AIファンド</h1>
-<p style="font-size:12px;color:#8b949e;margin:-6px 0 14px">
-AIが毎晩、銘柄の発掘・保有・売却を理由付きで判断する模擬ファンド（元本1,000万円・常時8銘柄・投資期間数日〜半年）。
+<p style="font-size:12px;color:#8b949e;margin:-6px 0 8px">
+AIが毎晩、銘柄の発掘・保有・売却を理由とカタリスト付きで判断する模擬ファンド（元本1,000万円・常時8銘柄・投資期間数日〜半年）。
 判断の<b>翌営業日の寄付</b>で約定し、取引コスト0.1%/片道を控除。実在の売買ではありません。</p>
+{charter_html}
 {cards}
 {view_html}
+{policy_html}
 {orders_html}
 {pos_html}
+{bench_html}
 {chart_html}
 {hist_html}
 """

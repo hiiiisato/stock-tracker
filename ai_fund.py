@@ -60,6 +60,24 @@ MAX_SWAPS      = 3            # 1日の入替上限（初回構築を除く）
 REBUY_COOLDOWN = 7            # 売却後の再購入禁止（カレンダー日）
 LOSSCUT_PCT    = -20.0        # 強制ロスカット閾値（含み損%）
 BENCH_CODE     = "1306"       # ベンチマーク: TOPIX連動ETF
+N_BENCH        = 8            # 控え（次点候補）銘柄数
+MAX_ANTICIPATE = 2            # 「先回り（予測）」スタイルの保有上限（ポートフォリオの一部に留める）
+
+# ファンドの運営方針（憲章）。固定ルールの一元記述。サイトの /aifund に常時表示する。
+# 変更時はこの定数を更新する（コードのガードレールと必ず一致させること）。
+CHARTER = f"""1. 目的: キャピタルゲインの最大化。投資期間の目安は数日〜半年（デイトレはしない）
+2. 常時{N_POSITIONS}銘柄を保有し、市況を問わずフルポジションを維持する
+3. 全ての買いに「カタリスト」を明文化する: 自分が買った後に、誰が・いつ・なぜ買い上げてくるのか
+   （例: 決算がコンセンサスを上回る見込み／統計的エッジ／業界拡大に必須のパーツだが未注目）。
+   カタリストは毎晩再検証し、崩れたら売却する
+4. 意思決定した当日の価格では売買しない。夜に判断し、翌営業日の寄付で約定（先読みの排除）
+5. 売買単位は100株。1銘柄の予算は{BUDGET_MIN//10000}万〜{BUDGET_MAX//10000}万円で確信度に応じて強弱
+6. 取引コスト{COST_RATE*100:.1f}%/片道を控除。無駄な回転を抑えるため入替は1日最大{MAX_SWAPS}銘柄、
+   売却後{REBUY_COOLDOWN}日間は同一銘柄を再購入しない
+7. 含み損{LOSSCUT_PCT:.0f}%で機械的にロスカット（AIの判断より規律を優先）
+8. 「先回り（予測）」スタイルは最大{MAX_ANTICIPATE}銘柄まで。予測であることを明示する
+9. 保有に次ぐ控え{N_BENCH}銘柄を常に選定・計測し、機動的に昇格させる
+10. 投資基準は毎晩、相場環境と自らの成績を検証して明文化・更新し、履歴を蓄積する"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -134,6 +152,36 @@ def ensure_tables():
             created_at DATETIME
         )
     """)
+    # 投資基準（毎晩AIが相場環境・成績を踏まえて更新。日次で蓄積し最新をサイト表示）
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ai_fund_policy (
+            policy_date DATE PRIMARY KEY,
+            statement   TEXT COMMENT 'その日時点の投資基準（明文）',
+            created_at  DATETIME
+        )
+    """)
+    # 控え（ベンチ）銘柄: 保有8に次ぐ候補8。日次で入替・蓄積
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ai_fund_bench (
+            bench_date DATE NOT NULL,
+            rank_no    TINYINT NOT NULL,
+            code       VARCHAR(10) NOT NULL,
+            style      VARCHAR(10) DEFAULT '通常' COMMENT '通常/先回り',
+            reason     TEXT,
+            close_at   DOUBLE COMMENT '選定日の終値（以後のパフォーマンス計測用）',
+            created_at DATETIME,
+            PRIMARY KEY (bench_date, rank_no)
+        )
+    """)
+    # 既存テーブルへのカラム追加（初回マイグレーション）:
+    #   style    = 投資スタイル（通常/先回り）
+    #   catalyst = カタリスト（誰が・いつ・なぜ後から買ってくるかの明文化。買いの必須項目）
+    for tbl in ("ai_fund_orders", "ai_fund_positions", "ai_fund_trades"):
+        for coldef in ("style VARCHAR(10) DEFAULT '通常'", "catalyst TEXT"):
+            try:
+                cur.execute(f"ALTER TABLE {tbl} ADD COLUMN {coldef}")
+            except Exception:
+                pass
     conn.commit(); cur.close(); conn.close()
 
 
@@ -173,13 +221,13 @@ def execute_orders() -> int:
         cur.close(); conn.close(); return 0
 
     cur.execute("""
-        SELECT id, code, side, budget, shares, reason, thesis, decided_date
+        SELECT id, code, side, budget, shares, reason, thesis, decided_date, style, catalyst
         FROM ai_fund_orders WHERE status = 'pending' ORDER BY side DESC, id
     """)  # side DESC → sell を先に処理して現金を作ってから buy
     orders = cur.fetchall()
     filled = 0
 
-    for oid, code, side, budget, shares, reason, thesis, decided in orders:
+    for oid, code, side, budget, shares, reason, thesis, decided, style, catalyst in orders:
         if decided >= today:
             continue  # 決定日当日の価格では絶対に約定させない
         cur.execute("SELECT open, close FROM daily_prices WHERE code = %s AND date = %s", (code, today))
@@ -189,12 +237,12 @@ def execute_orders() -> int:
         open_px = float(row[0])
 
         if side == "sell":
-            cur.execute("SELECT shares, avg_cost, buy_date, buy_reason FROM ai_fund_positions WHERE code = %s", (code,))
+            cur.execute("SELECT shares, avg_cost, buy_date, buy_reason, style FROM ai_fund_positions WHERE code = %s", (code,))
             pos = cur.fetchone()
             if not pos:
                 cur.execute("UPDATE ai_fund_orders SET status='expired', note='ポジションなし' WHERE id=%s", (oid,))
                 continue
-            p_shares, avg_cost, buy_date, buy_reason = int(pos[0]), float(pos[1]), pos[2], pos[3]
+            p_shares, avg_cost, buy_date, buy_reason, p_style = int(pos[0]), float(pos[1]), pos[2], pos[3], pos[4]
             proceeds = p_shares * open_px
             fee = proceeds * COST_RATE
             pnl = proceeds - fee - p_shares * avg_cost
@@ -202,10 +250,10 @@ def execute_orders() -> int:
             hold_days = (today - buy_date).days if buy_date else None
             cur.execute("""
                 INSERT INTO ai_fund_trades (code, side, shares, price, fee, trade_date, decided_date,
-                                            reason, buy_reason, pnl, pnl_pct, hold_days, created_at)
-                VALUES (%s,'sell',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                                            reason, buy_reason, pnl, pnl_pct, hold_days, style, created_at)
+                VALUES (%s,'sell',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
             """, (code, p_shares, open_px, round(fee), today, decided, reason, buy_reason,
-                  round(pnl), round(pnl_pct, 2), hold_days))
+                  round(pnl), round(pnl_pct, 2), hold_days, p_style or "通常"))
             cur.execute("DELETE FROM ai_fund_positions WHERE code = %s", (code,))
             state["cash"] += proceeds - fee
             cur.execute("UPDATE ai_fund_orders SET status='filled' WHERE id=%s", (oid,))
@@ -225,16 +273,16 @@ def execute_orders() -> int:
             fee = amount * COST_RATE
             avg_cost = (amount + fee) / n
             cur.execute("""
-                INSERT INTO ai_fund_positions (code, shares, avg_cost, buy_date, buy_reason, thesis, created_at)
-                VALUES (%s,%s,%s,%s,%s,%s,NOW())
+                INSERT INTO ai_fund_positions (code, shares, avg_cost, buy_date, buy_reason, thesis, style, catalyst, created_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW())
                 ON DUPLICATE KEY UPDATE
                     avg_cost = (avg_cost*shares + VALUES(avg_cost)*VALUES(shares)) / (shares+VALUES(shares)),
                     shares = shares + VALUES(shares)
-            """, (code, n, round(avg_cost, 2), today, reason, thesis))
+            """, (code, n, round(avg_cost, 2), today, reason, thesis, style or "通常", catalyst))
             cur.execute("""
-                INSERT INTO ai_fund_trades (code, side, shares, price, fee, trade_date, decided_date, reason, created_at)
-                VALUES (%s,'buy',%s,%s,%s,%s,%s,%s,NOW())
-            """, (code, n, open_px, round(fee), today, decided, reason))
+                INSERT INTO ai_fund_trades (code, side, shares, price, fee, trade_date, decided_date, reason, style, catalyst, created_at)
+                VALUES (%s,'buy',%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+            """, (code, n, open_px, round(fee), today, decided, reason, style or "通常", catalyst))
             state["cash"] -= amount + fee
             cur.execute("UPDATE ai_fund_orders SET status='filled' WHERE id=%s", (oid,))
             filled += 1
@@ -289,22 +337,45 @@ def record_nav() -> float | None:
 # 候補の定量スクリーニング（5観点）
 # ─────────────────────────────────────────────────────────────────────────────
 
+_CAND_FROM = """
+    FROM price_stats p
+    JOIN stocks s ON s.code = p.code AND s.is_active = 1
+    LEFT JOIN stock_fundamentals f ON f.code = p.code
+    LEFT JOIN theoretical_values t ON t.code = p.code
+    WHERE p.turnover_20d >= 3 AND p.close BETWEEN 300 AND 24000
+      AND f.market_cap >= 15e9
+"""
+_CAND_SEL = """
+    SELECT p.code, s.name, p.close, p.chg5d, p.chg25d, p.chg75d, p.rsi14,
+           p.dev_ma25, p.dev_high52w, p.vol20_ratio, p.turnover_20d,
+           p.ma200_slope, p.break_65d, f.per, f.roe, f.market_cap,
+           t.theo_ratio, t.upside_3y_pct, p.rev_growth, p.op_growth
+"""
+_CAND_COLS = ["code", "name", "close", "chg5d", "chg25d", "chg75d", "rsi14", "dev_ma25",
+              "dev_high52w", "vol20_ratio", "turnover_20d", "ma200_slope", "break_65d",
+              "per", "roe", "market_cap", "theo_ratio", "upside_3y_pct", "rev_growth", "op_growth"]
+
+
+def _cconv(x):
+    from decimal import Decimal
+    return float(x) if isinstance(x, Decimal) else x
+
+
+def _candidates_one(cur, code: str) -> dict | None:
+    """1銘柄分の候補メトリクスを取得（控え銘柄の合流用）。流動性等の足切りも適用される。"""
+    cur.execute(_CAND_SEL + _CAND_FROM.replace("WHERE", "WHERE p.code = %s AND", 1), (code,))
+    r = cur.fetchone()
+    if not r:
+        return None
+    d = dict(zip(_CAND_COLS, [_cconv(x) for x in r]))
+    d["event"] = None
+    return d
+
+
 def _candidates(cur, exclude: set[str]) -> list[dict]:
     """観点別に候補を集めて重複排除。exclude（保有中・再購入クールダウン中）は除外。"""
-    base_from = """
-        FROM price_stats p
-        JOIN stocks s ON s.code = p.code AND s.is_active = 1
-        LEFT JOIN stock_fundamentals f ON f.code = p.code
-        LEFT JOIN theoretical_values t ON t.code = p.code
-        WHERE p.turnover_20d >= 3 AND p.close BETWEEN 300 AND 24000
-          AND f.market_cap >= 15e9
-    """
-    sel = """
-        SELECT p.code, s.name, p.close, p.chg5d, p.chg25d, p.chg75d, p.rsi14,
-               p.dev_ma25, p.dev_high52w, p.vol20_ratio, p.turnover_20d,
-               p.ma200_slope, p.break_65d, f.per, f.roe, f.market_cap,
-               t.theo_ratio, t.upside_3y_pct, p.rev_growth, p.op_growth
-    """
+    base_from = _CAND_FROM
+    sel = _CAND_SEL
     views = [
         ("momentum", sel + base_from + """
             AND p.chg25d >= 10 AND p.rsi14 < 78 AND p.close > p.ma25 AND p.chg5d > -4
@@ -319,15 +390,9 @@ def _candidates(cur, exclude: set[str]) -> list[dict]:
             AND t.theo_ratio >= 1.25 AND p.op_growth > 5 AND p.chg25d > -5 AND p.rsi14 < 70
             ORDER BY t.upside_3y_pct DESC LIMIT 6"""),
     ]
-    from decimal import Decimal
-
-    def _conv(x):
-        return float(x) if isinstance(x, Decimal) else x
-
+    _conv = _cconv
     cands: dict[str, dict] = {}
-    cols = ["code", "name", "close", "chg5d", "chg25d", "chg75d", "rsi14", "dev_ma25",
-            "dev_high52w", "vol20_ratio", "turnover_20d", "ma200_slope", "break_65d",
-            "per", "roe", "market_cap", "theo_ratio", "upside_3y_pct", "rev_growth", "op_growth"]
+    cols = _CAND_COLS
     for tag, q in views:
         cur.execute(q)
         for r in cur.fetchall():
@@ -378,7 +443,38 @@ def _candidates(cur, exclude: set[str]) -> list[dict]:
                 d = dict(zip(cols, [_conv(x) for x in r]))
                 d["tags"] = ["event"]; d["event"] = ev
                 cands[code] = d
-    return list(cands.values())[:28]
+
+    # 観点6: 資金流入テーマ内の「出遅れ」（先回り投資の材料）。
+    # 「テーマ内のAが買われた→出遅れているBに資金が波及する」という一歩先の予測用。
+    # テーマは規模足切り（売買代金100億+・8銘柄+）でノイズを除外（/flowsと同じ基準）
+    cur.execute("""
+        SELECT group_key, zscore FROM money_flow_weekly
+        WHERE group_type = 'theme' AND flow_class = 'inflow'
+          AND week_end = (SELECT MAX(week_end) FROM money_flow_weekly)
+          AND turnover >= 100 AND n_stocks >= 8
+        ORDER BY zscore DESC LIMIT 5
+    """)
+    for theme, z in cur.fetchall():
+        cur.execute(
+            sel + base_from.replace(
+                "WHERE", "WHERE p.code IN (SELECT code FROM kabutan_themes WHERE theme = %s) AND", 1) + """
+            AND p.chg25d < 12 AND p.chg5d > -5 AND p.ma200_slope >= 0 AND p.rsi14 < 65
+            ORDER BY p.turnover_20d DESC LIMIT 3
+        """, (theme,))
+        for r in cur.fetchall():
+            d = dict(zip(cols, [_conv(x) for x in r]))
+            code = d["code"]
+            if code in exclude:
+                continue
+            note = f"資金流入テーマ「{theme}」(Z={float(z):.1f})内でまだ上がっていない出遅れ"
+            if code in cands:
+                if "laggard" not in cands[code]["tags"]:
+                    cands[code]["tags"].append("laggard")
+                cands[code]["event"] = cands[code].get("event") or note
+            else:
+                d["tags"] = ["laggard"]; d["event"] = note
+                cands[code] = d
+    return list(cands.values())[:36]
 
 
 def _cooldown_codes(cur) -> set[str]:
@@ -397,17 +493,19 @@ def _fnum(v, nd=1):
     return "-" if v is None else f"{float(v):.{nd}f}"
 
 
-def _build_prompt(state, positions, cands, market_ctx, n_slots, est_cash) -> str:
+def _build_prompt(state, positions, cands, market_ctx, n_slots, est_cash,
+                  policy_prev, feedback, inflow_themes, movers) -> str:
     pos_lines = []
     for p in positions:
+        style_tag = f"[{p.get('style') or '通常'}] " if p.get("style") == "先回り" else ""
         pos_lines.append(
-            f"- {p['code']} {p['name']}: 取得{p['avg_cost']:,.0f}円({str(p['buy_date'])}) 現在{p['close']:,.0f}円 "
+            f"- {style_tag}{p['code']} {p['name']}: 取得{p['avg_cost']:,.0f}円({str(p['buy_date'])}) 現在{p['close']:,.0f}円 "
             f"損益{p['pnl_pct']:+.1f}% 保有{p['hold_days']}日 RSI{_fnum(p['rsi14'],0)} 5日{_fnum(p['chg5d'])}% 25日{_fnum(p['chg25d'])}%\n"
-            f"  購入理由: {p['buy_reason']}\n  シナリオ: {p['thesis']}"
+            f"  購入理由: {p['buy_reason']}\n  カタリスト: {p.get('catalyst') or '（未記録）'}\n  シナリオ: {p['thesis']}"
         )
     cand_lines = []
     for c in cands:
-        extra = f" イベント:{c['event']}" if c.get("event") else ""
+        extra = f" 補足:{c['event']}" if c.get("event") else ""
         cand_lines.append(
             f"- {c['code']} {c['name']} [{'/'.join(c['tags'])}] 株価{c['close']:,.0f}円 "
             f"5日{_fnum(c['chg5d'])}% 25日{_fnum(c['chg25d'])}% 75日{_fnum(c['chg75d'])}% RSI{_fnum(c['rsi14'],0)} "
@@ -423,26 +521,46 @@ def _build_prompt(state, positions, cands, market_ctx, n_slots, est_cash) -> str
 - 予算: 1銘柄 {BUDGET_MIN//10000}万〜{BUDGET_MAX//10000}万円。買い予算の合計は約{est_cash/10000:,.0f}万円以内
 - 約定は明日の寄付（成行）。今日の終値からは乖離しうる
 - 売買理由は具体的に（何を根拠に・何を期待して・どうなったら降りるか）。理由の水増しや創作は禁止
+- **全ての買いに catalyst（カタリスト）を必ず書く**: 自分が買った後に「誰が・いつ・なぜ買い上げてくるのか」。
+  例: 「直近の上方修正で機関投資家の見直し買いが入る局面」「65日高値ブレイク銘柄はトレンド追随の買いを
+  呼びやすい」「テーマXに資金流入中だが本銘柄はそのXに不可欠な部材でまだ物色が及んでいない」。
+  提供データから言えることだけを書き、無いイベントを創作しない。カタリストが書けない銘柄は買わない
+- 各買いに style を付ける: "通常" または "先回り"（=まだ上がっていないが、資金波及・技術トレンドの読みで
+  次に買われると**予測**する銘柄。laggardタグ等）。先回りは予測であることを理由に明記し、保有は最大{MAX_ANTICIPATE}銘柄まで
 
-# 市況
+# 前回までの投資基準（あなた自身が書いたもの。継続性を保ちつつ、環境変化の根拠があれば更新する）
+{policy_prev or '（初回のためまだ無い。今日の環境から初版を書くこと）'}
+
+# 直近の成績フィードバック（何が効いて何が外れたか。基準の更新材料にする）
+{feedback or '（まだ売買実績なし）'}
+
+# 今週の相場環境
 {market_ctx}
+- 資金流入テーマ: {inflow_themes or '—'}
+- 直近1週間の上昇上位: {movers or '—'}
 
 # 現在のポートフォリオ（現金 {state['cash']/10000:,.0f}万円）
 {chr(10).join(pos_lines) if pos_lines else '（なし・初回構築）'}
 
 # 買い候補（定量スクリーニング済み。この中からのみ選ぶこと）
-[タグ] momentum=上昇モメンタム / dip=上昇トレンド中の押し目 / breakout=65日高値ブレイク / value_growth=理論株価比で割安×成長 / event=直近の上方修正・増配
+[タグ] momentum=上昇モメンタム / dip=上昇トレンド中の押し目 / breakout=65日高値ブレイク / value_growth=割安×成長 / event=上方修正・増配 / laggard=資金流入テーマ内の出遅れ(先回り向き) / bench=昨日までの控え銘柄
 {chr(10).join(cand_lines)}
 
 # 指示
-1. 保有銘柄それぞれについてシナリオ通りか点検し、崩れたもの・目標達成したもの・より良い候補に劣後するものを売る（無理に売る必要はない）
-2. 買いは候補から選ぶ。分散（同一業種・同一テーマに偏らない）と、モメンタム・押し目・イベント等の組み合わせを意識する
-3. 確信度に応じて予算に強弱をつける
+1. 保有銘柄それぞれについて**カタリストとシナリオが生きているか**を点検し、崩れたもの・実現して出尽くしたもの・
+   より良い候補に劣後するものを売る（無理に売る必要はない。売却理由にはカタリストの検証結果を書く）
+2. 買いは候補から選ぶ。分散（同一業種・同一テーマに偏らない）と、観点の組み合わせを意識する。確信度に応じて予算に強弱
+3. 保有8銘柄に次ぐ「控え」を{N_BENCH}銘柄選ぶ（保有・買い予定と重複しないこと。次に昇格させたい順）
+4. 投資基準(policy)を更新する: 今の相場で「何が効いているか」を踏まえ、銘柄選定・利確/損切り・保有期間の方針を
+   箇条書き4〜7行で明文化。前回から変えた点があれば末尾に「【更新】…」として1行で理由を書く
 
-以下のJSONのみを出力（説明文・コードブロック不要）:
+以下のJSONのみを出力:
 {{"market_view": "市況の見立て(2文以内)",
- "sells": [{{"code": "XXXX", "reason": "売却理由(シナリオとの照合を含め具体的に)"}}],
- "buys": [{{"code": "XXXX", "budget": 1200000, "reason": "購入理由(根拠を具体的に)", "thesis": "想定シナリオと売却条件(例: 〜を期待。MA25割れか+25%で売却)"}}]}}"""
+ "policy": "今日時点の投資基準（箇条書き。改行は\\n）",
+ "sells": [{{"code": "XXXX", "reason": "売却理由(カタリスト・シナリオとの照合を含め具体的に)"}}],
+ "buys": [{{"code": "XXXX", "budget": 1200000, "style": "通常", "reason": "購入理由",
+           "catalyst": "誰が・いつ・なぜ買い上げてくるか（必須）", "thesis": "想定シナリオと売却条件"}}],
+ "bench": [{{"code": "XXXX", "style": "通常", "reason": "控えに置く理由(1文)"}}]}}"""
 
 
 def _call_gemini(prompt: str) -> dict | None:
@@ -502,9 +620,9 @@ def decide() -> int:
     latest = _latest_trading_date(cur)
 
     # ── 現ポジション状況 ──
-    cur.execute("SELECT code, shares, avg_cost, buy_date, buy_reason, thesis FROM ai_fund_positions")
+    cur.execute("SELECT code, shares, avg_cost, buy_date, buy_reason, thesis, style, catalyst FROM ai_fund_positions")
     positions = []
-    for code, shares, avg_cost, buy_date, buy_reason, thesis in cur.fetchall():
+    for code, shares, avg_cost, buy_date, buy_reason, thesis, style, catalyst in cur.fetchall():
         cur.execute("""
             SELECT s.name, d.close, p.rsi14, p.chg5d, p.chg25d
             FROM stocks s
@@ -517,7 +635,7 @@ def decide() -> int:
         positions.append({
             "code": code, "name": r[0] if r else code, "shares": int(shares),
             "avg_cost": float(avg_cost), "buy_date": buy_date, "buy_reason": buy_reason,
-            "thesis": thesis, "close": close,
+            "thesis": thesis, "style": style or "通常", "catalyst": catalyst, "close": close,
             "pnl_pct": (close / float(avg_cost) - 1) * 100,
             "hold_days": (today - buy_date).days if buy_date else 0,
             "rsi14": r[2] if r else None, "chg5d": r[3] if r else None, "chg25d": r[4] if r else None,
@@ -534,23 +652,79 @@ def decide() -> int:
         print("  [AIファンド] 候補なし（データ未整備？）→ 見送り")
         cur.close(); conn.close(); return 0
 
+    # ── 昨日までの控え銘柄を候補プールに合流（昇格の道を確保） ──
+    cur.execute("""
+        SELECT code FROM ai_fund_bench
+        WHERE bench_date = (SELECT MAX(bench_date) FROM ai_fund_bench)
+    """)
+    prev_bench = [r[0] for r in cur.fetchall()]
+    cand_codes_now = {c["code"] for c in cands}
+    for bcode in prev_bench:
+        if bcode in exclude or bcode in cand_codes_now:
+            if bcode in cand_codes_now and "bench" not in {t for c in cands if c["code"] == bcode for t in c["tags"]}:
+                next(c for c in cands if c["code"] == bcode)["tags"].append("bench")
+            continue
+        cands_extra = _candidates_one(cur, bcode)
+        if cands_extra:
+            cands_extra["tags"] = ["bench"]
+            cands.append(cands_extra)
+
     # ── 市況コンテキスト ──
     cur.execute("SELECT ai_commentary FROM market_summary ORDER BY summary_date DESC LIMIT 1")
     r = cur.fetchone()
     market_ctx = (r[0][:400] if r and r[0] else "（市況コメントなし）")
 
+    # ── 投資基準（前回分）・成績フィードバック・環境データ ──
+    cur.execute("SELECT statement FROM ai_fund_policy ORDER BY policy_date DESC LIMIT 1")
+    r = cur.fetchone()
+    policy_prev = r[0] if r else None
+
+    cur.execute("""
+        SELECT t.code, s.name, t.pnl_pct, t.hold_days, t.style
+        FROM ai_fund_trades t JOIN stocks s ON s.code = t.code
+        WHERE t.side = 'sell' ORDER BY t.trade_date DESC LIMIT 12
+    """)
+    fb_rows = cur.fetchall()
+    feedback = None
+    if fb_rows:
+        wins = sum(1 for r2 in fb_rows if float(r2[2] or 0) > 0)
+        lines = [f"- {r2[0]} {r2[1]}: {float(r2[2]):+.1f}% ({r2[3]}日保有・{r2[4] or '通常'})" for r2 in fb_rows]
+        feedback = f"直近{len(fb_rows)}トレードの勝率 {wins}/{len(fb_rows)}\n" + "\n".join(lines)
+
+    cur.execute("""
+        SELECT group_label, zscore FROM money_flow_weekly
+        WHERE group_type='theme' AND flow_class='inflow'
+          AND week_end = (SELECT MAX(week_end) FROM money_flow_weekly)
+          AND turnover >= 100 AND n_stocks >= 8
+        ORDER BY zscore DESC LIMIT 6
+    """)
+    inflow_themes = "、".join(f"{r2[0]}(Z{float(r2[1]):.1f})" for r2 in cur.fetchall())
+
+    cur.execute("""
+        SELECT p.code, s.name, p.chg5d FROM price_stats p
+        JOIN stocks s ON s.code = p.code AND s.is_active = 1
+        WHERE p.turnover_20d >= 5 ORDER BY p.chg5d DESC LIMIT 10
+    """)
+    movers = "、".join(f"{r2[1]}({float(r2[2]):+.0f}%)" for r2 in cur.fetchall())
+
     n_slots = N_POSITIONS - len(positions) + len(forced_sells)
     # 買い予算の目安: 現金 + 売り見込み（強制ロスカット分は今日終値の98%で概算）
     est_cash = state["cash"] + sum(p["close"] * p["shares"] * 0.98 for p in forced_sells)
 
-    prompt = _build_prompt(state, positions, cands, market_ctx, n_slots, est_cash)
+    prompt = _build_prompt(state, positions, cands, market_ctx, n_slots, est_cash,
+                           policy_prev, feedback, inflow_themes, movers)
     out = _call_gemini(prompt)
 
-    sells, buys, market_view = [], [], ""
+    sells, buys, market_view, policy_new, bench_out = [], [], "", "", []
     if out:
         market_view = str(out.get("market_view", ""))[:500]
-        sells = out.get("sells", []) or []
-        buys = out.get("buys", []) or []
+        pol = out.get("policy", "")
+        if isinstance(pol, list):  # 箇条書きを配列で返してくるケースに対応
+            pol = "\n".join(str(x) for x in pol)
+        policy_new = str(pol)[:3000]
+        sells = [s0 for s0 in (out.get("sells") or []) if isinstance(s0, dict)]
+        buys = [b0 for b0 in (out.get("buys") or []) if isinstance(b0, dict)]
+        bench_out = [b0 for b0 in (out.get("bench") or []) if isinstance(b0, dict)]
 
     # ── ガードレール ──
     cand_codes = {c["code"] for c in cands}
@@ -571,11 +745,22 @@ def decide() -> int:
                                    for p in positions
                                    if p["code"] in forced_codes | {s["code"] for s in valid_sells})
 
+    # 先回り（予測）スタイルはポートフォリオの一部に留める:
+    # 売却されずに残る先回り保有 + 新規の先回り買い ≤ MAX_ANTICIPATE
+    leaving = forced_codes | {s["code"] for s in valid_sells}
+    n_antic = sum(1 for p in positions if p["style"] == "先回り" and p["code"] not in leaving)
+
     valid_buys, budget_sum, seen = [], 0.0, set()
     for b0 in buys:
         c = str(b0.get("code", "")).strip()
         if c not in cand_codes or c in seen or len(valid_buys) >= n_buy_slots:
             continue
+        style = "先回り" if str(b0.get("style", "")).strip() == "先回り" else "通常"
+        if style == "先回り":
+            if n_antic >= MAX_ANTICIPATE:
+                print(f"    [ガード] {c}: 先回り枠({MAX_ANTICIPATE})超過のため見送り")
+                continue
+            n_antic += 1
         try:
             budget = float(b0.get("budget", 0))
         except (TypeError, ValueError):
@@ -585,8 +770,16 @@ def decide() -> int:
             budget = est_cash - budget_sum
             if budget < BUDGET_MIN * 0.8:
                 continue
-        valid_buys.append({"code": c, "budget": round(budget),
+        catalyst = str(b0.get("catalyst", "")).strip()[:800]
+        if not catalyst:
+            # 運営方針3: カタリストが書けない銘柄は買わない
+            print(f"    [ガード] {c}: カタリスト未記載のため見送り")
+            if style == "先回り":
+                n_antic -= 1
+            continue
+        valid_buys.append({"code": c, "budget": round(budget), "style": style,
                            "reason": str(b0.get("reason", ""))[:1000],
+                           "catalyst": catalyst,
                            "thesis": str(b0.get("thesis", ""))[:600]})
         budget_sum += budget
         seen.add(c)
@@ -602,8 +795,9 @@ def decide() -> int:
             tag_jp = {"momentum": "上昇モメンタム", "dip": "押し目", "breakout": "高値ブレイク",
                       "value_growth": "割安×成長", "event": "好業績イベント"}
             reasons = "・".join(tag_jp.get(t, t) for t in c["tags"])
-            valid_buys.append({"code": c["code"], "budget": round(budget),
+            valid_buys.append({"code": c["code"], "budget": round(budget), "style": "通常",
                                "reason": f"[定量補完] {reasons}の条件に合致（25日騰落{_fnum(c['chg25d'])}%・RSI{_fnum(c['rsi14'],0)}）。AI出力不足分を規律的に補充。",
+                               "catalyst": f"{reasons}の統計的エッジ（強いトレンド・出来高を伴う銘柄は追随買いを集めやすい）。",
                                "thesis": "購入根拠のトレンドが崩れたら（MA25明確割れ or -12%）撤退。+20%超で利益確定を検討。"})
             budget_sum += budget
             seen.add(c["code"])
@@ -627,10 +821,48 @@ def decide() -> int:
         n_orders += 1
     for b0 in valid_buys:
         cur.execute("""
-            INSERT INTO ai_fund_orders (code, side, budget, reason, thesis, decided_date, created_at)
-            VALUES (%s,'buy',%s,%s,%s,%s,NOW())
-        """, (b0["code"], b0["budget"], b0["reason"], b0["thesis"], today))
+            INSERT INTO ai_fund_orders (code, side, budget, reason, catalyst, thesis, style, decided_date, created_at)
+            VALUES (%s,'buy',%s,%s,%s,%s,%s,%s,NOW())
+        """, (b0["code"], b0["budget"], b0["reason"], b0.get("catalyst", ""), b0["thesis"],
+              b0.get("style", "通常"), today))
         n_orders += 1
+
+    # ── 投資基準の保存（日次で蓄積。最新をサイト表示） ──
+    if policy_new:
+        cur.execute("""
+            INSERT INTO ai_fund_policy (policy_date, statement, created_at)
+            VALUES (%s, %s, NOW())
+            ON DUPLICATE KEY UPDATE statement = VALUES(statement)
+        """, (today, policy_new))
+
+    # ── 控え（ベンチ）銘柄の保存: 保有・買い予定と重複しない8銘柄。不足は定量上位で補完 ──
+    held_after = (held - {s["code"] for s in valid_sells} - forced_codes) | {b["code"] for b in valid_buys}
+    bench_rows, bseen = [], set()
+    for b0 in bench_out:
+        c = str(b0.get("code", "")).strip()
+        if len(bench_rows) >= N_BENCH:
+            break
+        if c in cand_codes and c not in held_after and c not in bseen:
+            style = "先回り" if str(b0.get("style", "")).strip() == "先回り" else "通常"
+            bench_rows.append((c, style, str(b0.get("reason", ""))[:500]))
+            bseen.add(c)
+    if len(bench_rows) < N_BENCH:
+        ranked = sorted((c for c in cands if c["code"] not in bseen and c["code"] not in held_after),
+                        key=lambda c: (-len(c["tags"]), -(c["chg25d"] or 0)))
+        for c in ranked:
+            if len(bench_rows) >= N_BENCH:
+                break
+            bench_rows.append((c["code"], "通常", f"[定量補完] {'/'.join(c['tags'])}の上位候補"))
+            bseen.add(c["code"])
+    cur.execute("DELETE FROM ai_fund_bench WHERE bench_date = %s", (today,))
+    for i, (c, style, reason) in enumerate(bench_rows, 1):
+        cur.execute("SELECT close FROM daily_prices WHERE code=%s AND date=%s", (c, latest))
+        r = cur.fetchone()
+        close_at = float(r[0]) if r and r[0] else None
+        cur.execute("""
+            INSERT INTO ai_fund_bench (bench_date, rank_no, code, style, reason, close_at, created_at)
+            VALUES (%s,%s,%s,%s,%s,%s,NOW())
+        """, (today, i, c, style, reason, close_at))
 
     cur.execute("UPDATE ai_fund_state SET last_decided=%s, updated_at=NOW() WHERE id=1", (today,))
     if market_view and latest:

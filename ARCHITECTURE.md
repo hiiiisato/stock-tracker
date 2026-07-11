@@ -117,10 +117,13 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - `seed_themes.py` — テーママスタ・銘柄×テーマ関連の投入（テーマ追加時に再実行する保守スクリプト）
 - `ai_fund.py` — AIファンドマネージャー（模擬運用・/aifundタブ）。元本1000万・常時8銘柄・100株単位・
   コスト0.1%/片道。**先読み防止が最重要**: イブニング便で意思決定(`decide`)→翌営業日の寄付で約定
-  (`execute_orders`は決定日 >= 最新取引日の注文を約定させない)。ハイブリッド判断=定量5観点
-  （モメンタム/押し目/ブレイク/割安成長/業績イベント）で候補28銘柄→Geminiが売買と理由・シナリオを決定
-  →ガードレール（8銘柄維持・予算60万〜250万・入替3/日・再購入7日禁止・-20%強制ロスカット・
-  AI出力不足時は定量補完で8銘柄を必ず充足）。NAVは終値評価で `ai_fund_nav` に日次記録（ベンチ=1306）
+  (`execute_orders`は決定日 >= 最新取引日の注文を約定させない)。ハイブリッド判断=定量6観点
+  （モメンタム/押し目/ブレイク/割安成長/業績イベント/資金流入テーマ内の出遅れ=先回り材料）で候補約30銘柄
+  →Geminiが売買と理由・シナリオを決定→ガードレール（8銘柄維持・予算60万〜250万・入替3/日・
+  再購入7日禁止・-20%強制ロスカット・**先回り(予測)スタイルは最大2銘柄**・AI出力不足時は定量補完）。
+  さらに毎晩: **投資基準を明文化して`ai_fund_policy`に日次蓄積**（前回基準+成績フィードバック+
+  資金流入テーマを見て更新→次回プロンプトに注入する学習ループ）、**控え8銘柄を`ai_fund_bench`で別管理**
+  （選定日終値からの騰落を計測・候補プールに合流して昇格可能）。NAVは終値評価で日次記録（ベンチ=1306）
 
 ### Web (app.py — 単一ファイル約6200行)
 セクション見出し（`# ═══` コメント）で区切られている。構成:
@@ -170,7 +173,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | 会社情報 | `stocks.business_description`（カラム） | edinet_business.py / edinet_texts.py（詳細=有報「事業の内容」） |
 | ファンド | `fund_master` `fund_reports` | fund_watch.py |
 | アプリ | `watchlist` `stock_memos` `fetch_logs` | app.py / daily_run.py |
-| AIファンド | `ai_fund_state` `ai_fund_positions` `ai_fund_orders` `ai_fund_trades` `ai_fund_nav` | ai_fund.py（模擬運用・全売買に理由を記録） |
+| AIファンド | `ai_fund_state` `ai_fund_positions` `ai_fund_orders` `ai_fund_trades` `ai_fund_nav` `ai_fund_policy` `ai_fund_bench` | ai_fund.py（模擬運用・全売買に理由を記録・投資基準と控え銘柄を日次蓄積） |
 
 ## 落とし穴（過去に踏んだもの）
 
