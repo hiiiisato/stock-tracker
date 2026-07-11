@@ -33,6 +33,7 @@ KEY     = os.environ.get("EDINETDB_API_KEY", "")
 HEADERS = {"X-API-Key": KEY, "Accept": "application/json"}
 DELAY   = 0.5    # API間隔（秒）
 LIMIT   = 10     # 月300件上限のため1日10件に抑える（300÷30日）
+RETRY_DAYS = 30  # edinet_code を解決できない/データ無しの銘柄を再試行しない期間（無駄な再スキャン防止）
 
 
 # ─── テーブル作成 ────────────────────────────────────────────────────────────
@@ -60,6 +61,40 @@ def _ensure_table():
             cur.execute(f"ALTER TABLE edinet_text_blocks ADD COLUMN {col} {typedef}")
         except Exception:
             pass
+    # 取得試行メタ（negative cache）。
+    # edinet_code を解決できない/データ無しの銘柄は edinet_text_blocks に行が残らず、
+    # 対象選定の NOT EXISTS で毎回また未取得扱いになり再スキャンされてしまう。
+    # ここに試行日時を記録し、RETRY_DAYS 以内は対象から除外して無駄な再取得を防ぐ。
+    # （edinet_segments.py の company_segments_meta と同じ設計）
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS edinet_text_meta (
+            code         VARCHAR(10)  NOT NULL,
+            last_attempt DATETIME,
+            status       VARCHAR(20),
+            PRIMARY KEY (code)
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+# ─── 取得試行の記録（negative cache） ───────────────────────────────────────
+def _mark_attempts(failed: list[tuple[str, str]]):
+    """解決できなかった銘柄の試行日時を edinet_text_meta にまとめて記録する。
+    次回以降 RETRY_DAYS 以内は対象から除外され、無駄な再スキャンを防ぐ。"""
+    if not failed:
+        return
+    conn = get_conn()
+    cur  = conn.cursor()
+    now  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cur.executemany("""
+        INSERT INTO edinet_text_meta (code, last_attempt, status)
+        VALUES (%s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            last_attempt = VALUES(last_attempt),
+            status       = VALUES(status)
+    """, [(code, now, status) for code, status in failed])
     conn.commit()
     cur.close()
     conn.close()
@@ -271,12 +306,19 @@ def run(target_codes: list[str] | None = None, force: bool = False):
         if force:
             cur.execute("SELECT code FROM stocks WHERE is_active=1 ORDER BY code")
         else:
-            # 未取得の銘柄を優先
-            cur.execute("""
+            # 未取得の銘柄を優先。
+            # ただし直近 RETRY_DAYS 以内に試行して解決できなかった銘柄は除外し、
+            # 毎回同じ銘柄（新形式コードや非EDINET銘柄など）を無駄に叩き続けるのを防ぐ。
+            cur.execute(f"""
                 SELECT s.code FROM stocks s
                 WHERE s.is_active = 1
                   AND NOT EXISTS (
                     SELECT 1 FROM edinet_text_blocks e WHERE e.code = s.code
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM edinet_text_meta m
+                    WHERE m.code = s.code
+                      AND m.last_attempt > NOW() - INTERVAL {RETRY_DAYS} DAY
                   )
                 ORDER BY s.code
             """)
@@ -286,6 +328,7 @@ def run(target_codes: list[str] | None = None, force: bool = False):
     total    = len(codes)
     api_used = 0
     ok = skip = err = 0
+    failed: list[tuple[str, str]] = []   # (code, status) — negative cache へ記録する試行
 
     print(f"対象: {total} 銘柄  上限: {LIMIT} 件/日")
     print()
@@ -306,9 +349,13 @@ def run(target_codes: list[str] | None = None, force: bool = False):
             label = f"SKIP（取得済み {result['sections']}件）"
         else:
             err += 1
+            failed.append((code, result["status"]))
             label = f"ERROR: {result['status']}"
 
         print(f"  [{i:>4}/{total}] {code}  {label}")
+
+    # 解決できなかった銘柄を negative cache に記録（RETRY_DAYS 以内は再スキャンしない）
+    _mark_attempts(failed)
 
     print()
     print(f"完了: 取得OK={ok}  スキップ={skip}  エラー={err}  APIコール使用={api_used}")

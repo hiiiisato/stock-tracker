@@ -16,7 +16,25 @@ on:
 jobs:
   batch:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 夜間トリオ（texts→segments→company_profile）を直列実行するため余裕を持たせる。
+    # edinet_texts は解決不能な銘柄を negative cache でスキップするので通常は数分で終わるが、
+    # メタが空の初回のみ全銘柄をフルスキャン（約28分）するため 50 分を確保しておく。
+    timeout-minutes: 50
+
+    # スクリプトごとにステップを分け、どこで時間がかかったか/失敗したかを一目で分かるようにする。
+    # 全スクリプト共通の環境変数はジョブレベルに集約する。
+    env:
+      TIDB_HOST:      ${{ secrets.TIDB_HOST }}
+      TIDB_PORT:      ${{ secrets.TIDB_PORT }}
+      TIDB_USER:      ${{ secrets.TIDB_USER }}
+      TIDB_PASSWORD:  ${{ secrets.TIDB_PASSWORD }}
+      TIDB_DATABASE:  ${{ secrets.TIDB_DATABASE }}
+      # config.py が全モジュール共通で必須読み込みするため未設定だと即座に落ちる
+      JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
+      # edinet_texts.py に必要（edinetdb.jp のAPIキー）
+      EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
+      # fund_watch.py のPDF構造化抽出に必要
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
     steps:
       - name: Checkout
@@ -31,28 +49,24 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: バッチ実行
-        env:
-          TIDB_HOST:      ${{ secrets.TIDB_HOST }}
-          TIDB_PORT:      ${{ secrets.TIDB_PORT }}
-          TIDB_USER:      ${{ secrets.TIDB_USER }}
-          TIDB_PASSWORD:  ${{ secrets.TIDB_PASSWORD }}
-          TIDB_DATABASE:  ${{ secrets.TIDB_DATABASE }}
-          # config.py が全モジュール共通で必須読み込みするため未設定だと即座に落ちる
-          JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
-          # edinet_texts.py に必要（edinetdb.jp のAPIキー）
-          EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
-          # fund_watch.py のPDF構造化抽出に必要
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          if [ "${{ github.event.schedule }}" = "0 21 4,14,24 * *" ] || [ "${{ inputs.job }}" = "fund_watch" ]; then
-            python fund_watch.py
-          else
-            python edinet_texts.py --all
-            # 事業セグメント（80件/日 ≒ 40日で全銘柄一巡 → 以後90日周期で巡回更新）。
-            # edinetdb.jp 無料枠100コール/日を edinet_texts(10件/日) と分け合う。
-            python edinet_segments.py --all
-            # 会社概要・kabutanテーマタグの定期メンテ（150件/日 ≒ 月次で全銘柄一巡）。
-            # 市場時間と無関係なので夕方のメイン便ではなく夜間に実行する。
-            python company_profile.py
-          fi
+      # 月次（5,15,25日）はファンドレポート取込のみ。手動実行で job=fund_watch を選んだ場合も同様。
+      - name: ファンド月次レポート取込
+        if: ${{ github.event.schedule == '0 21 4,14,24 * *' || inputs.job == 'fund_watch' }}
+        run: python fund_watch.py
+
+      # 毎日23:45（および手動 job=edinet_texts）は夜間トリオを順に実行。
+      - name: EDINET本文テキスト取得
+        if: ${{ github.event.schedule != '0 21 4,14,24 * *' && inputs.job != 'fund_watch' }}
+        run: python edinet_texts.py --all
+
+      # 事業セグメント（80件/日 ≒ 40日で全銘柄一巡 → 以後90日周期で巡回更新）。
+      # edinetdb.jp 無料枠100コール/日を edinet_texts(10件/日) と分け合う。
+      - name: 事業セグメント取得
+        if: ${{ github.event.schedule != '0 21 4,14,24 * *' && inputs.job != 'fund_watch' }}
+        run: python edinet_segments.py --all
+
+      # 会社概要・kabutanテーマタグの定期メンテ（150件/日 ≒ 月次で全銘柄一巡）。
+      # 市場時間と無関係なので夕方のメイン便ではなく夜間に実行する。
+      - name: 会社概要・テーマタグ取得
+        if: ${{ github.event.schedule != '0 21 4,14,24 * *' && inputs.job != 'fund_watch' }}
+        run: python company_profile.py

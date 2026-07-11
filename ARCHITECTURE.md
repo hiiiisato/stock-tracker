@@ -77,6 +77,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - `fundamentals.py` — PER/PBR/時価総額等 → `stock_fundamentals`
 - `market_indices.py` — 海外・国内指数 → `market_index_prices`
 - `edinet_texts.py` — EDINET有報の定性テキスト全17セクション → `edinet_text_blocks`（edinetdb.jp経由・10件/日制限）
+  ＋取得試行 `edinet_text_meta`（edinet_code を解決できない銘柄=新形式コード/非EDINET等は`no_edinet_code`記録で30日間再スキャン防止。毎回755件をフルスキャンして28分浪費するのを回避）。
 - `edinet_segments.py` — 事業セグメント別の売上・利益・構成比の時系列（約7年分）→ `company_segments`
   ＋取得状態 `company_segments_meta`（単一セグメント企業は404→`no_data`記録で再取得ループ防止）。
   80件/日ドリップ（未取得は時価総額の大きい順→90日周期で巡回更新）。edinetdb.jp無料枠100コール/日をtextsと分け合う。
@@ -150,7 +151,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | テーマ | `theme_categories` `stock_themes` `theme_daily_stats` | seed_themes.py / theme_score.py（自前キュレーション・テーマ分析ハブ用） |
 | テーマ | `kabutan_themes` | company_profile.py（kabutan付与タグ・1500超テーマ。資金フロー分析用） |
 | 分析 | `money_flow_weekly` | money_flow.py（グループ別の週次資金フロー） |
-| テキスト | `edinet_text_blocks` | edinet_texts.py |
+| テキスト | `edinet_text_blocks` `edinet_text_meta` | edinet_texts.py（metaは解決失敗銘柄のnegative cache・再スキャン防止） |
 | 会社情報 | `company_segments` `company_segments_meta` | edinet_segments.py（セグメント別売上・利益の時系列） |
 | 開示 | `disclosures` `market_summary` | disclosures.py（TDnet全開示の蓄積＋日次市況考察） |
 | 会社情報 | `stocks.business_summary/website`（カラム） | company_profile.py（簡単な事業内容=kabutan概要） |
