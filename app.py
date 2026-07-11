@@ -2237,6 +2237,9 @@ _STOCK_CSS = """
 .co-fact-val { font-size: 13px; font-weight: 600; color: #c9d1d9; }
 .co-biz-divider { border: none; border-top: 1px solid #21262d; margin: 14px 0; }
 .co-biz-summary { font-size: 13px; color: #c9d1d9; line-height: 1.75; }
+.co-biz-label { font-size: 11px; color: #8b949e; font-weight: 600; margin: 0 0 3px; }
+.co-biz-kabutan { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed #30363d; }
+.co-biz-kabutan p, .co-biz-ai p { margin: 0; }
 .co-biz-source { font-size: 11px; color: #6e7681; margin-top: 6px; }
 .co-biz-points { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; margin-top: 12px; }
 .co-biz-point-title { font-size: 11px; color: #8b949e; font-weight: 600; margin-bottom: 4px; }
@@ -6429,16 +6432,29 @@ def _build_stock_page(code: str) -> str:
     #   整理 = business_overviews.overview（Codexが有報原文から整理）
     #   簡単 = stocks.business_summary（kabutan概要・company_profile.py が月次一巡で更新）
     #   詳細 = stocks.business_description（EDINET有報「事業の内容」・edinet_texts.py）
+    biz_kabutan_html = ""
     biz_summary_html = ""
     biz_points_html  = ""
     biz_full_html    = ""
 
+    if s_biz_summary:
+        biz_kabutan_html = (
+            '<div class="co-biz-kabutan">'
+            '<div class="co-biz-label">短文概要</div>'
+            f'<p>{_html_mod.escape(s_biz_summary)}</p>'
+            '</div>'
+        )
+
     if biz_overview and biz_overview[0]:
         bo_text, bo_points_raw, bo_source_updated, _bo_generated_by = biz_overview
-        biz_summary_html = f'<p>{_html_mod.escape(bo_text)}</p>'
+        biz_summary_html = (
+            '<div class="co-biz-ai">'
+            '<div class="co-biz-label">AI整理</div>'
+            f'<p>{_html_mod.escape(bo_text)}</p>'
+        )
         source_date = str(bo_source_updated)[:10] if bo_source_updated else (str(s_biz_updated)[:10] if s_biz_updated else "")
         source_label = f"AI整理（有報 {source_date} 時点）" if source_date else "AI整理（有報時点）"
-        biz_summary_html += f'<div class="co-biz-source">{_html_mod.escape(source_label)}</div>'
+        biz_summary_html += f'<div class="co-biz-source">{_html_mod.escape(source_label)}</div></div>'
 
         try:
             points = _json.loads(bo_points_raw) if bo_points_raw else {}
@@ -6467,8 +6483,6 @@ def _build_stock_page(code: str) -> str:
                 )
         if point_blocks:
             biz_points_html = f'<div class="co-biz-points">{"".join(point_blocks)}</div>'
-    elif s_biz_summary:
-        biz_summary_html = f'<p>{_html_mod.escape(s_biz_summary)}</p>'
 
     if s_biz_desc:
         biz_updated_str = str(s_biz_updated)[:10] if s_biz_updated else ""
@@ -6484,7 +6498,12 @@ def _build_stock_page(code: str) -> str:
             excerpt = paragraphs[0]
             if len(excerpt) > 1200:
                 excerpt = excerpt[:1200] + "..."
-            biz_summary_html = f'<p>{excerpt}</p>'
+            biz_summary_html = (
+                '<div class="co-biz-ai">'
+                '<div class="co-biz-label">事業内容</div>'
+                f'<p>{excerpt}</p>'
+                '</div>'
+            )
 
     # kabutanテーマタグ（チップ表示）
     kab_themes_html = ""
@@ -6565,11 +6584,11 @@ def _build_stock_page(code: str) -> str:
   <div class="seg-legend">{"".join(seg_legend)}</div>
 </div>"""
 
-    biz_block = biz_summary_html or biz_full_html
+    biz_block = biz_kabutan_html or biz_summary_html or biz_full_html
     co_html = f"""<div class="co-box">
   <div class="co-section-title">会社概要</div>
   {f'<div class="co-facts-grid">{facts_html}</div>' if facts_html else ""}
-  {f'<hr class="co-biz-divider"><div class="co-biz-summary">{biz_summary_html}{biz_points_html}</div>{biz_full_html}' if biz_block else ""}
+  {f'<hr class="co-biz-divider"><div class="co-biz-summary">{biz_kabutan_html}{biz_summary_html}{biz_points_html}</div>{biz_full_html}' if biz_block else ""}
   {seg_html}
   {kab_themes_html}
 </div>"""
