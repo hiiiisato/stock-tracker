@@ -2463,9 +2463,19 @@ input.sc-range-input::-moz-range-thumb {
 .sc-result-header { display:flex; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px; }
 .sc-period-bar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
 .sc-period-lbl { font-size:12px; color:#8b949e; font-weight:600; }
+.sc-period-date {
+  background:#0d1117; border:1px solid #30363d; border-radius:6px;
+  color:#c9d1d9; font-size:12px; padding:3px 6px; color-scheme:dark;
+}
+.sc-period-apply {
+  background:#1f6feb; border:1px solid #1f6feb; border-radius:6px;
+  color:#fff; font-size:12px; padding:3px 14px; cursor:pointer;
+}
+.sc-period-apply:hover { background:#388bfd; }
+.sc-period-presets { display:flex; gap:4px; flex-wrap:wrap; }
 .sc-period-btn {
   background:#21262d; border:1px solid #30363d; border-radius:12px;
-  color:#8b949e; font-size:12px; padding:3px 12px; cursor:pointer; transition:all 0.15s;
+  color:#8b949e; font-size:11px; padding:2px 10px; cursor:pointer; transition:all 0.15s;
 }
 .sc-period-btn:hover { border-color:#58a6ff; color:#58a6ff; }
 .sc-period-btn.active { background:#1f6feb; border-color:#1f6feb; color:#fff; }
@@ -4376,12 +4386,18 @@ def _build_screen_page() -> str:
 
   <div class="sc-period-bar" id="scPeriodBar">
     <span class="sc-period-lbl">📅 期間騰落:</span>
-    <button class="sc-period-btn active" data-days="">なし</button>
-    <button class="sc-period-btn" data-days="30">1ヶ月</button>
-    <button class="sc-period-btn" data-days="60">2ヶ月</button>
-    <button class="sc-period-btn" data-days="90">3ヶ月</button>
-    <button class="sc-period-btn" data-days="180">半年</button>
-    <button class="sc-period-btn" data-days="ytd">年初来</button>
+    <input type="date" id="scPerFrom" class="sc-period-date">
+    <span style="color:#484f58">〜</span>
+    <input type="date" id="scPerTo" class="sc-period-date">
+    <button class="sc-period-apply" id="scPerApply">適用</button>
+    <span class="sc-period-presets">
+      <button class="sc-period-btn" data-days="30">1ヶ月</button>
+      <button class="sc-period-btn" data-days="60">2ヶ月</button>
+      <button class="sc-period-btn" data-days="90">3ヶ月</button>
+      <button class="sc-period-btn" data-days="180">半年</button>
+      <button class="sc-period-btn" data-days="ytd">年初来</button>
+      <button class="sc-period-btn" data-days="">解除</button>
+    </span>
     <span class="sc-period-note" id="scPeriodNote"></span>
   </div>
 
@@ -4891,7 +4907,7 @@ def _build_screen_page() -> str:
 
   function render(){{
     /* 期間騰落条件が有効なのに期間未選択なら、1ヶ月を自動選択してデータ取得後に再描画 */
-    if(!_pSel&&!_pLoading&&periodCondActive()){{setPeriod('30');return;}}
+    if(!_pFrom&&!_pLoading&&periodCondActive()){{var r=presetRange('30');applyPeriod(r[0],r[1]);return;}}
     var cols=getCols();
     var filtered=stocks.filter(passFilter);
     filtered.sort(function(a,b){{
@@ -5164,8 +5180,9 @@ def _build_screen_page() -> str:
   }}
   function showHistPanel(cond){{
     /* 期間騰落系の条件は先に期間データを取得（未選択なら1ヶ月を自動選択） */
-    if((cond.id==='pchg'||cond.id==='prange')&&!_pSel&&!_pLoading&&stocks.length){{
-      setPeriod('30',function(){{showHistPanel(cond);}});return;
+    if((cond.id==='pchg'||cond.id==='prange')&&!_pFrom&&!_pLoading&&stocks.length){{
+      var r=presetRange('30');
+      applyPeriod(r[0],r[1],false,function(){{showHistPanel(cond);}});return;
     }}
     document.getElementById('scCondPicker').style.display='none';
     scHistCond=cond;
@@ -5483,39 +5500,52 @@ def _build_screen_page() -> str:
   var scPgNext=document.getElementById('sc-pg-next');
   if(scPgNext)scPgNext.addEventListener('click',function(){{SC_PAGE++;refreshScGrid();}});
 
-  /* ── 期間騰落（任意期間の騰落率・高安幅） ── */
-  /* 状態はDOMでなくJS変数で保持（bfcache対策の既存方針に合わせる） */
-  var _pSel=null,_pLoading=false;
+  /* ── 期間騰落（いつからいつまでを指定して騰落率・高安幅で絞る） ── */
+  /* 期間の正はJS変数（bfcache対策の既存方針）。date入力は表示・入力用のUI。 */
+  var _pFrom=null,_pTo=null,_pLoading=false;
   function periodCondActive(){{
     return _cmin['pchg']!==undefined||_cmax['pchg']!==undefined||
            _cmin['prange']!==undefined||_cmax['prange']!==undefined;
   }}
-  function setPeriod(sel,cb){{
-    _pSel=sel||null;
-    document.querySelectorAll('.sc-period-btn').forEach(function(b){{
-      b.classList.toggle('active',(b.dataset.days||'')===(sel||''));
-    }});
+  function _dstr(d){{return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);}}
+  function presetRange(sel){{
+    var today=new Date();
+    if(sel==='ytd')return[today.getFullYear()+'-01-01',_dstr(today)];
+    return[_dstr(new Date(today.getTime()-parseInt(sel)*86400000)),_dstr(today)];
+  }}
+  /* openSlider=true: 取得後に騰落率スライダーを自動で開く（期間指定→率で絞る、の導線） */
+  function applyPeriod(from,to,openSlider,cb){{
     var note=document.getElementById('scPeriodNote');
-    if(!_pSel){{
+    document.querySelectorAll('.sc-period-btn').forEach(function(b){{b.classList.remove('active');}});
+    if(!from){{
+      _pFrom=_pTo=null;
       stocks.forEach(function(s){{s.period_chg=undefined;s.period_range=undefined;}});
       var i=DEFAULT_COLS.indexOf('period_chg');
       if(i>=0)DEFAULT_COLS.splice(i,2);
+      var f=document.getElementById('scPerFrom'),t=document.getElementById('scPerTo');
+      if(f)f.value='';if(t)t.value='';
+      /* 期間条件が残っていると再フェッチループになるため一緒に外す */
+      delete _cmin['pchg'];delete _cmax['pchg'];delete _cmin['prange'];delete _cmax['prange'];
       if(note)note.textContent='';
-      render();return;
+      renderChips();render();return;
     }}
-    var q=(sel==='ytd')?('from='+(new Date()).getFullYear()+'-01-01'):('days='+sel);
+    _pFrom=from;_pTo=to||null;
+    var f=document.getElementById('scPerFrom'),t=document.getElementById('scPerTo');
+    if(f)f.value=from;if(t&&to)t.value=to;
     _pLoading=true;
     if(note)note.textContent='計算中…';
-    fetch('/api/period_stats?'+q).then(function(r){{return r.json();}}).then(function(d){{
+    fetch('/api/period_stats?from='+from+(to?('&to='+to):'')).then(function(r){{return r.json();}}).then(function(d){{
       _pLoading=false;
+      if(d.error){{if(note)note.textContent=d.error;return;}}
       var st=d.stats||{{}};
       stocks.forEach(function(s){{
         var v=st[s.code];
         s.period_chg=v?v[0]:null;s.period_range=v?v[1]:null;
       }});
-      if(note)note.textContent=(d.from||'')+' 〜 '+(d.to||'');
+      if(note)note.textContent=(d.from||'')+' 〜 '+(d.to||'')+' の騰落';
       if(DEFAULT_COLS.indexOf('period_chg')<0)DEFAULT_COLS.splice(4,0,'period_chg','period_range');
       render();
+      if(openSlider){{var cd=getCondDef('pchg');if(cd)showHistPanel(cd);}}
       if(cb)cb();
     }}).catch(function(){{
       _pLoading=false;
@@ -5523,12 +5553,25 @@ def _build_screen_page() -> str:
     }});
   }}
   document.querySelectorAll('.sc-period-btn').forEach(function(b){{
-    b.addEventListener('click',function(){{setPeriod(b.dataset.days||null);}});
+    b.addEventListener('click',function(){{
+      var sel=b.dataset.days||null;
+      if(!sel){{applyPeriod(null);return;}}
+      var r=presetRange(sel);
+      applyPeriod(r[0],r[1],true);
+      b.classList.add('active');
+    }});
+  }});
+  var _perApply=document.getElementById('scPerApply');
+  if(_perApply)_perApply.addEventListener('click',function(){{
+    var f=(document.getElementById('scPerFrom')||{{}}).value,
+        t=(document.getElementById('scPerTo')||{{}}).value;
+    if(!f){{var note=document.getElementById('scPeriodNote');if(note)note.textContent='開始日を選んでください';return;}}
+    applyPeriod(f,t||null,true);
   }});
 
   fetch('/api/screen').then(function(r){{return r.json();}}).then(function(data){{
     stocks=data;
-    if(_pSel){{setPeriod(_pSel);return;}}
+    if(_pFrom){{applyPeriod(_pFrom,_pTo);return;}}
     render();
     STRATS.forEach(function(st,idx){{
       var card=document.querySelector('.sc-preset-card[data-strat="'+idx+'"]');
@@ -7263,14 +7306,16 @@ def api_screen():
 def api_period_stats():
     """任意期間の騰落率・高安レンジ幅を全銘柄分返す（スクリーニングの期間騰落条件用）。
 
-    パラメータ: days=カレンダー日数(7〜730) または from=YYYY-MM-DD（年初来など）
-    返り値: {"from": 実際の起点日, "to": 最新取引日, "stats": {code: [騰落率%, 高安幅%]}}
-      騰落率 = 期間初日の調整後終値 → 最新日の調整後終値
+    パラメータ: from=YYYY-MM-DD & to=YYYY-MM-DD（toは省略時=最新取引日）
+                または days=カレンダー日数(7〜730)
+    返り値: {"from": 実際の起点日, "to": 終了日, "stats": {code: [騰落率%, 高安幅%]}}
+      騰落率 = 期間初日の調整後終値 → 期間末日の調整後終値
       高安幅 = (期間高値 − 期間安値) / 期間安値。往って来いの「動きの大きさ」を捉える
-    期間の頭から価格が無い銘柄（期間中の新規上場）や取引停止中はnull扱い（除外）。
+    期間の頭から価格が無い銘柄（期間中の新規上場）や期間末前に停止した銘柄はnull扱い（除外）。
     """
     days   = request.args.get("days", type=int)
     from_s = request.args.get("from", "").strip()
+    to_s   = request.args.get("to", "").strip()
 
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT MAX(date) FROM daily_prices")
@@ -7279,16 +7324,24 @@ def api_period_stats():
         cur.close(); conn.close()
         return _json.dumps({"error": "no data"}), 200, {"Content-Type": "application/json"}
 
+    end_req = latest
+    if to_s and re.match(r"^\d{4}-\d{2}-\d{2}$", to_s):
+        end_req = min(latest, datetime.strptime(to_s, "%Y-%m-%d").date())
+
     if from_s and re.match(r"^\d{4}-\d{2}-\d{2}$", from_s):
         start_req = datetime.strptime(from_s, "%Y-%m-%d").date()
     elif days and 7 <= days <= 730:
-        start_req = latest - timedelta(days=days)
+        start_req = end_req - timedelta(days=days)
     else:
         cur.close(); conn.close()
-        return _json.dumps({"error": "days(7-730) か from(YYYY-MM-DD) を指定"}), 400, \
+        return _json.dumps({"error": "from(YYYY-MM-DD) か days(7-730) を指定"}), 400, \
+               {"Content-Type": "application/json"}
+    if start_req >= end_req:
+        cur.close(); conn.close()
+        return _json.dumps({"error": "開始日は終了日より前にしてください"}), 400, \
                {"Content-Type": "application/json"}
 
-    key = f"period_stats_{start_req}_{latest}"
+    key = f"period_stats_{start_req}_{end_req}"
     cached = _get(key)
     if cached:
         cur.close(); conn.close()
@@ -7305,16 +7358,16 @@ def api_period_stats():
                    MAX(COALESCE(adj_close, close)) AS hi,
                    MIN(COALESCE(adj_close, close)) AS lo
             FROM daily_prices
-            WHERE date >= %s AND close IS NOT NULL AND close > 0
+            WHERE date >= %s AND date <= %s AND close IS NOT NULL AND close > 0
             GROUP BY code
         ) g
         JOIN daily_prices s ON s.code = g.code AND s.date = g.d0
         JOIN daily_prices e ON e.code = g.code AND e.date = g.d1
-    """, (start_req,))
+    """, (start_req, end_req))
 
     stats = {}
     ok_start = start_req + timedelta(days=10)   # 期間の頭をカバーしているか（連休を考慮し10日猶予）
-    ok_end   = latest - timedelta(days=10)      # 直近まで取引があるか（取引停止・廃止を除外）
+    ok_end   = end_req - timedelta(days=10)     # 期間末まで取引があるか（取引停止・廃止を除外）
     for code, d0, d1, px0, px1, hi, lo in cur.fetchall():
         if d0 > ok_start or d1 < ok_end:
             continue
@@ -7324,7 +7377,7 @@ def api_period_stats():
         stats[code] = [round((px1 / px0 - 1) * 100, 2), round((hi / lo - 1) * 100, 2)]
     cur.close(); conn.close()
 
-    payload = _json.dumps({"from": str(start_req), "to": str(latest), "stats": stats},
+    payload = _json.dumps({"from": str(start_req), "to": str(end_req), "stats": stats},
                           ensure_ascii=False)
     _set(key, payload)
     return payload, 200, {"Content-Type": "application/json"}
