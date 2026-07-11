@@ -452,6 +452,7 @@ def _nav(active: str = "") -> str:
         ("events",    "/events",     "ランキング・イベント"),
         ("disclosures", "/disclosures", "適時開示"),
         ("funds",     "/funds",      "ファンドウォッチ"),
+        ("aifund",    "/aifund",     "AIファンド"),
         ("swing",     "/swing",      "スイング"),
         ("watchlist", "/watchlist",  "ウォッチリスト"),
     ]
@@ -4132,6 +4133,257 @@ function fwToggleReason(id){
 """
 
 
+_AIFUND_CSS = """
+.af-cards { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px; }
+.af-card { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:14px 16px; }
+.af-card-lbl { font-size:11px; color:#8b949e; margin-bottom:4px; }
+.af-card-val { font-size:22px; font-weight:700; color:#e6edf3; }
+.af-card-sub { font-size:11px; color:#6e7681; margin-top:3px; }
+.af-up { color:#3fb950; } .af-down { color:#f85149; }
+.af-view { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px 16px;
+  font-size:13px; color:#c9d1d9; line-height:1.7; margin-bottom:16px; }
+.af-view small { color:#6e7681; }
+.af-section { font-size:15px; font-weight:700; color:#e6edf3; margin:22px 0 10px; }
+.af-orders { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
+.af-order { background:#161b22; border:1px solid #30363d; border-left:3px solid #58a6ff;
+  border-radius:8px; padding:10px 14px; font-size:13px; color:#c9d1d9; line-height:1.65; }
+.af-order.buy { border-left-color:#3fb950; } .af-order.sell { border-left-color:#f85149; }
+.af-order-head { font-weight:700; margin-bottom:2px; }
+.af-order-head a { color:#e6edf3; text-decoration:none; }
+.af-pos-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+.af-pos { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px 14px; }
+.af-pos-head { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+.af-pos-name { font-size:14px; font-weight:700; }
+.af-pos-name a { color:#e6edf3; text-decoration:none; }
+.af-pos-name a:hover { color:#58a6ff; }
+.af-pos-pnl { font-size:16px; font-weight:700; white-space:nowrap; }
+.af-pos-meta { font-size:11px; color:#8b949e; margin:4px 0 8px; display:flex; flex-wrap:wrap; gap:4px 14px; }
+.af-pos-reason { font-size:12px; color:#c9d1d9; line-height:1.65; }
+.af-pos-thesis { font-size:11.5px; color:#8b949e; line-height:1.6; margin-top:6px;
+  border-left:2px solid #30363d; padding-left:9px; }
+.af-chart { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:8px; margin-bottom:6px; }
+.af-table { width:100%; border-collapse:collapse; font-size:12px; }
+.af-table th { text-align:left; color:#8b949e; font-weight:600; padding:7px 9px; border-bottom:1px solid #30363d; white-space:nowrap; }
+.af-table td { padding:7px 9px; border-bottom:1px solid #21262d; color:#c9d1d9; vertical-align:top; }
+.af-table .num { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.af-side-buy { color:#3fb950; font-weight:700; } .af-side-sell { color:#f85149; font-weight:700; }
+.af-trade-reason { font-size:11.5px; color:#8b949e; line-height:1.6; max-width:520px; }
+.af-empty { text-align:center; color:#8b949e; padding:50px 0; font-size:14px; }
+.af-note { font-size:11px; color:#6e7681; margin:6px 0 0; }
+@media (max-width:768px) {
+  .af-cards { grid-template-columns:repeat(2,1fr); }
+  .af-pos-grid { grid-template-columns:1fr; }
+  .af-card-val { font-size:18px; }
+  .af-trade-reason { max-width:none; }
+  .af-hide-sp { display:none; }
+}
+"""
+
+
+def _build_aifund_page() -> str:
+    import html as _html
+    conn = get_conn(); cur = conn.cursor()
+
+    # 運用状態
+    try:
+        cur.execute("SELECT cash, inception_date, last_decided FROM ai_fund_state WHERE id = 1")
+        st = cur.fetchone()
+    except Exception:
+        st = None
+    if not st:
+        cur.close(); conn.close()
+        body = f"""<style>{_AIFUND_CSS}</style>
+<h1 class="page-title">🤖 AIファンド</h1>
+<div class="af-empty">まだ運用を開始していません。今晩のバッチで初回の銘柄選定が行われます。</div>"""
+        return _page_html("AIファンド", body, active="aifund")
+    cash, inception, last_decided = float(st[0]), st[1], st[2]
+
+    cur.execute("SELECT MAX(date) FROM daily_prices")
+    latest = cur.fetchone()[0]
+
+    # 保有ポジション（現値・評価）
+    cur.execute("""
+        SELECT p.code, s.name, p.shares, p.avg_cost, p.buy_date, p.buy_reason, p.thesis,
+               (SELECT close FROM daily_prices d WHERE d.code = p.code ORDER BY d.date DESC LIMIT 1)
+        FROM ai_fund_positions p JOIN stocks s ON s.code = p.code
+    """)
+    positions = []
+    total_mv = 0.0
+    for code, name, shares, avg_cost, buy_date, buy_reason, thesis, close in cur.fetchall():
+        close = float(close) if close else float(avg_cost)
+        mv = int(shares) * close
+        total_mv += mv
+        positions.append({"code": code, "name": name, "shares": int(shares),
+                          "avg_cost": float(avg_cost), "buy_date": buy_date,
+                          "buy_reason": buy_reason or "", "thesis": thesis or "",
+                          "close": close, "mv": mv,
+                          "pnl_pct": (close / float(avg_cost) - 1) * 100})
+    positions.sort(key=lambda p: -p["mv"])
+    nav_now = cash + total_mv
+    pnl_all = nav_now - 10_000_000
+    pnl_all_pct = pnl_all / 10_000_000 * 100
+
+    # 明日の売買予定（pending注文）
+    cur.execute("""
+        SELECT o.code, s.name, o.side, o.budget, o.shares, o.reason, o.thesis, o.decided_date
+        FROM ai_fund_orders o JOIN stocks s ON s.code = o.code
+        WHERE o.status = 'pending' ORDER BY o.side DESC, o.id
+    """)
+    pending = cur.fetchall()
+
+    # NAV推移＋ベンチマーク
+    cur.execute("SELECT date, nav, bench, market_view FROM ai_fund_nav WHERE nav > 0 ORDER BY date")
+    nav_rows = cur.fetchall()
+    market_view = ""
+    for r in nav_rows[::-1]:
+        if r[3]:
+            market_view = r[3]; break
+
+    vs_topix = None
+    if len(nav_rows) >= 2 and nav_rows[0][2]:
+        fund_ret = float(nav_rows[-1][1]) / float(nav_rows[0][1]) - 1
+        bench_ret = (float(nav_rows[-1][2]) / float(nav_rows[0][2]) - 1) if nav_rows[-1][2] else 0
+        vs_topix = (fund_ret - bench_ret) * 100
+
+    # 売買履歴
+    cur.execute("""
+        SELECT t.trade_date, t.side, t.code, s.name, t.shares, t.price,
+               t.pnl, t.pnl_pct, t.hold_days, t.reason, t.buy_reason
+        FROM ai_fund_trades t JOIN stocks s ON s.code = t.code
+        ORDER BY t.trade_date DESC, t.id DESC LIMIT 60
+    """)
+    trades = cur.fetchall()
+    cur.close(); conn.close()
+
+    def _pnl_cls(v):
+        return "af-up" if v >= 0 else "af-down"
+
+    # ── サマリーカード ──
+    cards = f"""<div class="af-cards">
+  <div class="af-card"><div class="af-card-lbl">総資産</div>
+    <div class="af-card-val">{nav_now/1e4:,.0f}<small style="font-size:12px">万円</small></div>
+    <div class="af-card-sub">元本1,000万円・{_html.escape(str(inception))}運用開始</div></div>
+  <div class="af-card"><div class="af-card-lbl">トータル損益</div>
+    <div class="af-card-val {_pnl_cls(pnl_all)}">{pnl_all/1e4:+,.1f}<small style="font-size:12px">万円</small></div>
+    <div class="af-card-sub {_pnl_cls(pnl_all)}">{pnl_all_pct:+.2f}%</div></div>
+  <div class="af-card"><div class="af-card-lbl">対TOPIX（設定来）</div>
+    <div class="af-card-val {_pnl_cls(vs_topix or 0)}">{f'{vs_topix:+.2f}%' if vs_topix is not None else '—'}</div>
+    <div class="af-card-sub">超過リターン</div></div>
+  <div class="af-card"><div class="af-card-lbl">現金 / 保有</div>
+    <div class="af-card-val">{cash/1e4:,.0f}<small style="font-size:12px">万円</small></div>
+    <div class="af-card-sub">{len(positions)}銘柄保有</div></div>
+</div>"""
+
+    # ── AIの市況見解 ──
+    view_html = ""
+    if market_view:
+        view_html = f"""<div class="af-view">🧠 <b>AIの見立て</b>: {_html.escape(market_view)}
+  <br><small>最終判断: {_html.escape(str(last_decided or '—'))} ／ 意思決定の翌営業日の寄付で約定（決定日の価格は使いません）</small></div>"""
+
+    # ── 明日の売買予定 ──
+    orders_html = ""
+    if pending:
+        items = []
+        for code, name, side, budget, shares, reason, thesis, decided in pending:
+            act = f"買い（予算 {float(budget)/1e4:,.0f}万円）" if side == "buy" else f"売り（{shares}株）"
+            icon = "🟢" if side == "buy" else "🔴"
+            th = f'<div class="af-pos-thesis">シナリオ: {_html.escape(thesis)}</div>' if thesis else ""
+            items.append(f"""<div class="af-order {side}">
+  <div class="af-order-head">{icon} <a href="/stock/{code}">{_html.escape(name)}</a> <span style="color:#8b949e;font-size:11px">{code}</span> — {act}</div>
+  {_html.escape(reason or '')}{th}
+  <div class="af-note">決定日: {_html.escape(str(decided))} → 翌営業日の寄付で約定予定</div>
+</div>""")
+        orders_html = f"""<div class="af-section">📋 次の売買予定（未約定）</div>
+<div class="af-orders">{''.join(items)}</div>"""
+
+    # ── NAVチャート ──
+    chart_html = ""
+    if len(nav_rows) >= 2:
+        dates = [str(r[0]) for r in nav_rows]
+        navs  = [round(float(r[1]) / float(nav_rows[0][1]) * 100, 2) for r in nav_rows]
+        bench0 = next((float(r[2]) for r in nav_rows if r[2]), None)
+        benches = [round(float(r[2]) / bench0 * 100, 2) if (r[2] and bench0) else None for r in nav_rows]
+        chart_html = f"""<div class="af-section">📈 資産推移（設定来・100起点）</div>
+<div class="af-chart"><div id="afChart" style="height:300px"></div></div>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script>
+Plotly.newPlot('afChart', [
+  {{x: {_json.dumps(dates)}, y: {_json.dumps(navs)}, name: 'AIファンド', mode: 'lines',
+    line: {{color: '#58a6ff', width: 2.5}}}},
+  {{x: {_json.dumps(dates)}, y: {_json.dumps(benches)}, name: 'TOPIX(1306)', mode: 'lines',
+    line: {{color: '#8b949e', width: 1.5, dash: 'dot'}}}}
+], {{template: 'plotly_dark', paper_bgcolor: '#161b22', plot_bgcolor: '#161b22',
+    margin: {{l: 45, r: 15, t: 10, b: 35}}, legend: {{orientation: 'h', y: 1.1}},
+    font: {{size: 11}}}}, {{displayModeBar: false, responsive: true}});
+</script>"""
+
+    # ── 保有銘柄カード ──
+    pos_html = ""
+    if positions:
+        cards_p = []
+        for p in positions:
+            w = p["mv"] / nav_now * 100 if nav_now else 0
+            cards_p.append(f"""<div class="af-pos">
+  <div class="af-pos-head">
+    <span class="af-pos-name"><a href="/stock/{p['code']}">{_html.escape(p['name'])}</a> <span style="color:#8b949e;font-size:11px;font-weight:400">{p['code']}</span></span>
+    <span class="af-pos-pnl {_pnl_cls(p['pnl_pct'])}">{p['pnl_pct']:+.1f}%</span>
+  </div>
+  <div class="af-pos-meta">
+    <span>取得 {p['avg_cost']:,.0f}円（{_html.escape(str(p['buy_date']))}）</span>
+    <span>現在 {p['close']:,.0f}円</span>
+    <span>{p['shares']}株・{p['mv']/1e4:,.0f}万円（{w:.0f}%）</span>
+  </div>
+  <div class="af-pos-reason">{_html.escape(p['buy_reason'])}</div>
+  {f'<div class="af-pos-thesis">シナリオ: {_html.escape(p["thesis"])}</div>' if p['thesis'] else ''}
+</div>""")
+        pos_html = f"""<div class="af-section">💼 保有銘柄（{len(positions)}/8）</div>
+<div class="af-pos-grid">{''.join(cards_p)}</div>"""
+    else:
+        pos_html = '<div class="af-section">💼 保有銘柄</div><div class="af-empty">初回の買い付け待ちです（次の営業日の寄付で約定）。</div>'
+
+    # ── 売買履歴 ──
+    hist_html = ""
+    if trades:
+        rows_h = []
+        for td, side, code, name, shares, price, pnl, pnl_pct, hold_days, reason, buy_reason in trades:
+            side_cls = "af-side-buy" if side == "buy" else "af-side-sell"
+            side_jp = "買" if side == "buy" else "売"
+            pnl_html = "—"
+            if side == "sell" and pnl is not None:
+                pnl_html = f'<span class="{_pnl_cls(float(pnl))}">{float(pnl)/1e4:+,.1f}万<br><small>{float(pnl_pct):+.1f}%・{hold_days}日</small></span>'
+            reason_html = _html.escape(reason or "")
+            if side == "sell" and buy_reason:
+                reason_html = f'<span style="color:#6e7681">購入時: {_html.escape(buy_reason[:120])}</span><br>→ {reason_html}'
+            rows_h.append(f"""<tr>
+  <td class="num">{_html.escape(str(td))}</td>
+  <td class="{side_cls}">{side_jp}</td>
+  <td><a href="/stock/{code}" style="color:#58a6ff;text-decoration:none">{_html.escape(name)}</a></td>
+  <td class="num">{shares:,}株</td>
+  <td class="num">{float(price):,.0f}円</td>
+  <td class="num">{pnl_html}</td>
+  <td class="af-trade-reason">{reason_html}</td>
+</tr>""")
+        hist_html = f"""<div class="af-section">📜 売買履歴</div>
+<div style="overflow-x:auto"><table class="af-table">
+<tr><th>約定日</th><th>売買</th><th>銘柄</th><th class="num">株数</th><th class="num">約定値</th><th class="num">実現損益</th><th>理由</th></tr>
+{''.join(rows_h)}
+</table></div>"""
+
+    body = f"""<style>{_AIFUND_CSS}</style>
+<h1 class="page-title">🤖 AIファンド</h1>
+<p style="font-size:12px;color:#8b949e;margin:-6px 0 14px">
+AIが毎晩、銘柄の発掘・保有・売却を理由付きで判断する模擬ファンド（元本1,000万円・常時8銘柄・投資期間数日〜半年）。
+判断の<b>翌営業日の寄付</b>で約定し、取引コスト0.1%/片道を控除。実在の売買ではありません。</p>
+{cards}
+{view_html}
+{orders_html}
+{pos_html}
+{chart_html}
+{hist_html}
+"""
+    return _page_html("AIファンド", body, active="aifund")
+
+
 def _build_funds_page() -> str:
     conn = get_conn()
     cur = conn.cursor()
@@ -7604,6 +7856,16 @@ def disclosures_page():
     html = _get(key)
     if not html:
         html = _build_disclosures_page(date_str or None, category)
+        _set(key, html)
+    return html
+
+
+@app.route("/aifund")
+def aifund():
+    key  = "aifund_page"
+    html = _get(key)
+    if not html:
+        html = _build_aifund_page()
         _set(key, html)
     return html
 

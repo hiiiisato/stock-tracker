@@ -115,6 +115,12 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   ※売買代金だけでは「買われた」と「売られた」を区別できない → 表示(/flows・日次レポート)は
     「買い優勢の流入」と「投げ売り警戒」を分けて出す。テーマは規模足切り(100億+・8銘柄+)でノイズ除去
 - `seed_themes.py` — テーママスタ・銘柄×テーマ関連の投入（テーマ追加時に再実行する保守スクリプト）
+- `ai_fund.py` — AIファンドマネージャー（模擬運用・/aifundタブ）。元本1000万・常時8銘柄・100株単位・
+  コスト0.1%/片道。**先読み防止が最重要**: イブニング便で意思決定(`decide`)→翌営業日の寄付で約定
+  (`execute_orders`は決定日 >= 最新取引日の注文を約定させない)。ハイブリッド判断=定量5観点
+  （モメンタム/押し目/ブレイク/割安成長/業績イベント）で候補28銘柄→Geminiが売買と理由・シナリオを決定
+  →ガードレール（8銘柄維持・予算60万〜250万・入替3/日・再購入7日禁止・-20%強制ロスカット・
+  AI出力不足時は定量補完で8銘柄を必ず充足）。NAVは終値評価で `ai_fund_nav` に日次記録（ベンチ=1306）
 
 ### Web (app.py — 単一ファイル約6200行)
 セクション見出し（`# ═══` コメント）で区切られている。構成:
@@ -135,6 +141,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | `/flows` | 資金フロー（テーマ/業種/規模/スタイル別の週次資金流入度ランキング・週切替可） |
 | `/daily` `/daily/<date>` | 日次相場レポート（daily_report.py が生成する自己完結HTML・逆ピラミッド構成） |
 | `/funds` | ファンドウォッチ（複数ファンド共通銘柄ハイライト） |
+| `/aifund` | AIファンド（模擬運用: 保有8銘柄・次の売買予定と理由・NAV vs TOPIX・売買履歴） |
 | `/rankings` `/events` `/theme/<id>` `/swing` `/watchlist` `/report/<date>` | 各分析ページ |
 | `/api/chart_grid` `/api/search` `/health` | 補助API |
 
@@ -163,6 +170,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | 会社情報 | `stocks.business_description`（カラム） | edinet_business.py / edinet_texts.py（詳細=有報「事業の内容」） |
 | ファンド | `fund_master` `fund_reports` | fund_watch.py |
 | アプリ | `watchlist` `stock_memos` `fetch_logs` | app.py / daily_run.py |
+| AIファンド | `ai_fund_state` `ai_fund_positions` `ai_fund_orders` `ai_fund_trades` `ai_fund_nav` | ai_fund.py（模擬運用・全売買に理由を記録） |
 
 ## 落とし穴（過去に踏んだもの）
 

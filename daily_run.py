@@ -85,6 +85,17 @@ def run_evening():
     except Exception as e:
         print(f"  エラー: {e}")
         _log("daily_report", "failed", error=str(e))
+
+    # AIファンドの意思決定（当日の全情報が揃った最後に実施。約定は翌営業日の寄付＝先読みなし）
+    print("\n[AIファンド] 意思決定...")
+    try:
+        from ai_fund import decide as ai_fund_decide
+        n = ai_fund_decide()
+        _log("ai_fund_decide", "done", n)
+    except Exception as e:
+        print(f"  エラー: {e}")
+        traceback.print_exc()
+        _log("ai_fund_decide", "failed", error=str(e))
     print("\nイブニング便 完了")
 from master import update_stock_master, update_trading_calendar
 from prices_yahoo import fetch_and_store_yahoo
@@ -212,6 +223,20 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
         except Exception as e:
             print(f"  エラー: {e}")
             _log("splits_integrity", "failed", error=str(e))
+
+    # AIファンド: 前夜に決定した注文を当日寄付で約定 → 終値でNAV記録
+    # （価格・分割処理の直後＝当日の open/close が確定してから）
+    if not rankings_only:
+        print("\n[AIファンド] 約定・NAV記録...")
+        try:
+            from ai_fund import execute_orders, record_nav
+            n_fill = execute_orders()
+            record_nav()
+            _log("ai_fund_execute", "done", n_fill)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            traceback.print_exc()
+            _log("ai_fund_execute", "failed", error=str(e))
 
     # 4. 配当・財務・ファンダメンタルズ更新（毎週月曜のみ）
     if datetime.now().weekday() == 0 and not rankings_only:
