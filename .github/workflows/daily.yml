@@ -46,6 +46,13 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           # EDINET公式API（有報「事業の内容」の増分更新）。未設定だと該当ステップのみスキップ
           EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
+          # LINE通知（イブニング便で日次レポート完成をpush・スイング候補通知にも共用）。
+          # 未設定なら送信をスキップするだけで他処理は継続。設定手順は swing_notifier.py 参照
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          # 日次レポート全文リンクの公開URL（例: https://kabushiki-tracker.onrender.com）。
+          # 未設定なら daily_report.DEFAULT_REPORT_BASE_URL が使われる
+          REPORT_BASE_URL: ${{ secrets.REPORT_BASE_URL }}
           # TIDB_SSL_CA は未設定 → certifi を自動使用
         run: |
           if [ "${{ github.event.schedule }}" = "30 11 * * 1-5" ] || [ "${{ inputs.mode }}" = "evening" ]; then

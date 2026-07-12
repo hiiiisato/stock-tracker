@@ -21,14 +21,11 @@ LINE Messaging API の push メッセージを使用する（LINE Notify は2025
 単体実行: python3 swing_notifier.py
 """
 
-import os
-import json
-import urllib.request
-import urllib.error
 from datetime import date
+
+from line_notify import push_text
 from swing_scorer import score_all, MIN_SCORE
 
-LINE_PUSH_URL  = "https://api.line.me/v2/bot/message/push"
 MAX_CANDIDATES = 10   # 1通のメッセージに載せる最大件数
 
 
@@ -73,42 +70,9 @@ def _format_message(candidates: list[dict]) -> str:
 
 def send(candidates: list[dict] | None = None) -> bool:
     """LINE へ通知を送信する。candidates が None の場合はスコアリングから実行する。"""
-    token   = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
-    user_id = os.environ.get("LINE_USER_ID", "").strip()
-
-    if not token or not user_id:
-        print("  [LINE通知] LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID が未設定のためスキップ")
-        return False
-
     if candidates is None:
         candidates = score_all(min_score=MIN_SCORE)
-
-    message = _format_message(candidates)
-    payload = json.dumps({
-        "to": user_id,
-        "messages": [{"type": "text", "text": message}],
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        LINE_PUSH_URL,
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            print(f"  [LINE通知] 送信完了（{len(candidates)}銘柄）HTTP {resp.status}")
-            return True
-    except urllib.error.HTTPError as e:
-        body = e.read().decode(errors="replace")
-        print(f"  [LINE通知] HTTP エラー {e.code}: {body}")
-        return False
-    except Exception as e:
-        print(f"  [LINE通知] エラー: {e}")
-        return False
+    return push_text(_format_message(candidates), label="スイング通知")
 
 
 if __name__ == "__main__":

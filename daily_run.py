@@ -79,9 +79,15 @@ def run_evening():
 
     print("\n[日次レポート] 確定版を保存...")
     try:
-        from daily_report import save_report
-        save_report()
+        from daily_report import save_report, notify_report_ready
+        saved = save_report()
         _log("daily_report", "done", 1)
+        # 確定版が保存できたら LINE に「完成」通知（リンクのみ）。通知失敗はレポート保存の成否に影響させない
+        if saved:
+            try:
+                notify_report_ready(saved)
+            except Exception as e:
+                print(f"  [日次レポートLINE] エラー: {e}")
     except Exception as e:
         print(f"  エラー: {e}")
         _log("daily_report", "failed", error=str(e))

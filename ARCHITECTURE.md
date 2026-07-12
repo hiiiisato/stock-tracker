@@ -28,7 +28,7 @@ J-Quants 無料枠・EDINET）のみで構成。
 |---|---|---|---|
 | daily.yml | 平日16:00 メイン | `python daily_run.py` | 日次バッチ本体（価格→指標→ランキング→開示→AI調査→レポート保存） |
 | daily.yml | 平日17:00 リトライ | 同上 | GHA cron遅延・失敗への保険。daily_run側の重複ガードで完了済みならスキップ |
-| daily.yml | 平日20:30 イブニング便 | `python daily_run.py --evening` | 夜間の適時開示回収→市況考察→日次レポート確定版を上書き保存 |
+| daily.yml | 平日20:30 イブニング便 | `python daily_run.py --evening` | 夜間の適時開示回収→市況考察→日次レポート確定版を上書き保存→**確定版をLINE通知**→AIファンド意思決定 |
 | misc_batch.yml | 毎日23:45 | `python edinet_texts.py --all` | EDINET本文ドリップ取得（edinetdb.jp 10件/日） |
 | misc_batch.yml | 毎日23:45 | `python edinet_segments.py --all` | 事業セグメント時系列（80件/日→90日周期巡回。edinetdb.jp 無料枠100/日をtextsと分け合う） |
 | misc_batch.yml | 5/15/25日 6:00 | `python fund_watch.py` | ファンド月次レポート取込 |
@@ -100,13 +100,19 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - `compute_theoretical.py` — はっしゃん式理論株価 → `theoretical_values`。係数は config.py
 - `theme_score.py` — テーマ別過熱スコア → `theme_daily_stats`
 - `rankings.py` — 日次/週次ランキング → `rankings`
-- `swing_scorer.py` / `swing_notifier.py` — スイング候補スコアとLINE通知
+- `line_notify.py` — LINE Messaging API への汎用テキストpush（`push_text`/`is_configured`）。
+  スイング通知・日次レポート通知の共通トランスポート。環境変数 `LINE_CHANNEL_ACCESS_TOKEN`/`LINE_USER_ID`、
+  未設定なら送信スキップ（例外を出さない）。設定手順は swing_notifier.py の docstring
+- `swing_scorer.py` / `swing_notifier.py` — スイング候補スコアとLINE通知（`line_notify.push_text` 経由）
 - `event_researcher.py` — 急騰急落銘柄の要因をニュース検索+Geminiで要約 → `price_events`
 - `research_strategy.py` — event_researcher の調査対象選定ロジック・閾値
 - `theme_report.py` — テーマレポートHTML生成（app.py の /report から利用）
 - `daily_report.py` — 日次相場レポートHTML生成（app.py の /daily から利用）。結論→数字→資金フロー変化→
   騰落TOP5+理由+スパークライン→トリガー銘柄(基準は TRIGGER_DEFS)→好材料開示→ウォッチリスト。
-  自己完結HTML（外部JS/CSSなし）なのでメール・LINE転送にも流用可能
+  自己完結HTML（外部JS/CSSなし）なのでメール・LINE転送にも流用可能。
+  `notify_report_ready(date)` = 確定版のLINE通知（リンクのみの最小通知。全文URLは `REPORT_BASE_URL` 環境変数、
+  既定は `DEFAULT_REPORT_BASE_URL`）。イブニング便の `save_report()` 直後に呼ばれる。
+  手動テスト: `python daily_report.py --save --notify` / 保存済みを再通知 `python daily_report.py --notify`
 - `money_flow.py` — 資金フロー週次集計 → `money_flow_weekly`。テーマ(kabutan_themes)/業種/時価総額帯/スタイル別に
   週間売買代金シェアの対13週平均比（flow_ratio）・**Zスコア**（母数非依存の流入強度＝今週シェアが過去13週の
   変動幅の何σ分か。小グループの偶然のブレを排除）・騰落率中央値・上昇銘柄比率・対TOPIXを算出。
