@@ -20,7 +20,7 @@ from datetime import date, timedelta
 from collections import defaultdict
 
 from config import get_conn, bulk_upsert
-from compute_price_stats import compute_stock_stats, STAT_COLS, _round
+from compute_price_stats import compute_stock_stats, STAT_COLS, _round, _fscore_7
 
 LAG_DAYS = 45                       # 決算期末→公開とみなすまでのラグ（先読み対策）
 SNAPSHOT_START = date(2024, 11, 1)  # MA200/スロープが揃う最古週（daily_prices は 2024-01〜）
@@ -50,6 +50,13 @@ def _ensure_table():
     col_defs.append("KEY idx_date (snapshot_date)")
     cur.execute("CREATE TABLE IF NOT EXISTS price_stats_history (\n  " +
                 ",\n  ".join(col_defs) + "\n)")
+    # 既存テーブルへの後付けカラム追加（STAT_COLS/EXTRA_COLS 追加時のマイグレーション。例: fscore）
+    for c in STAT_COLS + EXTRA_COLS:
+        typedef = "TINYINT" if c in _FLAG_COLS else ("BIGINT" if c == "market_cap" else "DECIMAL(18,4)")
+        try:
+            cur.execute(f"ALTER TABLE price_stats_history ADD COLUMN {c} {typedef}")
+        except Exception:
+            pass  # 既存カラムは無視
     conn.commit(); cur.close(); conn.close()
 
 
@@ -170,6 +177,8 @@ def _pit_fm(known_annuals, shares):
     opi_p = prior["opi"] if prior else None
     ord_p = prior["ord"] if prior else None
     ni_p = prior["ni"] if prior else None
+    ta_p = prior["ta"] if prior else None
+    eq_p = prior["teq"] if prior else None
 
     eps_l = (ni_l / shr) if (ni_l is not None and shr and shr > 0) else None
     eps_p = (ni_p / shr) if (ni_p is not None and shr and shr > 0) else None
@@ -195,6 +204,8 @@ def _pit_fm(known_annuals, shares):
         "ord_margin": _round(ord_margin),
         "cfo_per_share": cfo_per_share,
         "rev_per_share": rev_per_share,
+        "fscore": _fscore_7(ni_l, ta_l, ta_p, cfo_l, eq_l, eq_p,
+                            opi_l, opi_p, rev_l, rev_p, ni_p),
     }
 
 

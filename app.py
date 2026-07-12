@@ -2508,6 +2508,10 @@ input.sc-range-input::-moz-range-thumb {
 .sc-table .dn  { color:#3A9FE0; }
 .sc-flag-on  { color:#3fb950; }
 .sc-flag-off { color:#484f58; }
+.sc-fscore { font-weight:700; }
+.sc-fscore-hi  { color:#3fb950; }
+.sc-fscore-mid { color:#d29922; }
+.sc-fscore-lo  { color:#8b949e; }
 .sc-empty   { text-align:center; padding:48px; color:#484f58; }
 .sc-loading { text-align:center; padding:48px; color:#8b949e; }
 
@@ -4953,6 +4957,7 @@ def _build_screen_page() -> str:
     <input id="f-ord-min" type="hidden">
     <input id="f-eps-min" type="hidden"><input id="f-opm-min" type="hidden">
     <input id="f-ordm-min" type="hidden"><input id="f-roic-min" type="hidden">
+    <input id="f-fscore-min" type="hidden">
     <input id="f-cap-min" type="hidden"><input id="f-cap-max" type="hidden">
     <input id="f-macd-gc" type="checkbox"><input id="f-break20" type="checkbox">
     <input id="f-break65" type="checkbox"><input id="f-cf-pos" type="checkbox">
@@ -4961,7 +4966,7 @@ def _build_screen_page() -> str:
     <input id="f-gc3" type="checkbox"><input id="f-dc3" type="checkbox">
     <input id="f-dc2" type="checkbox">
     <input id="f-bb-up" type="checkbox"><input id="f-bb-dn" type="checkbox">
-    <input id="f-ytdh-brk" type="checkbox">
+    <input id="f-ytdh-brk" type="checkbox"><input id="f-buyback" type="checkbox">
   </div>
   </div>
 </div>
@@ -5041,6 +5046,11 @@ def _build_screen_page() -> str:
              {{f:'roe',op:'>=',val:15,lbl:'ROE≥15%'}},{{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}},
              {{f:'vol20_ratio',op:'>=',val:1.3,lbl:'出来高1.3倍+'}},{{f:'turnover_20d',op:'>=',val:2,lbl:'売買代金2億+'}}],
       cols:['name','close','change_pct','rev_growth','eps_growth','roe','roic','chg25d','rsi14','vol20_ratio'],sort:'rev_growth-desc'}},
+    {{name:'⑯ 高クオリティ×上昇初動',desc:'財務健全性スコア(F-score)6点以上＝収益性・利益の質・財務改善がそろった優良企業を、上昇に転じた初動(MA25上・25日騰落プラス・過熱前)で拾う。クオリティ・ファクター(F-score8-9で年率+13%超過の実証)の取り込み。',
+      conds:[{{f:'fscore',op:'>=',val:6,lbl:'F-score≥6'}},{{f:'vs_ma25',op:'>=',val:0,lbl:'株価>MA25'}},
+             {{f:'chg25d',op:'>=',val:0,lbl:'25日騰落プラス'}},{{f:'chg25d',op:'<=',val:25,lbl:'25日+25%以内(過熱前)'}},
+             {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}}],
+      cols:['name','close','change_pct','fscore','roe','op_margin','rev_growth','chg25d','rsi14','market_cap'],sort:'fscore-desc'}},
   ];
 
   var COL={{
@@ -5059,6 +5069,8 @@ def _build_screen_page() -> str:
     div_yield:{{h:'配当利回り',cls:'num'}},payout_ratio:{{h:'配当性向%',cls:'num'}},
     cf_positive:{{h:'CF',cls:'num'}},rev_growth:{{h:'売上成長%',cls:'num'}},
     op_growth:{{h:'営業益成長%',cls:'num'}},eps_growth:{{h:'EPS成長%',cls:'num'}},
+    fscore:{{h:'F-score',cls:'num'}},
+    buyback_recent:{{h:'自社株買い',cls:'num'}},
   }};
   var DEFAULT_COLS=['name','close','change_pct','chg25d','chg75d','dev_ma25','market_cap','per','pbr','roe','div_yield'];
 
@@ -5081,13 +5093,13 @@ def _build_screen_page() -> str:
     'f-psr-min','f-psr-max','f-pcfr-min','f-pcfr-max',
     'f-beta-min','f-beta-max',
     'f-rev-min','f-op-min','f-ord-min','f-eps-min',
-    'f-opm-min','f-ordm-min','f-roic-min',
+    'f-opm-min','f-ordm-min','f-roic-min','f-fscore-min',
     'f-cap-min','f-cap-max',
   ];
   var CHK_IDS=[
     'f-macd-gc','f-break20','f-break65','f-cf-pos','f-ma-up',
     'f-gc1','f-dc1','f-gc3','f-dc3','f-dc2',
-    'f-bb-up','f-bb-dn','f-ytdh-brk',
+    'f-bb-up','f-bb-dn','f-ytdh-brk','f-buyback',
   ];
   var _cmin={{}},_cmax={{}},_cflg={{}};
   var _cgroup=null;   /* テーマ・業種グループ条件 {{type,key,label,map:{{code:1}}}} */
@@ -5123,6 +5135,7 @@ def _build_screen_page() -> str:
     'op_margin':     {{'>=':[['f-opm-min']]}},
     'ord_margin':    {{'>=':[['f-ordm-min']]}},
     'roic':          {{'>=':[['f-roic-min']]}},
+    'fscore':        {{'>=':[['f-fscore-min']]}},
     'chg25d':        {{'>=':[['f-chg25-min']], '<=':[['f-chg25-max']]}},
     'stoch_k':       {{'>=':[['f-stk-min']],   '<=':[['f-stk-max']]}},
     'volatility_60d':{{'>=':[['f-vol60-min']], '<=':[['f-vol60-max']]}},
@@ -5237,6 +5250,8 @@ def _build_screen_page() -> str:
     if(col==='pbr')return fmtNum(v,2,'倍');
     if(col==='div_yield')return fmtNum(v,2,'%');
     if(col==='payout_ratio')return fmtNum(v,1,'%');
+    if(col==='fscore')return(v===null||v===undefined)?dash:'<span class="sc-fscore sc-fscore-'+(v>=6?'hi':v>=4?'mid':'lo')+'">'+v+'/7</span>';
+    if(col==='buyback_recent')return fmtFlag(v);
     return v!==null&&v!==undefined?String(v):dash;
   }}
 
@@ -5327,6 +5342,9 @@ def _build_screen_page() -> str:
     if(!mn('op_margin','f-opm-min'))return false;
     if(!mn('ord_margin','f-ordm-min'))return false;
     if(!mn('roic','f-roic-min'))return false;
+    /* ── クオリティ ── */
+    if(!mn('fscore','f-fscore-min'))return false;
+    if(_chk('f-buyback')&&!s.buyback_recent)return false;
     /* ── 理論株価 ── */
     if(!mn('theo_ratio','f-theoratio-min'))return false;
     if(!mn('upside_3y_pct','f-theo3y-min'))return false;
@@ -5461,6 +5479,9 @@ def _build_screen_page() -> str:
     {{cat:'成長',id:'opm',  lbl:'営業利益率',   field:'op_margin',  minId:'f-opm-min', unit:'%',step:1,minOnly:true}},
     {{cat:'成長',id:'ordm', lbl:'経常利益率',   field:'ord_margin', minId:'f-ordm-min',unit:'%',step:1,minOnly:true}},
     {{cat:'成長',id:'roic', lbl:'ROIC',        field:'roic',       minId:'f-roic-min',unit:'%',step:1,minOnly:true}},
+    /* ── クオリティ ── */
+    {{cat:'クオリティ',id:'fscore', lbl:'財務健全性(F-score)', field:'fscore', minId:'f-fscore-min', unit:'点', step:1, minOnly:true}},
+    {{cat:'クオリティ',id:'buyback', lbl:'直近30日に自社株買い発表', chkId:'f-buyback', isFlag:true}},
     /* ── 理論株価 ── */
     {{cat:'理論株価',id:'theoratio', lbl:'理論株価倍率', field:'theo_ratio',     minId:'f-theoratio-min', unit:'倍', step:0.1, minOnly:true}},
     {{cat:'理論株価',id:'theo3y',    lbl:'3年後上昇余地', field:'upside_3y_pct',  minId:'f-theo3y-min',    unit:'%',  step:5,   minOnly:true}},
@@ -7653,7 +7674,9 @@ def api_screen():
                ps.nikkei_rel_1m,
                ps.equity_ratio, ps.ord_margin, ps.ord_growth,
                ps.psr, ps.pcfr,
-               tv.theo_ratio, tv.upside_3y_pct, tv.pass_all
+               tv.theo_ratio, tv.upside_3y_pct, tv.pass_all,
+               ps.fscore,
+               (bb.code IS NOT NULL) AS buyback_recent
         FROM stocks s
         LEFT JOIN markets m ON s.market_id = m.id
         LEFT JOIN stock_fundamentals f ON s.code = f.code
@@ -7665,6 +7688,13 @@ def api_screen():
         ) lp ON s.code = lp.code
         LEFT JOIN price_stats ps ON s.code = ps.code
         LEFT JOIN theoretical_values tv ON s.code = tv.code
+        LEFT JOIN (
+            SELECT DISTINCT code FROM disclosures
+            WHERE category = 'buyback'
+              AND (title LIKE '%取得に係る事項の決定%' OR title LIKE '%買付%')
+              AND title NOT LIKE '%状況%' AND title NOT LIKE '%終了%'
+              AND disclosed_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+        ) bb ON bb.code = s.code
         WHERE s.is_active = TRUE
           AND (f.per IS NOT NULL OR f.pbr IS NOT NULL OR f.roe IS NOT NULL
                OR f.div_yield IS NOT NULL OR ps.chg25d IS NOT NULL)
@@ -7747,6 +7777,8 @@ def api_screen():
             "theo_ratio":     _f(r[59]),
             "upside_3y_pct":  _f(r[60]),
             "theo_pass_all":  _i(r[61]),
+            "fscore":         _i(r[62]) if r[62] is not None else None,
+            "buyback_recent": _i(r[63]),
             # クライアント側計算
             "vs_ma25":        (close - ma25)  if (close is not None and ma25  is not None) else None,
             "vs_ma75":        (close - ma75)  if (close is not None and ma75  is not None) else None,

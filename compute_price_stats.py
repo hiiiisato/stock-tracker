@@ -242,6 +242,8 @@ def _ensure_table():
         ("ord_growth",     "DECIMAL(8,2)"),
         ("psr",            "DECIMAL(8,2)"),
         ("pcfr",           "DECIMAL(8,2)"),
+        # --- クオリティ（財務健全性スコア） ---
+        ("fscore",         "TINYINT"),  # 当サイト版 Piotroski F-score（0〜7・NULL=算出不能）
     ]
     for col, typedef in new_cols:
         try:
@@ -251,6 +253,39 @@ def _ensure_table():
     conn.commit()
     cur.close()
     conn.close()
+
+
+def _fscore_7(ni_l, ta_l, ta_p, cfo_l, eq_l, eq_p, opi_l, opi_p, rev_l, rev_p, ni_p):
+    """当サイト版 Piotroski F-score（7点満点・財務健全性クオリティ指標）。
+
+    Piotroski(2000)の9項目のうち、当DBの保有データで算出できる7項目を採点する。
+    標準版から除外した2項目（データ未保持のため）:
+      ・流動比率の改善  … 流動資産/流動負債の内訳を保持していない
+      ・希薄化なし      … 発行済株式数の時系列を保持していない
+    また総負債データが欠損のため、標準の「負債比率の低下」は
+    「自己資本比率の改善」で、粗利益欠損のため「粗利率の改善」は
+    「営業利益率の改善」で代替する（いずれも同じ健全性・収益性の向上を測る）。
+
+    採点項目（各1点）:
+      収益性  1) ROA>0  2) 営業CF>0  3) ROA改善(前期比)  4) 営業CF>純利益(利益の質)
+      健全性  5) 自己資本比率の改善(前期比)
+      効率    6) 営業利益率の改善(前期比)  7) 総資産回転率の改善(前期比)
+
+    2期分の実績がそろわない銘柄は None（算出不能）を返す。
+    """
+    core = [ni_l, ta_l, ta_p, cfo_l, eq_l, eq_p, opi_l, opi_p, rev_l, rev_p, ni_p]
+    if any(v is None for v in core) or ta_l == 0 or ta_p == 0 or rev_l == 0 or rev_p == 0:
+        return None
+    pts = 0
+    roa_l, roa_p = ni_l / ta_l, ni_p / ta_p
+    if roa_l > 0:                       pts += 1  # 1
+    if cfo_l > 0:                       pts += 1  # 2
+    if roa_l > roa_p:                   pts += 1  # 3
+    if cfo_l > ni_l:                    pts += 1  # 4
+    if eq_l / ta_l > eq_p / ta_p:       pts += 1  # 5
+    if opi_l / rev_l > opi_p / rev_p:   pts += 1  # 6
+    if rev_l / ta_l > rev_p / ta_p:     pts += 1  # 7
+    return pts
 
 
 def _load_financials() -> dict[str, dict]:
@@ -282,16 +317,17 @@ def _load_financials() -> dict[str, dict]:
                 SELECT code, period_end,
                        ROW_NUMBER() OVER (PARTITION BY code ORDER BY period_end DESC) AS rn
                 FROM financials
-                WHERE period_type = 'A'
+                WHERE period_type = 'A' AND period_end <= CURDATE()
             ) ranked
             WHERE rn <= 2
             GROUP BY code
         ) top2 ON f.code = top2.code
               AND f.period_end IN (top2.latest, top2.prior)
         LEFT JOIN stock_fundamentals s ON f.code = s.code
-        WHERE f.period_type = 'A'
+        WHERE f.period_type = 'A' AND f.period_end <= CURDATE()
         ORDER BY f.code, f.period_end DESC
-    """)
+    """)  # period_end <= CURDATE(): 会社予想（未来期）が 'A' 行に混入するため実績のみに限定
+    # （成長率・F-score等を予想値で計算してしまう先読みを防ぐ）
     rows = cur.fetchall()
     cur.close()
     conn.close()
@@ -322,6 +358,8 @@ def _load_financials() -> dict[str, dict]:
         opi_p  = float(prior[3])  if (prior and prior[3]  is not None) else None
         ord_p  = float(prior[4])  if (prior and prior[4]  is not None) else None
         ni_p   = float(prior[5])  if (prior and prior[5]  is not None) else None
+        ta_p   = float(prior[6])  if (prior and prior[6]  is not None) else None
+        eq_p   = float(prior[7])  if (prior and prior[7]  is not None) else None
 
         def yoy(new, old):
             if new is None or old is None or old == 0:
@@ -354,6 +392,10 @@ def _load_financials() -> dict[str, dict]:
         cfo_per_share = cfo_l / shr if (cfo_l is not None and shr and shr > 0) else None
         rev_per_share = rev_l / shr if (rev_l is not None and shr and shr > 0) else None
 
+        # 財務健全性スコア（当サイト版 Piotroski F-score・7点満点）
+        fscore = _fscore_7(ni_l, ta_l, ta_p, cfo_l, eq_l, eq_p,
+                           opi_l, opi_p, rev_l, rev_p, ni_p)
+
         result[code] = {
             "rev_growth":    _round(rev_growth),
             "op_growth":     _round(op_growth),
@@ -365,6 +407,7 @@ def _load_financials() -> dict[str, dict]:
             "ord_margin":    _round(ord_margin),
             "cfo_per_share": cfo_per_share,
             "rev_per_share": rev_per_share,
+            "fscore":        fscore,
         }
 
     return result
@@ -393,6 +436,7 @@ STAT_COLS = [
     "break_ytd_high", "dev_ytd_high", "dev_ytd_low",
     "nikkei_rel_1m",
     "equity_ratio", "ord_margin", "ord_growth", "psr", "pcfr",
+    "fscore",
 ]
 
 
@@ -515,6 +559,7 @@ def compute_stock_stats(prices, w52_pair, ytd_pair, nikkei_1m_chg, fm):
     cf_positive  = fm.get("cf_positive", 0)
     equity_ratio = fm.get("equity_ratio")
     ord_margin   = fm.get("ord_margin")
+    fscore       = fm.get("fscore")
 
     cfo_ps = fm.get("cfo_per_share")
     rev_ps = fm.get("rev_per_share")
@@ -548,6 +593,7 @@ def compute_stock_stats(prices, w52_pair, ytd_pair, nikkei_1m_chg, fm):
         break_ytd_high, _round(dev_ytd_high), _round(dev_ytd_low),
         nikkei_rel_1m,
         equity_ratio, ord_margin, ord_growth, psr, pcfr,
+        fscore,
     )
 
 

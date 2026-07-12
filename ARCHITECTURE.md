@@ -95,8 +95,12 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - `disclosures.py` — TDnet適時開示の蓄積・分析 → `disclosures`/`market_summary`。タイトルからカテゴリ・ポジネガをルール分類（APIコストゼロ）。好材料（上方修正・増配等）はPDF本文をGeminiで読み修正理由＋関連テーマを抽出、テーマ経由で関連銘柄をサジェスト。業種・テーマ・開示動向から日次市況コメントも生成。**TDnetは約1ヶ月で消えるため毎日蓄積が必須**
 
 ### 計算・分析
-- `compute_price_stats.py` — テクニカル指標一式 → `price_stats`（現在値スナップショット）
-- `compute_stats_history.py` — 週次スナップショット → `price_stats_history`（バックテスト用・PIT補正=期末+45日）
+- `compute_price_stats.py` — テクニカル指標一式＋財務指標 → `price_stats`（現在値スナップショット）。
+  財務は `_load_financials`（年次実績のみ=period_end<=今日で会社予想を除外）。
+  `fscore` = 当サイト版 Piotroski F-score（`_fscore_7`・7点。標準9項目のうち流動比率/希薄化はデータ未保持で除外し、
+  総負債→自己資本比率改善・粗利率→営業利益率改善で代替。クオリティ・ファクター。詳細は docs/capital_gains_strategy_survey.md）
+- `compute_stats_history.py` — 週次スナップショット → `price_stats_history`（バックテスト用・PIT補正=期末+45日）。
+  fscore も PIT（`_pit_fm`）で再現・全履歴バックフィル済み
 - `compute_theoretical.py` — はっしゃん式理論株価 → `theoretical_values`。係数は config.py
 - `theme_score.py` — テーマ別過熱スコア → `theme_daily_stats`
 - `rankings.py` — 日次/週次ランキング → `rankings`
