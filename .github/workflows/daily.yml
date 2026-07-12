@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '実行モード'
+        description: '実行モード（notify_test = 休場日でも保存済み最新レポートのLINE通知だけ再送信するテスト用）'
         type: choice
-        options: [main, evening]
+        options: [main, evening, notify_test]
         default: main
 
 jobs:
@@ -55,7 +55,9 @@ jobs:
           REPORT_BASE_URL: ${{ secrets.REPORT_BASE_URL }}
           # TIDB_SSL_CA は未設定 → certifi を自動使用
         run: |
-          if [ "${{ github.event.schedule }}" = "30 11 * * 1-5" ] || [ "${{ inputs.mode }}" = "evening" ]; then
+          if [ "${{ inputs.mode }}" = "notify_test" ]; then
+            python daily_report.py --notify
+          elif [ "${{ github.event.schedule }}" = "30 11 * * 1-5" ] || [ "${{ inputs.mode }}" = "evening" ]; then
             python daily_run.py --evening
           else
             python daily_run.py
