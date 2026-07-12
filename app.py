@@ -4180,6 +4180,8 @@ _AIFUND_CSS = """
 .af-policy-old { font-size:12px; color:#8b949e; border-left:2px solid #30363d; padding-left:10px; margin:8px 0; line-height:1.7; }
 .af-style-badge { font-size:10px; color:#bc8cff; border:1px solid #bc8cff55; border-radius:8px;
   padding:1px 7px; vertical-align:middle; }
+.af-strat { font-size:10px; color:#79c0ff; background:#1f6feb1a; border:1px solid #388bfd55;
+  border-radius:8px; padding:1px 7px; vertical-align:middle; white-space:nowrap; }
 .af-bench-chg { font-weight:700; font-size:13px; white-space:nowrap; }
 .af-catalyst { font-size:12px; color:#d29922; line-height:1.6; margin-top:6px;
   background:#d2992210; border-radius:6px; padding:6px 9px; }
@@ -4254,12 +4256,13 @@ def _build_aifund_page() -> str:
     # 保有ポジション（現値・評価）
     cur.execute("""
         SELECT p.code, s.name, p.shares, p.avg_cost, p.buy_date, p.buy_reason, p.thesis, p.style, p.catalyst,
+               p.strategy,
                (SELECT close FROM daily_prices d WHERE d.code = p.code ORDER BY d.date DESC LIMIT 1)
         FROM ai_fund_positions p JOIN stocks s ON s.code = p.code
     """)
     positions = []
     total_mv = 0.0
-    for code, name, shares, avg_cost, buy_date, buy_reason, thesis, style, catalyst, close in cur.fetchall():
+    for code, name, shares, avg_cost, buy_date, buy_reason, thesis, style, catalyst, strategy, close in cur.fetchall():
         close = float(close) if close else float(avg_cost)
         mv = int(shares) * close
         total_mv += mv
@@ -4267,7 +4270,7 @@ def _build_aifund_page() -> str:
                           "avg_cost": float(avg_cost), "buy_date": buy_date,
                           "buy_reason": buy_reason or "", "thesis": thesis or "",
                           "style": style or "通常", "catalyst": catalyst or "",
-                          "close": close, "mv": mv,
+                          "strategy": strategy, "close": close, "mv": mv,
                           "pnl_pct": (close / float(avg_cost) - 1) * 100})
     positions.sort(key=lambda p: -p["mv"])
     nav_now = cash + total_mv
@@ -4276,7 +4279,8 @@ def _build_aifund_page() -> str:
 
     # 明日の売買予定（pending注文）
     cur.execute("""
-        SELECT o.code, s.name, o.side, o.budget, o.shares, o.reason, o.thesis, o.decided_date, o.style, o.catalyst
+        SELECT o.code, s.name, o.side, o.budget, o.shares, o.reason, o.thesis, o.decided_date, o.style, o.catalyst,
+               o.strategy
         FROM ai_fund_orders o JOIN stocks s ON s.code = o.code
         WHERE o.status = 'pending' ORDER BY o.side DESC, o.id
     """)
@@ -4323,7 +4327,7 @@ def _build_aifund_page() -> str:
     # 売買履歴（全件遡れるように多めに取得）＋実現損益サマリー
     cur.execute("""
         SELECT t.trade_date, t.side, t.code, s.name, t.shares, t.price,
-               t.pnl, t.pnl_pct, t.hold_days, t.reason, t.buy_reason
+               t.pnl, t.pnl_pct, t.hold_days, t.reason, t.buy_reason, t.strategy
         FROM ai_fund_trades t JOIN stocks s ON s.code = t.code
         ORDER BY t.trade_date DESC, t.id DESC LIMIT 500
     """)
@@ -4334,6 +4338,17 @@ def _build_aifund_page() -> str:
         FROM ai_fund_trades WHERE side = 'sell'
     """)
     n_sell, pnl_sum, n_win, avg_hold = cur.fetchone()
+
+    # スタイル別の実現成績（運営方針16: スタイル別に検証・表示）
+    strat_perf = {}
+    try:
+        cur.execute("""
+            SELECT strategy, COUNT(*), AVG(pnl_pct), SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)
+            FROM ai_fund_trades WHERE side = 'sell' AND strategy IS NOT NULL GROUP BY strategy
+        """)
+        strat_perf = {r[0]: (int(r[1]), float(r[2] or 0), int(r[3] or 0)) for r in cur.fetchall()}
+    except Exception:
+        pass
     cur.close(); conn.close()
 
     def _pnl_cls(v):
@@ -4385,6 +4400,14 @@ def _build_aifund_page() -> str:
     def _style_badge(style):
         return ' <span class="af-style-badge">🔮 先回り（予測）</span>' if style == "先回り" else ""
 
+    from ai_fund import STRATEGIES as _af_strats, STRATEGIES_FORBIDDEN as _af_forbidden
+
+    def _strat_badge(strategy):
+        s = _af_strats.get(strategy or "")
+        if not s:
+            return ""
+        return f' <span class="af-strat" title="{_html.escape(s["entry"])}">{_html.escape(strategy)}｜{_html.escape(s["name"])}</span>'
+
     def _catalyst_html(catalyst):
         if not catalyst:
             return ""
@@ -4394,12 +4417,12 @@ def _build_aifund_page() -> str:
     orders_html = ""
     if pending:
         items = []
-        for code, name, side, budget, shares, reason, thesis, decided, style, catalyst in pending:
+        for code, name, side, budget, shares, reason, thesis, decided, style, catalyst, strategy in pending:
             act = f"買い（予算 {float(budget)/1e4:,.0f}万円）" if side == "buy" else f"売り（{shares}株）"
             icon = "🟢" if side == "buy" else "🔴"
             th = f'<div class="af-pos-thesis">シナリオ: {_html.escape(thesis)}</div>' if thesis else ""
             items.append(f"""<div class="af-order {side}">
-  <div class="af-order-head">{icon} <a href="/stock/{code}">{_html.escape(name)}</a> <span style="color:#8b949e;font-size:11px">{code}</span> — {act}{_style_badge(style)}</div>
+  <div class="af-order-head">{icon} <a href="/stock/{code}">{_html.escape(name)}</a> <span style="color:#8b949e;font-size:11px">{code}</span> — {act}{_strat_badge(strategy)}{_style_badge(style)}</div>
   {_html.escape(reason or '')}
   {_catalyst_html(catalyst)}{th}
   <div class="af-note">決定日: {_html.escape(str(decided))} → 翌営業日の寄付で約定予定</div>
@@ -4439,7 +4462,7 @@ Plotly.newPlot('afChart', [
             spark = _af_sparkline(cur2, p["code"], p["buy_date"], p["avg_cost"])
             cards_p.append(f"""<div class="af-pos">
   <div class="af-pos-head">
-    <span class="af-pos-name"><a href="/stock/{p['code']}">{_html.escape(p['name'])}</a> <span style="color:#8b949e;font-size:11px;font-weight:400">{p['code']}</span>{_style_badge(p['style'])}</span>
+    <span class="af-pos-name"><a href="/stock/{p['code']}">{_html.escape(p['name'])}</a> <span style="color:#8b949e;font-size:11px;font-weight:400">{p['code']}</span>{_strat_badge(p.get('strategy'))}{_style_badge(p['style'])}</span>
     <span class="af-pos-pnl {_pnl_cls(p['pnl_pct'])}">{p['pnl_pct']:+.1f}%</span>
   </div>
   <div class="af-pos-meta">
@@ -4486,7 +4509,7 @@ Plotly.newPlot('afChart', [
     hist_html = '<div class="af-section">📜 売買履歴</div><div class="af-empty">約定が発生すると、購入理由から売却理由まで全履歴がここに残ります。</div>'
     if trades:
         rows_h = []
-        for td, side, code, name, shares, price, pnl, pnl_pct, hold_days, reason, buy_reason in trades:
+        for td, side, code, name, shares, price, pnl, pnl_pct, hold_days, reason, buy_reason, strategy in trades:
             side_cls = "af-side-buy" if side == "buy" else "af-side-sell"
             side_jp = "買" if side == "buy" else "売"
             pnl_html = "—"
@@ -4498,7 +4521,7 @@ Plotly.newPlot('afChart', [
             rows_h.append(f"""<tr>
   <td class="num">{_html.escape(str(td))}</td>
   <td class="{side_cls}">{side_jp}</td>
-  <td><a href="/stock/{code}" style="color:#58a6ff;text-decoration:none">{_html.escape(name)}</a></td>
+  <td><a href="/stock/{code}" style="color:#58a6ff;text-decoration:none">{_html.escape(name)}</a>{_strat_badge(strategy)}</td>
   <td class="num">{shares:,}株</td>
   <td class="num">{float(price):,.0f}円</td>
   <td class="num">{pnl_html}</td>
@@ -4522,12 +4545,34 @@ Plotly.newPlot('afChart', [
   <div class="af-charter-body">{_html.escape(_af_charter)}</div>
 </details>"""
 
+    # ── 投資スタイル分類（検証済みプレイブックの明文化＋スタイル別実績） ──
+    rows_s = []
+    for k, s in _af_strats.items():
+        perf = strat_perf.get(k)
+        perf_html = (f"{perf[0]}回・平均{perf[1]:+.1f}%・勝率{perf[2]/perf[0]*100:.0f}%"
+                     if perf and perf[0] else "—")
+        rows_s.append(
+            f'<tr><td style="white-space:nowrap"><span class="af-strat">{_html.escape(k)}｜{_html.escape(s["name"])}</span></td>'
+            f'<td>{_html.escape(s["entry"])}</td><td class="num" style="white-space:nowrap">{_html.escape(s["edge"])}</td>'
+            f'<td>{_html.escape(s["role"])}</td><td class="num" style="white-space:nowrap">{perf_html}</td></tr>')
+    strategies_html = f"""<details class="af-charter" open>
+  <summary>🧭 投資スタイル分類（全数バックテストで検証済み・買い注文ごとに明示）</summary>
+  <div style="overflow-x:auto;margin-top:8px"><table class="af-table">
+  <tr><th>スタイル</th><th>エントリー条件</th><th class="num">検証エッジ</th><th>位置づけ</th><th class="num">ファンド実績</th></tr>
+  {''.join(rows_s)}
+  </table></div>
+  <div style="font-size:11px;color:#8b949e;margin-top:6px;line-height:1.7">{_html.escape(_af_forbidden)}<br>
+  共通エグジット: -12%損切り → +25%到達後は高値-15%トレール（システムが機械執行）／保有は最長9ヶ月。
+  「検証エッジ」は過去2.5年・全シグナル機械検証の1トレードあたり成績、「ファンド実績」は実運用の決済ベース。</div>
+</details>"""
+
     body = f"""<style>{_AIFUND_CSS}</style>
 <h1 class="page-title">🤖 AIファンド</h1>
 <p style="font-size:12px;color:#8b949e;margin:-6px 0 8px">
-AIが毎晩、銘柄の発掘・保有・売却を理由とカタリスト付きで判断する模擬ファンド（元本1,000万円・常時8銘柄・投資期間数日〜半年）。
+AIが毎晩、銘柄の発掘・保有・売却を理由とカタリスト付きで判断する模擬ファンド（元本1,000万円・常時8銘柄・投資期間数日〜最長9ヶ月）。
 判断の<b>翌営業日の寄付</b>で約定し、取引コスト0.1%/片道を控除。実在の売買ではありません。</p>
 {charter_html}
+{strategies_html}
 {cards}
 {view_html}
 {policy_html}
