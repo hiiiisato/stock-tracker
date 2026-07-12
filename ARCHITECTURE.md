@@ -52,7 +52,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 8. テクニカル指標 (`compute_price_stats`) → `price_stats`
 9. **理論株価** (`compute_theoretical`) — price_stats と stock_fundamentals に依存するため必ずその後
 10. 週次スナップショット追記 (`compute_stats_history`) → `price_stats_history`（バックテスト用）
-11. スイング候補スコア＆LINE通知 (`swing_scorer` → `swing_notifier`)
+11. スイング候補スコア → `swing_scores` テーブル保存 (`swing_scorer`。/swing ページで表示)
 12. ランキング (`rankings`)・資金フロー週次集計 (`money_flow`)
 13. 適時開示 (`disclosures`) — 重いAI調査より先に実行（timeout時も当日開示を確保）
 14. 変動要因AI調査 (`event_researcher`)
@@ -101,9 +101,10 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - `theme_score.py` — テーマ別過熱スコア → `theme_daily_stats`
 - `rankings.py` — 日次/週次ランキング → `rankings`
 - `line_notify.py` — LINE Messaging API への汎用テキストpush（`push_text`/`is_configured`）。
-  スイング通知・日次レポート通知の共通トランスポート。環境変数 `LINE_CHANNEL_ACCESS_TOKEN`/`LINE_USER_ID`、
-  未設定なら送信スキップ（例外を出さない）。設定手順は swing_notifier.py の docstring
-- `swing_scorer.py` / `swing_notifier.py` — スイング候補スコアとLINE通知（`line_notify.push_text` 経由）
+  日次レポート完成通知のトランスポート。環境変数 `LINE_CHANNEL_ACCESS_TOKEN`/`LINE_USER_ID`、
+  未設定なら送信スキップ（例外を出さない）。LINE初回設定手順は line_notify.py の docstring
+- `swing_scorer.py` — スイング候補スコア → `swing_scores`（/swing ページで表示）
+  ※旧 `swing_notifier.py`（スイングのLINE通知）はテスト用途のみで廃止し archive/ へ移動（2026-07）
 - `event_researcher.py` — 急騰急落銘柄の要因をニュース検索+Geminiで要約 → `price_events`
 - `research_strategy.py` — event_researcher の調査対象選定ロジック・閾値
 - `theme_report.py` — テーマレポートHTML生成（app.py の /report から利用）

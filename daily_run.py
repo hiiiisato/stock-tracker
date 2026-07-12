@@ -336,16 +336,14 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
             print(f"  エラー: {e}")
             _log("price_stats_history", "failed", error=str(e))
 
-    # スイングトレード候補のスコアリング → DB 保存 → LINE 通知
+    # スイングトレード候補のスコアリング → DB 保存（/swing ページで表示）
     if not rankings_only:
-        print("\n[スイング] 候補スコアリング & DB 保存 & LINE 通知...")
+        print("\n[スイング] 候補スコアリング & DB 保存...")
         try:
             from swing_scorer import score_all, save_scores as save_swing_scores
-            from swing_notifier import send as send_swing_line
             candidates = score_all()
             n_saved = save_swing_scores(candidates)
             print(f"  候補: {len(candidates)} 銘柄 → DB 保存: {n_saved} 件")
-            send_swing_line(candidates)
             _log("swing_score", "done", len(candidates))
         except Exception as e:
             print(f"  エラー: {e}")

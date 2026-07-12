@@ -2,13 +2,24 @@
 LINE Messaging API への汎用プッシュ送信ヘルパー。
 
 LINE Notify は2025年3月に廃止されたため、Messaging API の push メッセージを使う。
-チャネル作成・トークン発行・ユーザーID確認の手順は swing_notifier.py の docstring を参照。
+日次レポート完成通知（daily_report.notify_report_ready）の送信トランスポート。
 
 環境変数:
   LINE_CHANNEL_ACCESS_TOKEN  チャネルアクセストークン（長期）
   LINE_USER_ID               通知先ユーザーID（U から始まる文字列）
 
 未設定でも例外は出さず、送信をスキップして False を返す（ローカル/未設定環境でも安全）。
+
+【初回設定手順】
+1. https://developers.line.biz にアクセスし「コンソール」にログイン
+2. プロバイダーを作成（まだなければ）
+3. 「Messaging API チャネル」を新規作成
+4. 「チャネル設定」>「Messaging API」タブ > チャネルアクセストークン（長期）を発行
+   → LINE_CHANNEL_ACCESS_TOKEN に設定
+5. LINE アプリで Bot を友だち追加（チャネルページの QR コードから）
+6. LINE アプリ > ホーム > 設定 > プロフィール > 「自分のプロフィール」内のユーザーID を確認
+   → LINE_USER_ID に設定（U から始まる文字列）
+7. GitHub Secrets（daily.yml が参照）に両キー＋レポートURL(REPORT_BASE_URL)を登録
 """
 
 import json
