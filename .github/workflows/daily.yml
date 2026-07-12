@@ -50,7 +50,7 @@ jobs:
           # 未設定なら送信をスキップするだけで他処理は継続。設定手順は swing_notifier.py 参照
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-          # 日次レポート全文リンクの公開URL（例: https://kabushiki-tracker.onrender.com）。
+          # 日次レポート全文リンクの公開URL（本番: https://stock-tracker-rfqn.onrender.com）。
           # 未設定なら daily_report.DEFAULT_REPORT_BASE_URL が使われる
           REPORT_BASE_URL: ${{ secrets.REPORT_BASE_URL }}
           # TIDB_SSL_CA は未設定 → certifi を自動使用

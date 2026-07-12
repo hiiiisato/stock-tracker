@@ -25,9 +25,9 @@ from datetime import date, datetime, timedelta
 from config import get_conn
 
 # 日次レポート全文（/daily）の公開URL既定値。REPORT_BASE_URL 環境変数で上書きする。
-# ※Render無料プランは render.yaml のサービス名（kabushiki-tracker）からURLが振られるが、
-#   末尾にサフィックスが付く場合があるため、実URLを REPORT_BASE_URL で明示するのが確実。
-DEFAULT_REPORT_BASE_URL = "https://kabushiki-tracker.onrender.com"
+# ※Renderの実URLはサービス名＋サフィックス（render.yamlの kabushiki-tracker とは一致しない）。
+#   本番は /daily を配信している下記ホスト（kabutanプロキシと同一サービス）。2026-07で到達確認済み。
+DEFAULT_REPORT_BASE_URL = "https://stock-tracker-rfqn.onrender.com"
 
 try:
     from disclosures import CATEGORY_LABELS as _CAT_LABELS
