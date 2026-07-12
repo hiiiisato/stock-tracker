@@ -720,6 +720,8 @@ EDGE_VIEWS = {
     # rs_leaderの本来の定義は「chg126dが市場上位10%」。スナップショットSQLでは百分位が引けないため
     # 固定値で近似（上位10%ラインの実測平均≈56%・最小29%。下限側に寄せて40%）
     "rs_leader": "chg126d >= 40 AND dev_high52w >= -10 AND close > ma25 AND chg5d > -4 AND rsi14 < 85",
+    # quality: 財務健全性F-score上位。自前実測でF7は+3.4%/20日・勝率60%（F0-2は+0.5%）と単調なエッジ
+    "quality": "fscore >= 6",
     "baseline": "1 = 1",  # 全銘柄平均（比較基準）
 }
 EDGE_HORIZON = 20  # 営業日
