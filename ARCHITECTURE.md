@@ -176,6 +176,10 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | AIファンド | `ai_fund_state` `ai_fund_positions` `ai_fund_orders` `ai_fund_trades` `ai_fund_nav` `ai_fund_policy` `ai_fund_bench` | ai_fund.py（模擬運用・全売買に理由を記録・投資基準と控え銘柄を日次蓄積） |
 | 決算予定 | `earnings_schedule` | ai_fund.py `_earnings_dates`（kabutan financeページの決算発表予定日・3日キャッシュ。J-Quants無料枠のearnings-calendarは12週遅延固定で使用不可） |
 
+**トレード戦略の実証研究**: `docs/trade_strategy_research.md`（2024-2026全銘柄・全シグナル機械検証。
+52週高値ブレイク×2段階エグジット=平均+9.2%/勝率54%が主力、深押し逆張りは期待値マイナスで禁止等。
+結論は ai_fund.py の PLAYBOOK 定数として毎晩の意思決定に注入され、EDGE_VIEWS が週次で前提を再検証する）
+
 ## 落とし穴（過去に踏んだもの）
 
 - **daily_prices.close は生値とは限らない**。Yahooのcloseは銘柄により生値/調整済みが混在。
