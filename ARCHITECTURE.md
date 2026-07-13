@@ -46,7 +46,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 2. 銘柄マスタ・取引カレンダー (`master`)
 3. 価格取得 Yahoo差分 (`prices_yahoo`) — adj_close含む
 4. **分割対応** (`splits`) — J-Quants公式AdjFactor/AdjCが正。価格急変ヒューリスティックは誤判定するため廃止済み
-5. 【月曜のみ】配当 (`dividends`)・財務 (`financials`)・ファンダ (`fundamentals`)・kabutan業績 (`financials_kabutan`)
+5. 【月曜のみ】配当 (`dividends`)・財務 (`financials`)・ファンダ (`fundamentals`)・TDnet短信の広域取込 (`financials_tdnet` 過去30日)
 6. テーマスコア (`theme_score`)
 7. PER/PBR等の最新値再計算 (`fundamentals.recompute_price_metrics`)
 8. テクニカル指標 (`compute_price_stats`) → `price_stats`
@@ -78,7 +78,10 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   4. `run_integrity_check()` — 「closeは正常なのにadjだけ跳ねる」箇所を毎晩スキャン→自動修復（daily_runから呼出）
 - `split_backfill.py` — splits.py から `recompute_change_pct` が使われる（他は初期バックフィルの名残）
 - `dividends.py` / `financials.py` — J-Quants 配当・財務
-- `financials_kabutan.py` — kabutan スクレイピングで業績実績+会社予想（financialsに未来日付期=予想として入る）
+- `financials_tdnet.py` — TDnet決算短信XBRL(サマリー)から実績+会社予想を取得（financialsに未来日付期=予想として入る）。
+  kabutanがデータセンターIP遮断のため公式一次データに置換(2026-07)。`import_recent(days)` で直近短信を取込。
+  earnings_refresh から呼ばれ、detect_revisions が上方/下方修正を検知。旧 `financials_kabutan.py` は archive/ へ
+- `earnings_calendar_jpx.py` — JPX公式「決算発表予定日」Excelを取込 → `earnings_schedule`（決算跨ぎ管理）
 - `fundamentals.py` — PER/PBR/時価総額等 → `stock_fundamentals`
 - `market_indices.py` — 海外・国内指数 → `market_index_prices`
 - `edinet_texts.py` — EDINET有報の定性テキスト全17セクション → `edinet_text_blocks`（edinetdb.jp経由・10件/日制限）
@@ -167,7 +170,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | 価格 | `daily_prices` | prices_yahoo.py（adj_close=分割調整済。splits.pyが再計算） |
 | 価格 | `stock_splits` | splits.py（分割イベント。J-Quants公式が正） |
 | 価格 | `market_index_prices` | market_indices.py |
-| 財務 | `financials` | financials.py + financials_kabutan.py（**未来日付の期=会社予想**） |
+| 財務 | `financials` | financials.py + financials_tdnet.py（TDnet短信XBRL・**未来日付の期=会社予想**） |
 | 財務 | `financials_forecast` `dividends` `stock_fundamentals` | 各取得モジュール |
 | 指標 | `price_stats` | compute_price_stats.py（最新値のみ） |
 | 指標 | `price_stats_history` | compute_stats_history.py（週次・バックテスト用） |
@@ -185,7 +188,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | ファンド | `fund_master` `fund_reports` | fund_watch.py |
 | アプリ | `watchlist` `stock_memos` `fetch_logs` | app.py / daily_run.py |
 | AIファンド | `ai_fund_state` `ai_fund_positions` `ai_fund_orders` `ai_fund_trades` `ai_fund_nav` `ai_fund_policy` `ai_fund_bench` | ai_fund.py（模擬運用・全売買に理由を記録・投資基準と控え銘柄を日次蓄積） |
-| 決算予定 | `earnings_schedule` | ai_fund.py `_earnings_dates`（kabutan financeページの決算発表予定日・3日キャッシュ。J-Quants無料枠のearnings-calendarは12週遅延固定で使用不可） |
+| 決算予定 | `earnings_schedule` | earnings_calendar_jpx.py（JPX公式の決算発表予定日Excel・日次更新）。ai_fund.py `_earnings_dates` が読み取り。kabutan/ J-Quants無料枠(12週遅延)は使用不可のため公式JPXに置換 |
 
 **トレード戦略の実証研究**: `docs/trade_strategy_research.md`（2024-2026全銘柄・全シグナル機械検証。
 第1弾: 52週高値ブレイク×2段階エグジットが主力、深押し逆張りは期待値マイナスで禁止等。

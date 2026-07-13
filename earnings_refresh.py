@@ -2,18 +2,17 @@
 決算・業績修正のタイムリー反映 — 適時開示を検知した銘柄だけ当日中に業績データを更新する。
 
 背景:
-  業績（financials / financials_forecast）の全銘柄更新は週次（月曜）のため、
-  決算発表・業績修正がDBに反映されるまで最大1週間かかっていた。
-  一方、適時開示（disclosures）は毎日16時台+20:30に蓄積されており、
-  kabutan は発表当日中に新しい予想値を掲載する（発表日カラム付き）。
+  決算発表・業績修正を当日中に業績データ（financials / financials_forecast）へ反映し、
+  上方/下方修正を forecast_revisions に検知する。取得元は公式一次データの
+  TDnet決算短信XBRL（financials_tdnet）。旧実装はkabutanスクレイプだったが、
+  kabutanがデータセンターIPを遮断したため公式ソースに置換した（2026-07）。
 
 仕組み:
-  1. 当日の適時開示から決算・業績修正・配当修正の銘柄コードを抽出
-  2. その銘柄だけ financials_kabutan.scrape_one で再取得
-     → financials（実績・四半期）更新、financials_forecast に新announced_atの行が追加される
+  1. financials_tdnet.import_recent が直近のTDnet決算短信XBRLを取り込み、
+     financials（実績）更新、financials_forecast に新announced_atの行が追加される
      （financials_forecast は UNIQUE(code, fiscal_year_end, period_type, announced_at) で
        修正履歴がそのまま蓄積される既存設計を利用）
-  3. 同一決算期に対する直近2つの予想を比較し、修正幅を forecast_revisions に保存
+  2. 同一決算期に対する直近2つの予想を比較し、修正幅を forecast_revisions に保存
      → 日次レポート・銘柄ページで「上方修正 営業益+20%」のように定量表示できる
 
 実行: daily_run.py のメイン便・イブニング便から自動実行。
@@ -279,34 +278,24 @@ def detect_revisions(days_back: int = 7) -> int:
 
 
 def refresh_from_disclosures(target_date: date | None = None) -> dict:
-    """当日の業績関連開示の銘柄だけ kabutan から再取得し、修正を検知する。"""
+    """直近のTDnet決算短信(XBRL)から実績・会社予想を取り込み、業績修正を検知する。
+
+    旧実装は kabutan スクレイプだったが、kabutanがデータセンターIPを遮断したため、
+    公式一次データ(TDnet短信XBRL)に置換（financials_tdnet.import_recent）。
+    過去8日(_pending の自己修復窓)をカバーする窓で取り込む。冪等。"""
     ensure_table()
     target = target_date or date.today()
-    conn = get_conn()
-    cur  = conn.cursor()
-    codes_today   = _disclosed_codes(cur, target)
-    codes_pending = _pending_codes(cur, days_back=8)   # 過去8日で未反映のもの（自己修復）
-    cur.close()
-    conn.close()
 
-    # 当日開示 + 未反映の過去開示（重複排除・当日を優先して順序保持）
-    today_set = set(codes_today)
-    codes = codes_today + [c for c in codes_pending if c not in today_set]
-    n_retry = len(codes) - len(codes_today)
-
-    if not codes:
-        print(f"  {target} の業績関連開示なし・未反映銘柄なし")
-        return {"codes": 0, "revisions": 0}
-    if len(codes) > MAX_CODES_PER_RUN:
-        print(f"  対象 {len(codes)} 銘柄 → 上限 {MAX_CODES_PER_RUN} 件に制限（残りは翌日・週次で反映）")
-        codes = codes[:MAX_CODES_PER_RUN]
-
-    print(f"  {target} の業績関連開示 {len(codes_today)}銘柄 + 未反映リトライ {n_retry}銘柄 を再取得...")
-    from financials_kabutan import run as kabutan_run
-    kabutan_run(target_codes=codes)
+    # 直近9日のTDnet決算短信を取り込む（未反映の過去開示=最大8日をカバー）。
+    # import_recent は取込済みをスキップするため、日次で再実行しても軽い。
+    from financials_tdnet import import_recent
+    res = import_recent(days=9)
 
     n_rev = detect_revisions(days_back=8)
-    return {"codes": len(codes), "retry": n_retry, "revisions": n_rev}
+    return {"disclosures": res.get("disclosures", 0),
+            "financials": res.get("financials", 0),
+            "forecasts": res.get("forecasts", 0),
+            "revisions": n_rev}
 
 
 if __name__ == "__main__":

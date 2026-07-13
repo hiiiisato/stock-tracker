@@ -92,6 +92,16 @@ def run_evening():
         print(f"  エラー: {e}")
         _log("daily_report", "failed", error=str(e))
 
+    # JPX公式の決算発表予定日を更新（AIファンドの決算跨ぎ管理に必須。JPXは17時頃更新）
+    print("\n[決算予定日] JPX公式の決算発表予定日を取込...")
+    try:
+        from earnings_calendar_jpx import import_schedule as jpx_earnings
+        res = jpx_earnings()
+        _log("jpx_earnings_schedule", "done", res.get("codes", 0))
+    except Exception as e:
+        print(f"  エラー: {e}")
+        _log("jpx_earnings_schedule", "failed", error=str(e))
+
     # AIファンドの意思決定（当日の全情報が揃った最後に実施。約定は翌営業日の寄付＝先読みなし）
     print("\n[AIファンド] 意思決定...")
     try:
@@ -111,7 +121,6 @@ from rankings import compute_daily_rankings, compute_weekly_rankings, print_rank
 from theme_score import compute_day as compute_theme_day
 from fundamentals import fetch_all_known as update_fundamentals, recompute_price_metrics
 from compute_price_stats import run as compute_price_stats
-from financials_kabutan import run as fetch_kabutan_financials
 from event_researcher import research_top_movers
 from market_indices import fetch_and_store as update_market_indices, ensure_table as ensure_indices_table
 from research_strategy import RESEARCH_THRESHOLD_PCT
@@ -270,13 +279,14 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
             print(f"  エラー: {e}")
             _log("fundamentals", "failed", error=str(e))
 
-        print("\n[週次] kabutan 財務実績・業績予想更新...")
+        print("\n[週次] TDnet決算短信XBRL 財務実績・業績予想の広域取込（過去30日・取りこぼし補完）...")
         try:
-            fetch_kabutan_financials(force=True)
-            _log("kabutan_financials", "done")
+            from financials_tdnet import import_recent as tdnet_import
+            res = tdnet_import(days=30)
+            _log("tdnet_financials_weekly", "done", res.get("financials", 0))
         except Exception as e:
             print(f"  エラー: {e}")
-            _log("kabutan_financials", "failed", error=str(e))
+            _log("tdnet_financials_weekly", "failed", error=str(e))
 
     # ※会社概要・kabutanテーマタグの定期メンテは夜間バッチ（misc_batch.yml 23:45）に移動。
     #   市場時間と無関係なデータのため、夕方のクリティカルパスから外して日次レポートを早める。

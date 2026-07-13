@@ -825,39 +825,18 @@ def _progress_note(cur, code: str) -> str:
 
 
 def _earnings_dates(cur, conn, codes: list[str]) -> dict:
-    """各銘柄の次回決算発表予定日を返す。kabutanのfinanceページから取得し
-    earnings_schedule にキャッシュ（3日で再取得・過ぎた日付も再取得）。
-    決算跨ぎはイベントリスク/カタリストの両面で判断材料になるため、意思決定に必須。"""
+    """各銘柄の次回決算発表予定日を earnings_schedule から返す。
+    earnings_schedule は JPX公式の決算発表予定日Excel（earnings_calendar_jpx）で
+    日次更新される。決算跨ぎはイベントリスク/カタリストの両面で意思決定に必須。
+    （旧実装はkabutanスクレイプだったが、データセンターIP遮断のためJPX公式に置換）"""
     if not codes:
         return {}
     fmt = ",".join(["%s"] * len(codes))
     cur.execute(f"""
         SELECT code, announce_date FROM earnings_schedule
-        WHERE code IN ({fmt}) AND fetched_at >= NOW() - INTERVAL 3 DAY
-          AND (announce_date IS NULL OR announce_date >= CURDATE())
+        WHERE code IN ({fmt}) AND announce_date >= CURDATE()
     """, codes)
-    result = {r[0]: r[1] for r in cur.fetchall()}
-
-    missing = [c for c in codes if c not in result]
-    if missing:
-        from kabutan_client import get as kabutan_get
-        for code in missing[:50]:  # 1回の実行での取得上限（夜間バッチの時間保護）
-            try:
-                time.sleep(0.4)
-                status, text = kabutan_get(f"stock/finance?code={code}")
-                m = re.search(r'決算発表予定日.{0,120}?datetime="(\d{4}-\d{2}-\d{2})', text, re.S) if status == 200 else None
-                ann = m.group(1) if m else None
-                cur.execute("""
-                    INSERT INTO earnings_schedule (code, announce_date, fetched_at)
-                    VALUES (%s, %s, NOW())
-                    ON DUPLICATE KEY UPDATE announce_date = VALUES(announce_date), fetched_at = NOW()
-                """, (code, ann))
-                if ann:
-                    result[code] = datetime.strptime(ann, "%Y-%m-%d").date()
-            except Exception:
-                continue
-        conn.commit()
-    return result
+    return {r[0]: r[1] for r in cur.fetchall()}
 
 
 def _earn_note(earn_map: dict, code: str) -> str:
