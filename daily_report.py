@@ -328,13 +328,15 @@ def _fetch_disclosures(cur, target: date) -> dict:
     """, (disc_date,))
     counts = cur.fetchall()
     cur.execute("""
-        SELECT d.code, s.name, d.category, LEFT(COALESCE(d.ai_summary, d.title), 90)
+        SELECT d.code, s.name, d.category, LEFT(COALESCE(d.ai_summary, d.title), 90),
+               (TIME(d.disclosed_at) >= '15:00') AS after_close
         FROM disclosures d
         JOIN stocks s ON s.code = d.code
         WHERE DATE(d.disclosed_at) = %s AND d.sentiment = 1
         ORDER BY (d.ai_summary IS NULL), d.disclosed_at DESC LIMIT 3
     """, (disc_date,))
-    picks = [{"code": str(r[0]), "name": r[1], "cat": r[2], "summary": r[3]}
+    picks = [{"code": str(r[0]), "name": r[1], "cat": r[2], "summary": r[3],
+              "after_close": bool(r[4])}
              for r in cur.fetchall()]
     return {"counts": counts, "picks": picks, "date": disc_date}
 
@@ -720,7 +722,10 @@ def build_report_html(target_date: date | None = None) -> str:
     cat_note = disc_date_note + ("・".join(f"{esc(_CAT_LABELS.get(c, c))} {n}件" for c, n in discs["counts"][:4]) if discs["counts"] else "")
     picks = "".join(
         f'<div class="dc-pick"><a href="/stock/{p["code"]}">{esc(p["name"])}</a> '
-        f'<span class="mut">[{esc(_CAT_LABELS.get(p["cat"], p["cat"] or ""))}]</span> {esc(p["summary"] or "")}</div>'
+        f'<span class="mut">[{esc(_CAT_LABELS.get(p["cat"], p["cat"] or ""))}]</span>'
+        + (' <span style="color:#d29922;font-size:11px;font-weight:700">⏰引け後＝明日の注目</span>'
+           if p.get("after_close") else "")
+        + f' {esc(p["summary"] or "")}</div>'
         for p in discs["picks"])
     sec_discs = f"""<div class="rp-card">
   <div class="rp-h">好材料開示 <small>{cat_note}（<a href="/disclosures">一覧</a>）</small></div>

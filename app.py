@@ -451,6 +451,7 @@ def _nav(active: str = "") -> str:
         ("flows",     "/flows",      "資金フロー"),
         ("events",    "/events",     "ランキング・イベント"),
         ("disclosures", "/disclosures", "適時開示"),
+        ("earnings",  "/earnings",   "決算"),
         ("funds",     "/funds",      "ファンドウォッチ"),
         ("aifund",    "/aifund",     "AIファンド"),
         ("swing",     "/swing",      "スイング"),
@@ -2065,6 +2066,13 @@ _FUND_TTL_DAYS = 7  # 7日以上古ければ再取得
 
 _STOCK_CSS = """
 .s-header { margin-bottom: 20px; }
+/* ─ 決算プレビュー ─ */
+.ep-card { display:flex; flex-wrap:wrap; gap:6px 22px; background:#161b22; border:1px solid #30363d;
+  border-radius:8px; padding:10px 14px; margin-bottom:16px; font-size:12.5px; color:#c9d1d9; line-height:1.7; }
+.ep-item b { color:#e6edf3; }
+.ep-days { color:#8b949e; margin-left:6px; font-size:11.5px; }
+.ep-up { color:#3fb950; font-weight:700; margin-left:6px; }
+.ep-dn { color:#f85149; font-weight:700; margin-left:6px; }
 .s-name { font-size: 22px; font-weight: 700; color: #e6edf3; line-height: 1.3; }
 .s-meta { font-size: 12px; color: #8b949e; margin-top: 4px; }
 .s-price-row {
@@ -6287,6 +6295,38 @@ def _build_screen_page() -> str:
 """, active="screen")
 
 
+def _earnings_impact_stats(vol_chg) -> dict | None:
+    """過去の「決算級イベント日」の反応統計（決算インパクトのシミュレーション素材）。
+
+    決算発表日の長期履歴が無いため、trade_strategy_research.md 10章と同じ
+    「単日|前日比|>=4% × 出来高が直近25日平均の3倍以上」を発表反応のプロキシとして
+    銘柄単位に適用する。vol_chg は (volume, change_pct) の日付昇順リスト。"""
+    if not vol_chg or len(vol_chg) < 60:
+        return None
+    ups, dns = [], []
+    vols = [float(v or 0) for v, _c in vol_chg]
+    for i in range(25, len(vol_chg)):
+        chg = vol_chg[i][1]
+        if chg is None:
+            continue
+        chg = float(chg)
+        avg = sum(vols[i - 25:i]) / 25
+        if avg <= 0 or vols[i] < 3 * avg or abs(chg) < 4:
+            continue
+        (ups if chg > 0 else dns).append(chg)
+    n = len(ups) + len(dns)
+    if n == 0:
+        return None
+    return {
+        "n": n,
+        "avg_abs": (sum(ups) + sum(map(abs, dns))) / n,
+        "up_n": len(ups), "up_avg": (sum(ups) / len(ups)) if ups else None,
+        "up_max": max(ups) if ups else None,
+        "dn_n": len(dns), "dn_avg": (sum(dns) / len(dns)) if dns else None,
+        "dn_min": min(dns) if dns else None,
+    }
+
+
 def _build_stock_page(code: str) -> str:
     conn = get_conn()
     cur  = conn.cursor()
@@ -6365,6 +6405,17 @@ def _build_stock_page(code: str) -> str:
         ORDER BY tc.sort_order
     """, (code,))
     themes = cur.fetchall()
+
+    # ─ 決算プレビュー: 次回発表日(JPX)・通期予想への進捗率・過去反応の想定インパクト ─
+    # ※日付比較はJST(Python)側で行う。DBサーバーのCURDATE()はUTCで日本の日付と最大9時間ズレるため
+    cur.execute("""
+        SELECT announce_date FROM earnings_schedule
+        WHERE code = %s AND announce_date >= %s
+    """, (code, date.today()))
+    r = cur.fetchone()
+    next_earn = r[0] if r else None
+    from ai_fund import _progress_note
+    prog_note = _progress_note(cur, code).strip()   # 例 '進捗率:営業益54%(Q2終了・単純按分50%)'
 
     # ファンダメンタルズ（列名で取得してdict化 → 列順変更に強い）
     cur.execute("""
@@ -6862,6 +6913,33 @@ def _build_stock_page(code: str) -> str:
 </div>"""
     else:
         key_metrics_html = '<div class="alert" style="margin-bottom:16px">指標データを取得中です。しばらくお待ちください。</div>'
+
+    # ─ 決算プレビューカード（次回発表日・進捗率・想定インパクト） ─
+    ep_items = []
+    if next_earn:
+        days_to = (next_earn - date.today()).days
+        wd = "月火水木金土日"[next_earn.weekday()]
+        ep_items.append(f'<span class="ep-item">📅 <b>次回決算発表</b> {next_earn.month}/{next_earn.day}({wd})'
+                        f'<span class="ep-days">{"本日" if days_to == 0 else f"{days_to}日後"}</span></span>')
+    if prog_note:
+        badge = ""
+        m_pg = re.search(r"営業益(-?\d+)%\(Q(\d)終了・単純按分(\d+)%", prog_note)
+        if m_pg:
+            excess = int(m_pg.group(1)) - int(m_pg.group(3))
+            if excess >= 15:
+                badge = '<span class="ep-up">▲上振れ気配</span>'
+            elif excess <= -15:
+                badge = '<span class="ep-dn">▼下振れ警戒</span>'
+        ep_items.append(f'<span class="ep-item">{prog_note.replace("単純按分", "按分")}{badge}</span>')
+    _imp = _earnings_impact_stats([(p[5], p[6]) for p in prices])
+    if _imp:
+        up_s = f"上振れ反応 平均+{_imp['up_avg']:.1f}%(最大+{_imp['up_max']:.1f}%)" if _imp["up_avg"] is not None else ""
+        dn_s = f"下振れ反応 平均{_imp['dn_avg']:.1f}%(最大{_imp['dn_min']:.1f}%)" if _imp["dn_avg"] is not None else ""
+        parts = "・".join(x for x in (up_s, dn_s) if x)
+        ep_items.append(f'<span class="ep-item">💥 <b>決算時の想定インパクト</b> 平均±{_imp["avg_abs"]:.1f}%'
+                        f'<span class="ep-days">{parts}（過去3年の決算級イベント{_imp["n"]}回の実績）</span></span>')
+    earnings_preview_html = (
+        f'<div class="ep-card">{"".join(ep_items)}</div>' if ep_items else "")
 
     # ─ ローソク足チャート (Plotly.js 直接利用・期間切替・MA対応) ─
     prices_json = _json.dumps([{
@@ -7526,6 +7604,8 @@ function renderFinTable(d){
 </div>
 
 {key_metrics_html}
+
+{earnings_preview_html}
 
 <div class="pg-tabs">
   <button class="pg-tab active" data-tab="overview">概要</button>
@@ -8217,6 +8297,149 @@ def report(date_str: str):
 def rankings():
     # ランキングはイベントページに統合済み（ブックマーク・既存リンク互換のためリダイレクト）
     return redirect("/events")
+
+
+def _build_earnings_page() -> str:
+    """決算プレビューページ: 今後14日の発表予定×進捗率の上振れ候補×想定インパクト。"""
+    import html as _html
+    conn = get_conn(); cur = conn.cursor()
+    today = date.today()
+    horizon = today + timedelta(days=14)
+
+    cur.execute("""
+        SELECT es.code, s.name, es.announce_date, p.close, p.chg25d, p.rsi14, p.fscore,
+               p.turnover_20d, f.per, f.market_cap
+        FROM earnings_schedule es
+        JOIN stocks s ON s.code = es.code AND s.is_active = 1
+        JOIN price_stats p ON p.code = es.code
+        LEFT JOIN stock_fundamentals f ON f.code = es.code
+        WHERE es.announce_date BETWEEN %s AND %s AND p.turnover_20d >= 1
+        ORDER BY es.announce_date, p.turnover_20d DESC
+    """, (today, horizon))
+    rows = cur.fetchall()
+    codes = [r[0] for r in rows]
+
+    from ai_fund import _progress_batch
+    prog = _progress_batch(cur, codes)
+
+    # 過去反応の想定インパクト（バッチ）: 直近500日で銘柄別の決算級イベント統計
+    impact: dict = {}
+    if codes:
+        ph = ",".join(["%s"] * len(codes))
+        cur.execute(f"""
+            SELECT code, volume, change_pct FROM daily_prices
+            WHERE code IN ({ph}) AND date >= %s ORDER BY code, date
+        """, (*codes, today - timedelta(days=500)))
+        series: dict = {}
+        for c, v, ch in cur.fetchall():
+            series.setdefault(c, []).append((v, ch))
+        for c, vc in series.items():
+            st = _earnings_impact_stats(vc)
+            if st:
+                impact[c] = st
+    cur.close(); conn.close()
+
+    def _imp_cell(c):
+        st = impact.get(c)
+        if not st:
+            return "—"
+        return f'±{st["avg_abs"]:.1f}%<br><small style="color:#8b949e">n={st["n"]}</small>'
+
+    def _fs_cell(v):
+        if v is None:
+            return "—"
+        v = int(v)
+        cls = "hi" if v >= 6 else ("mid" if v >= 4 else "lo")
+        return f'<span class="sc-fscore sc-fscore-{cls}">{v}/7</span>'
+
+    def _prog_cell(c):
+        pg = prog.get(c)
+        if not pg:
+            return "—"
+        badge = ""
+        if pg["excess"] >= 15:
+            badge = ' <span class="ep-up">▲</span>'
+        elif pg["excess"] <= -15:
+            badge = ' <span class="ep-dn">▼</span>'
+        return (f'{pg["progress"]:.0f}%{badge}<br>'
+                f'<small style="color:#8b949e">Q{pg["n_q"]}終了・按分{pg["prorata"]}%</small>')
+
+    # ── 上振れ候補ピックアップ（進捗率が按分+15pt以上） ──
+    picks = [r for r in rows if prog.get(r[0], {}).get("excess", -999) >= 15]
+    picks.sort(key=lambda r: -prog[r[0]]["excess"])
+    pick_rows = ""
+    for r in picks[:30]:
+        c, name, ann, close, chg25, rsi, fs, turn, per, mcap = r
+        pg = prog[c]
+        st = impact.get(c)
+        up_s = (f'+{st["up_avg"]:.1f}%' if st and st["up_avg"] is not None else "—")
+        pick_rows += f"""<tr>
+  <td class="num">{ann.month}/{ann.day}<br><small style="color:#8b949e">{(ann - today).days}日後</small></td>
+  <td><a href="/stock/{c}">{_html.escape(name)}</a><div style="font-size:11px;color:#8b949e">{c}</div></td>
+  <td class="num" style="color:#3fb950;font-weight:700">{pg["progress"]:.0f}%</td>
+  <td class="num">按分{pg["prorata"]}%<br><small style="color:#3fb950">+{pg["excess"]:.0f}pt</small></td>
+  <td class="num">{up_s}</td>
+  <td class="num">{_fs_cell(fs)}</td>
+  <td class="num">{f"{float(chg25):+.1f}%" if chg25 is not None else "—"}</td>
+  <td class="num">{f"{float(per):.1f}" if per else "—"}</td>
+</tr>"""
+    picks_html = ""
+    if pick_rows:
+        picks_html = f"""<div class="af-section" style="margin-top:8px">🔥 上振れ候補ピックアップ
+<small style="color:#8b949e;font-weight:400">　通期営業益予想への進捗率が単純按分を+15pt以上超過（コンセンサス代替の自前指標）。発表日順でなく超過幅順</small></div>
+<div style="overflow-x:auto"><table class="af-table">
+<tr><th>発表日</th><th>銘柄</th><th class="num">進捗率</th><th class="num">按分比</th><th class="num">上振れ時<br>想定反応</th><th class="num">F-score</th><th class="num">25日</th><th class="num">PER</th></tr>
+{pick_rows}
+</table></div>"""
+
+    # ── 発表スケジュール全体 ──
+    sched_rows = ""
+    shown = 0
+    for r in rows:
+        c, name, ann, close, chg25, rsi, fs, turn, per, mcap = r
+        if shown >= 400:
+            break
+        shown += 1
+        sched_rows += f"""<tr>
+  <td class="num">{ann.month}/{ann.day}</td>
+  <td><a href="/stock/{c}">{_html.escape(name)}</a><div style="font-size:11px;color:#8b949e">{c}</div></td>
+  <td class="num">{f"{float(close):,.0f}" if close else "—"}</td>
+  <td class="num">{_prog_cell(c)}</td>
+  <td class="num">{_imp_cell(c)}</td>
+  <td class="num">{_fs_cell(fs)}</td>
+  <td class="num">{f"{float(chg25):+.1f}%" if chg25 is not None else "—"}</td>
+  <td class="num">{f"{float(turn):,.0f}億" if turn else "—"}</td>
+</tr>"""
+
+    body = f"""<style>{_AIFUND_CSS}
+.ep-up {{ color:#3fb950; font-weight:700; }} .ep-dn {{ color:#f85149; font-weight:700; }}
+.sc-fscore {{ font-weight:700; }} .sc-fscore-hi {{ color:#3fb950; }} .sc-fscore-mid {{ color:#d29922; }} .sc-fscore-lo {{ color:#8b949e; }}
+</style>
+<h1 class="page-title">📅 決算プレビュー</h1>
+<p style="font-size:12px;color:#8b949e;margin:-6px 0 12px">
+今後14日の決算発表予定（JPX公式・{len(rows)}銘柄）。<b>進捗率</b>=通期営業益の会社予想に対する四半期累計の消化率
+（単純按分を大きく超えていれば上振れの素地。アナリスト・コンセンサスの無料代替）。
+<b>想定反応</b>=過去の決算級イベント日（|前日比|4%超×出来高3倍）の実績に基づくシミュレーション。売買代金1億円未満は除外。</p>
+{picks_html}
+<div class="af-section" style="margin-top:20px">📅 発表スケジュール（{today.month}/{today.day}〜{horizon.month}/{horizon.day}）</div>
+<div style="overflow-x:auto"><table class="af-table">
+<tr><th>発表日</th><th>銘柄</th><th class="num">株価</th><th class="num">進捗率</th><th class="num">想定<br>インパクト</th><th class="num">F-score</th><th class="num">25日</th><th class="num">売買代金</th></tr>
+{sched_rows}
+</table></div>
+{f'<p style="font-size:11px;color:#6e7681">※表示は流動性順に{shown}件まで</p>' if len(rows) > shown else ''}
+"""
+    return _page_html("決算プレビュー", body, active="earnings")
+
+
+@app.route("/earnings")
+def earnings_page():
+    key = f"earnings_{date.today()}_{datetime.now().hour // 6}"
+    html = _get(key)
+    if not html:
+        print("[app] 決算プレビューページ生成")
+        html = _build_earnings_page()
+        _set(key, html)
+    return html
 
 
 @app.route("/swing")
