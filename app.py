@@ -4194,6 +4194,10 @@ _AIFUND_CSS = """
   padding:1px 7px; vertical-align:middle; }
 .af-strat { font-size:10px; color:#79c0ff; background:#1f6feb1a; border:1px solid #388bfd55;
   border-radius:8px; padding:1px 7px; vertical-align:middle; white-space:nowrap; }
+.af-ot-limit { font-size:10px; color:#79c0ff; border:1px solid #388bfd55; border-radius:8px;
+  padding:1px 7px; vertical-align:middle; white-space:nowrap; }
+.af-ot-mkt { font-size:10px; color:#8b949e; border:1px solid #30363d; border-radius:8px;
+  padding:1px 7px; vertical-align:middle; white-space:nowrap; }
 .af-bench-chg { font-weight:700; font-size:13px; white-space:nowrap; }
 .af-catalyst { font-size:12px; color:#d29922; line-height:1.6; margin-top:6px;
   background:#d2992210; border-radius:6px; padding:6px 9px; }
@@ -4292,7 +4296,7 @@ def _build_aifund_page() -> str:
     # 明日の売買予定（pending注文）
     cur.execute("""
         SELECT o.code, s.name, o.side, o.budget, o.shares, o.reason, o.thesis, o.decided_date, o.style, o.catalyst,
-               o.strategy
+               o.strategy, o.order_type, o.limit_price
         FROM ai_fund_orders o JOIN stocks s ON s.code = o.code
         WHERE o.status = 'pending' ORDER BY o.side DESC, o.id
     """)
@@ -4339,7 +4343,7 @@ def _build_aifund_page() -> str:
     # 売買履歴（全件遡れるように多めに取得）＋実現損益サマリー
     cur.execute("""
         SELECT t.trade_date, t.side, t.code, s.name, t.shares, t.price,
-               t.pnl, t.pnl_pct, t.hold_days, t.reason, t.buy_reason, t.strategy
+               t.pnl, t.pnl_pct, t.hold_days, t.reason, t.buy_reason, t.strategy, t.order_type, t.limit_price
         FROM ai_fund_trades t JOIN stocks s ON s.code = t.code
         ORDER BY t.trade_date DESC, t.id DESC LIMIT 500
     """)
@@ -4429,15 +4433,20 @@ def _build_aifund_page() -> str:
     orders_html = ""
     if pending:
         items = []
-        for code, name, side, budget, shares, reason, thesis, decided, style, catalyst, strategy in pending:
+        for code, name, side, budget, shares, reason, thesis, decided, style, catalyst, strategy, order_type, limit_price in pending:
             act = f"買い（予算 {float(budget)/1e4:,.0f}万円）" if side == "buy" else f"売り（{shares}株）"
             icon = "🟢" if side == "buy" else "🔴"
             th = f'<div class="af-pos-thesis">シナリオ: {_html.escape(thesis)}</div>' if thesis else ""
+            is_lim = order_type == "limit" and limit_price
+            ot_badge = (f'<span class="af-ot-limit">指値 {float(limit_price):,.0f}円</span>'
+                        if is_lim else '<span class="af-ot-mkt">成行</span>')
+            fill_note = (f"翌営業日に{float(limit_price):,.0f}円の指値（{'安値' if side=='buy' else '高値'}が到達すれば約定・届かなければ失効）"
+                         if is_lim else "翌営業日の寄付（成行）で約定予定")
             items.append(f"""<div class="af-order {side}">
-  <div class="af-order-head">{icon} <a href="/stock/{code}">{_html.escape(name)}</a> <span style="color:#8b949e;font-size:11px">{code}</span> — {act}{_strat_badge(strategy)}{_style_badge(style)}</div>
+  <div class="af-order-head">{icon} <a href="/stock/{code}">{_html.escape(name)}</a> <span style="color:#8b949e;font-size:11px">{code}</span> — {act} {ot_badge}{_strat_badge(strategy)}{_style_badge(style)}</div>
   {_html.escape(reason or '')}
   {_catalyst_html(catalyst)}{th}
-  <div class="af-note">決定日: {_html.escape(str(decided))} → 翌営業日の寄付で約定予定</div>
+  <div class="af-note">決定日: {_html.escape(str(decided))} → {fill_note}</div>
 </div>""")
         orders_html = f"""<div class="af-section">📋 次の売買予定（未約定）</div>
 <div class="af-orders">{''.join(items)}</div>"""
@@ -4521,7 +4530,7 @@ Plotly.newPlot('afChart', [
     hist_html = '<div class="af-section">📜 売買履歴</div><div class="af-empty">約定が発生すると、購入理由から売却理由まで全履歴がここに残ります。</div>'
     if trades:
         rows_h = []
-        for td, side, code, name, shares, price, pnl, pnl_pct, hold_days, reason, buy_reason, strategy in trades:
+        for td, side, code, name, shares, price, pnl, pnl_pct, hold_days, reason, buy_reason, strategy, order_type, limit_price in trades:
             side_cls = "af-side-buy" if side == "buy" else "af-side-sell"
             side_jp = "買" if side == "buy" else "売"
             pnl_html = "—"
@@ -4530,12 +4539,13 @@ Plotly.newPlot('afChart', [
             reason_html = _html.escape(reason or "")
             if side == "sell" and buy_reason:
                 reason_html = f'<span style="color:#6e7681">購入時: {_html.escape(buy_reason[:120])}</span><br>→ {reason_html}'
+            ot_tag = '<br><small style="color:#79c0ff">指値</small>' if order_type == "limit" else ""
             rows_h.append(f"""<tr>
   <td class="num">{_html.escape(str(td))}</td>
   <td class="{side_cls}">{side_jp}</td>
   <td><a href="/stock/{code}" style="color:#58a6ff;text-decoration:none">{_html.escape(name)}</a>{_strat_badge(strategy)}</td>
   <td class="num">{shares:,}株</td>
-  <td class="num">{float(price):,.0f}円</td>
+  <td class="num">{float(price):,.0f}円{ot_tag}</td>
   <td class="num">{pnl_html}</td>
   <td class="af-trade-reason">{reason_html}</td>
 </tr>""")
