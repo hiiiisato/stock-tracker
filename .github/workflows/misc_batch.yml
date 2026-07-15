@@ -54,21 +54,21 @@ jobs:
         if: ${{ github.event.schedule == '0 21 4,14,24 * *' || inputs.job == 'fund_watch' }}
         run: python fund_watch.py
 
-      # 毎日23:45（および手動 job=edinet_texts）は夜間トリオを順に実行。
-      - name: EDINET本文テキスト取得
-        if: ${{ github.event.schedule != '0 21 4,14,24 * *' && inputs.job != 'fund_watch' }}
+      # 【一時停止中】EDINET本文テキスト・事業セグメントは edinetdb.jp 無料枠(100件/日)を消費するため、
+      # 業績欠損の穴埋め＋有報データ蓄積を最短で完了させる間は停止し、枠を financials_edinet に集中させる。
+      # キャッチアップ完了後に再開する（`if: false` を外すだけ）。
+      - name: EDINET本文テキスト取得（一時停止）
+        if: false
         run: python edinet_texts.py --all
 
-      # 事業セグメント（80件/日 ≒ 40日で全銘柄一巡 → 以後90日周期で巡回更新）。
-      # edinetdb.jp 無料枠100コール/日を edinet_texts(10件/日) と分け合う。
-      - name: 事業セグメント取得
-        if: ${{ github.event.schedule != '0 21 4,14,24 * *' && inputs.job != 'fund_watch' }}
+      - name: 事業セグメント取得（一時停止）
+        if: false
         run: python edinet_segments.py --all
 
-      # EDINET有報で過去業績(operating_income等)の欠損を穴埋め（fill-only・優先度=直近欠損順）。
-      # texts/segments の後に置き、edinetdb.jp 100件/日の残枠だけを消費（残枠が尽きたら自動停止）。
-      # 一度きりの過去分キャッチアップが主目的。埋め終われば対象が消えて自然に静かになる。
-      - name: 業績欠損の穴埋め（EDINET有報）
+      # EDINET有報で (1)過去業績(operating_income等)の欠損を穴埋め(fill-only) (2)豊富な有報年次データを
+      # financials_edinet_annual に蓄積。texts/segments 停止中は 100件/日フル枠を使い最短でキャッチアップ。
+      # Tier1=op欠損優先 → Tier2=未取得銘柄の付随データ収集。残枠が尽きたら自動停止。
+      - name: 業績欠損の穴埋め＋有報データ蓄積（EDINET）
         if: ${{ github.event.schedule != '0 21 4,14,24 * *' && inputs.job != 'fund_watch' }}
         run: python financials_edinet.py
 

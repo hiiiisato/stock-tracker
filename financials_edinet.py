@@ -1,4 +1,7 @@
-"""EDINET(edinetdb.jp)の有価証券報告書XBRLから過去業績を取得し、financials の欠損を穴埋めする。
+"""EDINET(edinetdb.jp)の有価証券報告書XBRLから過去業績を取得する。2つの役割を1コールで担う:
+  (1) financials の欠損(operating_income等)を穴埋め(fill-only・百万丸め)
+  (2) 同じレスポンスで返る豊富な有報データ(損益内訳・CF・資本配分・従業員・ガバナンス等)を
+      financials_edinet_annual にそのまま保存(将来の分析・スクリーニング用・生値精密)
 
 背景・設計方針:
 - kabutan/Yahoo経由で埋まらなかった過去の営業利益(operating_income)等の欠損を、
@@ -39,7 +42,7 @@ KEY = config.EDINETDB_API_KEY
 HEADERS = {"X-API-Key": KEY, "Accept": "application/json"}
 
 DELAY = 0.4          # API間隔(秒)
-DAILY_LIMIT = 90     # 1回の実行で取得する最大銘柄数(無料枠100/日に対する既定上限)
+DAILY_LIMIT = 95     # 1回の実行で取得する最大銘柄数(edinet_texts/segmentsを停止し枠を集中)
 DAILY_FLOOR = 4      # 日次残数がこれ未満になったら停止
 MONTHLY_FLOOR = 10   # 月次残数がこれ未満になったら停止
 REFRESH_DAYS = 90    # 取得済み銘柄を再取得しない期間(有報は年1回)
@@ -55,6 +58,96 @@ FIELD_MAP = {
     "cf_operating": "cf_operating",
 }
 _FIN_COLS = list(FIELD_MAP.values())
+
+# ── 付随データの保存用 ──────────────────────────────────────────────
+# 同じ1コールで返る有報の豊富なデータ(損益内訳・CF・資本配分・従業員・ガバナンス等)を
+# 権威データとしてそのままDBに残す(financials_edinet_annual)。将来の分析・スクリーニング用。
+# こちらは百万丸めせずEDINETの生値(精密)を格納する(この表単体で一貫)。
+# (col_name, source_key, sql_type, kind)  kind: yen=金額(bigint) / num=比率等(double) / int / str
+EXTRA_COLS: list[tuple[str, str, str, str]] = [
+    # 損益計算書
+    ("revenue", "revenue", "BIGINT", "yen"),
+    ("cost_of_sales", "cost_of_sales", "BIGINT", "yen"),
+    ("gross_profit", "gross_profit", "BIGINT", "yen"),
+    ("sga", "sga", "BIGINT", "yen"),
+    ("operating_income", "operating_income", "BIGINT", "yen"),
+    ("non_operating_income", "non_operating_income", "BIGINT", "yen"),
+    ("non_operating_expenses", "non_operating_expenses", "BIGINT", "yen"),
+    ("ordinary_income", "ordinary_income", "BIGINT", "yen"),
+    ("extraordinary_income", "extraordinary_income", "BIGINT", "yen"),
+    ("extraordinary_loss", "extraordinary_loss", "BIGINT", "yen"),
+    ("profit_before_tax", "profit_before_tax", "BIGINT", "yen"),
+    ("income_taxes", "income_taxes", "BIGINT", "yen"),
+    ("net_income", "net_income", "BIGINT", "yen"),
+    ("comprehensive_income", "comprehensive_income", "BIGINT", "yen"),
+    # 貸借対照表
+    ("total_assets", "total_assets", "BIGINT", "yen"),
+    ("current_assets", "current_assets", "BIGINT", "yen"),
+    ("noncurrent_assets", "noncurrent_assets", "BIGINT", "yen"),
+    ("ppe", "ppe", "BIGINT", "yen"),
+    ("intangible_assets", "intangible_assets", "BIGINT", "yen"),
+    ("total_liabilities", "total_liabilities", "BIGINT", "yen"),
+    ("current_liabilities", "current_liabilities", "BIGINT", "yen"),
+    ("noncurrent_liabilities", "noncurrent_liabilities", "BIGINT", "yen"),
+    ("net_assets", "net_assets", "BIGINT", "yen"),
+    ("shareholders_equity", "shareholders_equity", "BIGINT", "yen"),
+    ("retained_earnings", "retained_earnings", "BIGINT", "yen"),
+    ("cash", "cash", "BIGINT", "yen"),
+    ("inventories", "inventories", "BIGINT", "yen"),
+    ("trade_receivables", "trade_receivables", "BIGINT", "yen"),
+    ("trade_payables", "trade_payables", "BIGINT", "yen"),
+    ("short_term_loans", "short_term_loans", "BIGINT", "yen"),
+    ("long_term_loans", "long_term_loans", "BIGINT", "yen"),
+    ("current_portion_lt_loans", "current_portion_lt_loans", "BIGINT", "yen"),
+    # キャッシュフロー・資本配分
+    ("cf_operating", "cf_operating", "BIGINT", "yen"),
+    ("cf_investing", "cf_investing", "BIGINT", "yen"),
+    ("cf_financing", "cf_financing", "BIGINT", "yen"),
+    ("capex", "capex", "BIGINT", "yen"),
+    ("depreciation", "depreciation", "BIGINT", "yen"),
+    ("rnd_expenses", "rnd_expenses", "BIGINT", "yen"),
+    # 1株・利回り・効率(公式値)
+    ("eps", "eps", "DOUBLE", "num"),
+    ("bps", "bps", "DOUBLE", "num"),
+    ("per", "per", "DOUBLE", "num"),
+    ("roe_official", "roe_official", "DOUBLE", "num"),
+    ("equity_ratio_official", "equity_ratio_official", "DOUBLE", "num"),
+    ("effective_tax_rate", "effective_tax_rate", "DOUBLE", "num"),
+    ("dividend_per_share", "dividend_per_share", "DOUBLE", "num"),
+    ("payout_ratio", "payout_ratio", "DOUBLE", "num"),
+    # 従業員・ガバナンス
+    ("num_employees", "num_employees", "INT", "int"),
+    ("avg_annual_salary", "avg_annual_salary", "BIGINT", "yen"),
+    ("avg_age", "avg_age", "DOUBLE", "num"),
+    ("avg_tenure_years", "avg_tenure_years", "DOUBLE", "num"),
+    ("female_director_ratio", "female_director_ratio", "DOUBLE", "num"),
+    ("directors_ownership_ratio", "directors_ownership_ratio", "DOUBLE", "num"),
+    ("cross_shareholding_book_value", "cross_shareholding_total_book_value", "BIGINT", "yen"),
+    ("total_shareholder_return", "total_shareholder_return", "DOUBLE", "num"),
+    # 株式
+    ("shares_issued", "shares_issued", "BIGINT", "yen"),
+    ("float_shares", "float_shares", "BIGINT", "yen"),
+    ("treasury_shares_count", "treasury_shares_count", "BIGINT", "yen"),
+    ("split_adjustment_factor", "split_adjustment_factor", "DOUBLE", "num"),
+    # トレーサビリティ
+    ("accounting_standard", "accounting_standard", "VARCHAR(8)", "str"),
+    ("doc_id", "doc_id", "VARCHAR(16)", "str"),
+    ("submit_date", "submit_date", "VARCHAR(20)", "str"),
+    ("edinet_filing_url", "edinet_filing_url", "VARCHAR(255)", "str"),
+]
+
+
+def _cast(kind: str, v):
+    if v is None:
+        return None
+    try:
+        if kind == "yen" or kind == "int":
+            return int(round(float(v)))
+        if kind == "num":
+            return float(v)
+        return str(v)[:255]
+    except (TypeError, ValueError):
+        return None
 
 
 class QuotaExhausted(Exception):
@@ -100,6 +193,49 @@ def _ensure_meta(cur) -> None:
     )
 
 
+def _ensure_extra_table(cur) -> None:
+    """有報の豊富な年次データを丸ごと残す表(financials_edinet_annual)を用意する。"""
+    col_defs = ",\n            ".join(f"`{c}` {t}" for c, _s, t, _k in EXTRA_COLS)
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS financials_edinet_annual (
+            code        VARCHAR(10) NOT NULL,
+            fiscal_year INT NOT NULL,
+            period_end  DATE,
+            {col_defs},
+            updated_at  DATETIME,
+            UNIQUE KEY uq_code_fy (code, fiscal_year)
+        )
+        """
+    )
+
+
+def _fye(cur, code: str) -> tuple[int, int] | None:
+    """既存 financials 年次行から決算期末の (月, 日) を推定する。無ければ None。"""
+    cur.execute(
+        "SELECT period_end FROM financials WHERE code=%s AND period_type='A' "
+        "ORDER BY period_end DESC LIMIT 1",
+        (code,),
+    )
+    row = cur.fetchone()
+    if not row or not row[0]:
+        return None
+    return (row[0].month, row[0].day)
+
+
+def _period_end(fiscal_year: int, fye: tuple[int, int] | None) -> _dt.date | None:
+    if not fye:
+        return None
+    m, d = fye
+    try:
+        return _dt.date(fiscal_year, m, d)
+    except ValueError:  # 2/29 等
+        try:
+            return _dt.date(fiscal_year, m, 28)
+        except ValueError:
+            return None
+
+
 def _fetch(edinet_code: str) -> list[dict]:
     """1銘柄の全年度財務を取得。残枠が尽きていれば QuotaExhausted を送出。"""
     r = requests.get(
@@ -125,37 +261,69 @@ def _fetch(edinet_code: str) -> list[dict]:
 
 
 def _targets(cur, limit: int, only_codes: list[str] | None, force: bool) -> list[tuple[str, str]]:
-    """op がNULLの銘柄を (code, edinet_code) で返す。優先度=直近の欠損期がより新しい順。"""
-    params: list = []
-    where = [
-        "f.period_type = 'A'",
-        "f.operating_income IS NULL",
-        "s.edinet_code IS NOT NULL",
-        "s.edinet_code <> ''",
-    ]
+    """取得対象を (code, edinet_code) で返す。2段構え:
+      Tier1 = op がNULLの銘柄(欠損穴埋め優先。直近欠損期が新しい順)
+      Tier2 = まだ有報を取得していない銘柄(付随データの全体カバレッジ構築。コード順)
+    どちらも REFRESH_DAYS 以内に取得済みなら除外。Tier1 を使い切って枠が余ればTier2へ。"""
+    stale = _dt.datetime.now() - _dt.timedelta(days=REFRESH_DAYS)
+
     if only_codes:
         ph = ",".join(["%s"] * len(only_codes))
-        where.append(f"f.code IN ({ph})")
-        params.extend(only_codes)
-    if not force:
-        # REFRESH_DAYS 以内に取得済みの銘柄は除外
-        where.append(
-            "(m.last_fetched IS NULL OR m.last_fetched < %s)"
+        cur.execute(
+            f"SELECT s.code, s.edinet_code FROM stocks s "
+            f"WHERE s.code IN ({ph}) AND s.edinet_code IS NOT NULL AND s.edinet_code<>''",
+            only_codes,
         )
-        params.append(_dt.datetime.now() - _dt.timedelta(days=REFRESH_DAYS))
-    sql = f"""
+        return [(r[0], r[1]) for r in cur.fetchall()][:limit]
+
+    fresh_filter = "" if force else "AND (m.last_fetched IS NULL OR m.last_fetched < %s)"
+
+    # Tier1: op欠損（穴埋め優先）
+    p1: list = []
+    sql1 = f"""
         SELECT f.code, s.edinet_code, MAX(f.period_end) AS mx
         FROM financials f
         JOIN stocks s ON s.code = f.code
         LEFT JOIN financials_edinet_meta m ON m.code = f.code
-        WHERE {' AND '.join(where)}
+        WHERE f.period_type='A' AND f.operating_income IS NULL
+          AND s.edinet_code IS NOT NULL AND s.edinet_code<>''
+          {fresh_filter}
         GROUP BY f.code, s.edinet_code
         ORDER BY mx DESC
         LIMIT %s
     """
-    params.append(limit)
-    cur.execute(sql, params)
-    return [(r[0], r[1]) for r in cur.fetchall()]
+    if not force:
+        p1.append(stale)
+    p1.append(limit)
+    cur.execute(sql1, p1)
+    tier1 = [(r[0], r[1]) for r in cur.fetchall()]
+    if len(tier1) >= limit:
+        return tier1
+
+    # Tier2: 未取得銘柄（付随データの全体カバレッジ）
+    remaining = limit - len(tier1)
+    seen = {c for c, _ in tier1}
+    p2: list = []
+    sql2 = f"""
+        SELECT s.code, s.edinet_code
+        FROM stocks s
+        LEFT JOIN financials_edinet_meta m ON m.code = s.code
+        WHERE s.edinet_code IS NOT NULL AND s.edinet_code<>''
+          {fresh_filter}
+        ORDER BY s.code
+        LIMIT %s
+    """
+    if not force:
+        p2.append(stale)
+    p2.append(remaining + len(seen))  # seen分を差し引く前提で多めに取る
+    cur.execute(sql2, p2)
+    for c, ec in cur.fetchall():
+        if c in seen:
+            continue
+        tier1.append((c, ec))
+        if len(tier1) >= limit:
+            break
+    return tier1
 
 
 def _null_periods(cur, code: str) -> dict[int, _dt.date]:
@@ -178,6 +346,7 @@ def backfill(daily_limit: int = DAILY_LIMIT, only_codes: list[str] | None = None
     conn = config.get_conn()
     cur = conn.cursor()
     _ensure_meta(cur)
+    _ensure_extra_table(cur)
     normalized = normalize_zero_artifacts(cur)
     conn.commit()
     if verbose and normalized:
@@ -185,9 +354,10 @@ def backfill(daily_limit: int = DAILY_LIMIT, only_codes: list[str] | None = None
 
     targets = _targets(cur, daily_limit, only_codes, force)
     if verbose:
-        print(f"対象 {len(targets)} 銘柄(op欠損・EDINETコード有・優先度=直近欠損順)")
+        print(f"対象 {len(targets)} 銘柄(Tier1=op欠損優先→Tier2=未取得の付随データ)")
 
-    stats = {"fetched": 0, "filled_codes": 0, "filled_cells": 0, "no_data": 0, "stopped": False}
+    stats = {"fetched": 0, "filled_codes": 0, "filled_cells": 0,
+             "rich_codes": 0, "rich_rows": 0, "no_data": 0, "stopped": False}
     now = _dt.datetime.now()
 
     for code, ec in targets:
@@ -206,8 +376,9 @@ def backfill(daily_limit: int = DAILY_LIMIT, only_codes: list[str] | None = None
 
         stats["fetched"] += 1
         by_year = {r.get("fiscal_year"): r for r in recs if r.get("fiscal_year")}
-        null_map = _null_periods(cur, code)
 
+        # (1) financials の op欠損を穴埋め(fill-only・百万丸め)
+        null_map = _null_periods(cur, code)
         rows: list[list] = []
         for year, pend in null_map.items():
             rec = by_year.get(year)
@@ -229,9 +400,24 @@ def backfill(daily_limit: int = DAILY_LIMIT, only_codes: list[str] | None = None
             filled_cells = sum(1 for r in rows for v in r[3:] if v is not None)
             stats["filled_codes"] += 1
             stats["filled_cells"] += filled_cells
+
+        # (2) 有報の年次データを丸ごと保存(financials_edinet_annual・EDINET権威データで全更新)
+        fye = _fye(cur, code)
+        extra_rows: list[list] = []
+        for year, rec in by_year.items():
+            pe = _period_end(year, fye)
+            vals = [_cast(kind, rec.get(src)) for _c, src, _t, kind in EXTRA_COLS]
+            extra_rows.append([code, year, pe] + vals + [now])
+        if extra_rows:
+            ecols = ["code", "fiscal_year", "period_end"] + [c for c, _s, _t, _k in EXTRA_COLS] + ["updated_at"]
+            upd = ["period_end"] + [c for c, _s, _t, _k in EXTRA_COLS] + ["updated_at"]
+            bulk_upsert(cur, "financials_edinet_annual", ecols, extra_rows, update_cols=upd)
+            stats["rich_rows"] += len(extra_rows)
+            stats["rich_codes"] += 1
         else:
             stats["no_data"] += 1
 
+        status = "filled" if rows else ("rich" if extra_rows else "no_data")
         cur.execute(
             """
             INSERT INTO financials_edinet_meta (code, edinet_code, status, filled_cells, last_fetched)
@@ -240,11 +426,12 @@ def backfill(daily_limit: int = DAILY_LIMIT, only_codes: list[str] | None = None
               edinet_code=VALUES(edinet_code), status=VALUES(status),
               filled_cells=VALUES(filled_cells), last_fetched=VALUES(last_fetched)
             """,
-            (code, ec, "filled" if rows else "no_data", filled_cells, now),
+            (code, ec, status, filled_cells, now),
         )
         conn.commit()
         if verbose:
-            print(f"  [{code}] {ec}: {'埋め ' + str(filled_cells) + 'セル' if rows else 'EDINETに該当年度なし'}")
+            note = f"穴埋め{filled_cells}セル" if rows else "op欠損なし"
+            print(f"  [{code}] {ec}: {note} / 年次{len(extra_rows)}件保存")
 
         if _fetch._stop:
             stats["stopped"] = True
@@ -256,8 +443,8 @@ def backfill(daily_limit: int = DAILY_LIMIT, only_codes: list[str] | None = None
     cur.close()
     conn.close()
     if verbose:
-        print(f"完了: 取得{stats['fetched']} / 穴埋め{stats['filled_codes']}銘柄"
-              f" {stats['filled_cells']}セル / 該当なし{stats['no_data']}"
+        print(f"完了: 取得{stats['fetched']} / 穴埋め{stats['filled_codes']}銘柄{stats['filled_cells']}セル"
+              f" / 年次保存{stats['rich_codes']}銘柄{stats['rich_rows']}件 / 該当なし{stats['no_data']}"
               f"{' / 残枠切れ停止' if stats['stopped'] else ''}")
     return stats
 

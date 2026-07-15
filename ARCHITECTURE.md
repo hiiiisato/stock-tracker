@@ -29,9 +29,9 @@ J-Quants 無料枠・EDINET）のみで構成。
 | daily.yml | 平日16:00 メイン | `python daily_run.py` | 日次バッチ本体（価格→指標→ランキング→開示→AI調査→レポート保存） |
 | daily.yml | 平日17:00 リトライ | 同上 | GHA cron遅延・失敗への保険。daily_run側の重複ガードで完了済みならスキップ |
 | daily.yml | 平日20:30 イブニング便 | `python daily_run.py --evening` | 夜間の適時開示回収→市況考察→日次レポート確定版を上書き保存→**確定版をLINE通知**→AIファンド意思決定 |
-| misc_batch.yml | 毎日23:45 | `python edinet_texts.py --all` | EDINET本文ドリップ取得（edinetdb.jp 10件/日） |
-| misc_batch.yml | 毎日23:45 | `python edinet_segments.py --all` | 事業セグメント時系列（80件/日→90日周期巡回。edinetdb.jp 無料枠100/日をtextsと分け合う） |
-| misc_batch.yml | 毎日23:45 | `python financials_edinet.py` | 過去業績(op等)欠損の穴埋め（EDINET有報・fill-only）。texts/segmentsの後で残枠のみ消費・自動停止 |
+| misc_batch.yml | ~~毎日23:45~~ **一時停止中** | `python edinet_texts.py --all` | EDINET本文ドリップ（`if:false`。財務キャッチアップ中は枠譲渡） |
+| misc_batch.yml | ~~毎日23:45~~ **一時停止中** | `python edinet_segments.py --all` | 事業セグメント時系列（`if:false`。同上） |
+| misc_batch.yml | 毎日23:45 | `python financials_edinet.py` | 過去業績(op等)欠損の穴埋め＋有報年次データ蓄積（EDINET）。texts/segments停止中は100/日フル枠で最短キャッチアップ・自動停止 |
 | misc_batch.yml | 5/15/25日 6:00 | `python fund_watch.py` | ファンド月次レポート取込 |
 
 **GitHub Actions cron の注意**: 発火は数十分〜数時間遅延することがある（実測で2時間超）。
@@ -87,13 +87,17 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - `financials_tdnet.py` — TDnet決算短信XBRL(サマリー)から実績+会社予想を取得（financialsに未来日付期=予想として入る）。
   kabutanがデータセンターIP遮断のため公式一次データに置換(2026-07)。`import_recent(days)` で直近短信を取込。
   earnings_refresh から呼ばれ、detect_revisions が上方/下方修正を検知。旧 `financials_kabutan.py` は archive/ へ
-- `financials_edinet.py` — **EDINET公式有報XBRL（edinetdb.jp経由）で過去業績の欠損を穴埋め**。
-  Yahoo/kabutanで埋まらなかった `operating_income` 等（op欠損は約2200銘柄）を、公式有報の
-  精密値で補完。**fill-only**（`bulk_upsert` の `fill_only_cols` で全列COALESCE＝既存TDnet値は上書きせずNULLだけ埋める）。
+- `financials_edinet.py` — **EDINET公式有報XBRL（edinetdb.jp経由）を1コールで2役**:
+  **(1) 過去業績の欠損を穴埋め**: Yahoo/kabutanで埋まらなかった `operating_income` 等を公式有報の精密値で補完。
+  **fill-only**（`bulk_upsert` の `fill_only_cols` で全列COALESCE＝既存TDnet値は上書きせずNULLだけ埋める）。
   EDINETの円単位生値を百万円に丸めてTDnet由来データと桁を揃える。`fiscal_year` を既存NULL行の
-  `YEAR(period_end)` に対応させ既存行のみ更新（新しい期は作らない）。優先度=直近欠損期がより新しい順。
-  edinetdb.jp無料枠100件/日の残枠内で段階処理（レスポンスの残数ヘッダで自動停止）→ `financials_edinet_meta` に取得済記録。
-  misc_batch.yml の夜間トリオで texts/segments の**後**に実行し残枠のみ消費（既存ジョブを枯渇させない）
+  `YEAR(period_end)` に対応させ既存行のみ更新（新しい期は作らない）。`normalize_zero_artifacts` で
+  Yahoo由来の `op=0` 疑似欠損(rev>0)をNULLに戻して補完対象化。
+  **(2) 有報の豊富な年次データを蓄積**: 同じレスポンスで返る損益内訳・CF・capex・R&D・従業員・給与・
+  ガバナンス・持合い・TSR等（約60項目）を `financials_edinet_annual`（生値精密・EDINET権威データで全更新）へ。
+  対象は **Tier1=op欠損優先（直近欠損期が新しい順）→ Tier2=未取得銘柄の付随データ収集**。
+  edinetdb.jp無料枠100件/日の残数ヘッダで自動停止 → `financials_edinet_meta` に取得済記録（90日周期で再取得）。
+  **枠集中のため edinet_texts/segments は一時停止中**（misc_batch.yml の `if: false`。キャッチアップ後に再開）
 - `earnings_calendar_jpx.py` — JPX公式「決算発表予定日」Excelを取込 → `earnings_schedule`（決算跨ぎ管理）
 - `fundamentals.py` — PER/PBR/時価総額等 → `stock_fundamentals`
 - `market_indices.py` — 海外・国内指数 → `market_index_prices`
@@ -193,7 +197,8 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | 価格 | `daily_prices` | prices_yahoo.py（adj_close=分割調整済。splits.pyが再計算） |
 | 価格 | `stock_splits` | splits.py（分割イベント。J-Quants公式が正） |
 | 価格 | `market_index_prices` | market_indices.py |
-| 財務 | `financials` | financials.py + financials_tdnet.py（TDnet短信XBRL・**未来日付の期=会社予想**） |
+| 財務 | `financials` | financials.py + financials_tdnet.py（TDnet短信XBRL・**未来日付の期=会社予想**）+ financials_edinet.py（有報で欠損穴埋め） |
+| 財務 | `financials_edinet_annual` `financials_edinet_meta` | financials_edinet.py（有報の豊富な年次データ約60項目・生値精密／取得済メタ） |
 | 財務 | `financials_forecast` `dividends` `stock_fundamentals` | 各取得モジュール |
 | 指標 | `price_stats` | compute_price_stats.py（最新値のみ） |
 | 指標 | `price_stats_history` | compute_stats_history.py（週次・バックテスト用） |
