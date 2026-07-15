@@ -30,6 +30,13 @@ def _to_int(val) -> Optional[int]:
         return None
 
 
+def _zero_to_none(v):
+    """Yahooは日本株の売上/粗利/営業益等を欠損時に 0 で返すことがある（例: 9221は
+    営業益・粗利が常時0）。通期の主要損益が"ちょうど0"は実データではなく欠損とみなし
+    None にする（fill_only と併せて、公式データ=TDnet を Yahoo の0で壊さないため）。"""
+    return None if v == 0 else v
+
+
 def _parse_income(stmt: dict, code: str, period_type: str) -> Optional[Tuple]:
     end_date = stmt.get("endDate", {}).get("fmt")
     if not end_date:
@@ -38,10 +45,10 @@ def _parse_income(stmt: dict, code: str, period_type: str) -> Optional[Tuple]:
         code,
         end_date,
         period_type,
-        _to_int(stmt.get("totalRevenue")),
-        _to_int(stmt.get("grossProfit")),
-        _to_int(stmt.get("operatingIncome") or stmt.get("ebit")),
-        _to_int(stmt.get("netIncome")),
+        _zero_to_none(_to_int(stmt.get("totalRevenue"))),
+        _zero_to_none(_to_int(stmt.get("grossProfit"))),
+        _zero_to_none(_to_int(stmt.get("operatingIncome") or stmt.get("ebit"))),
+        _zero_to_none(_to_int(stmt.get("netIncome"))),
         None, None, None, None,  # BS/CF はここでは None
     )
 
@@ -146,7 +153,12 @@ def fetch_all_financials(max_workers: int = 5) -> int:
          "total_assets", "total_equity", "total_debt", "cf_operating"],
         all_rows,
         update_cols=["revenue", "gross_profit", "operating_income", "net_income",
-                     "total_assets", "total_equity", "total_debt", "cf_operating"])
+                     "total_assets", "total_equity", "total_debt", "cf_operating"],
+        # 損益は権威データ=TDnet(financials_tdnet)が正。Yahooは穴埋め専用にし、
+        # 既に値がある行は上書きしない（Yahooの欠損=0/None で公式値を壊さない）。
+        # total_debt だけは TDnet が持たないため Yahoo が通常更新する。
+        fill_only_cols=["revenue", "gross_profit", "operating_income", "net_income",
+                        "total_assets", "total_equity", "cf_operating"])
     conn.commit()
     cur.close()
     conn.close()

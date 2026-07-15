@@ -340,9 +340,10 @@ _FC_COLS = ["code", "fiscal_year_end", "period_type", "revenue", "operating_inco
             "ordinary_income", "net_income", "div_per_share", "announced_at"]
 
 
-def import_recent(days: int = 4, only_codes: set | None = None) -> dict:
+def import_recent(days: int = 4, only_codes: set | None = None, force: bool = False) -> dict:
     """直近days日のTDnet決算短信を取り込み、financials / financials_forecast を更新する。
-    only_codes を渡すとその銘柄のみ（earnings_refreshの自己修復用）。冪等。"""
+    only_codes を渡すとその銘柄のみ（earnings_refreshの自己修復用）。冪等。
+    force=True で「取込済みスキップ」を無効化（過去データの再取得・修復用）。"""
     conn = get_conn(); cur = conn.cursor()
     fin_rows, fc_rows = [], []
     n_disc = 0
@@ -357,7 +358,7 @@ def import_recent(days: int = 4, only_codes: set | None = None) -> dict:
             if only_codes is not None and code not in only_codes:
                 continue
             # 取込済み（同一銘柄・同一発表日の予想が既にDBにある）ならXBRLダウンロードを省く（冪等・高速化）
-            if code and only_codes is None:
+            if code and only_codes is None and not force:
                 cur.execute("""SELECT 1 FROM financials_forecast
                                WHERE code=%s AND announced_at=%s LIMIT 1""",
                             (code, item["disclosed"].date()))

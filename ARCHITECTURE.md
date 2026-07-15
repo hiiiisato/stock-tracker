@@ -77,7 +77,12 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   3. 係数の**適用時にも毎回検証**（登録済みイベントでもcloseに段差が無ければ適用しない＝最後の防波堤）
   4. `run_integrity_check()` — 「closeは正常なのにadjだけ跳ねる」箇所を毎晩スキャン→自動修復（daily_runから呼出）
 - `split_backfill.py` — splits.py から `recompute_change_pct` が使われる（他は初期バックフィルの名残）
-- `dividends.py` / `financials.py` — J-Quants 配当・財務
+- `dividends.py` — J-Quants 配当
+- `financials.py` — Yahoo Finance の損益/BS（crumb方式）。**穴埋め専用フォールバック**:
+  権威データは TDnet(financials_tdnet)。Yahooは日本株の売上/粗利/営業益を欠損時に "0" で返すため
+  （例: 9221は営業益・粗利が常時0）、`_zero_to_none` で 0→None にし、bulk_upsert の `fill_only_cols` で
+  損益・BS列は既存値を上書きしない（COALESCE。既にTDnet/公式値があればYahooの0/欠損で壊さない）。
+  total_debt だけは TDnet が持たないため Yahoo が通常更新する
 - `financials_tdnet.py` — TDnet決算短信XBRL(サマリー)から実績+会社予想を取得（financialsに未来日付期=予想として入る）。
   kabutanがデータセンターIP遮断のため公式一次データに置換(2026-07)。`import_recent(days)` で直近短信を取込。
   earnings_refresh から呼ばれ、detect_revisions が上方/下方修正を検知。旧 `financials_kabutan.py` は archive/ へ

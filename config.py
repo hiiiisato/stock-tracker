@@ -64,15 +64,22 @@ def db():
         conn.close()
 
 
-def bulk_upsert(cur, table, columns, rows, update_cols=None, batch_size=500):
-    """MySQL/TiDB向けバルクUPSERT (INSERT ... ON DUPLICATE KEY UPDATE)"""
+def bulk_upsert(cur, table, columns, rows, update_cols=None, batch_size=500, fill_only_cols=None):
+    """MySQL/TiDB向けバルクUPSERT (INSERT ... ON DUPLICATE KEY UPDATE)
+
+    fill_only_cols: このリストの列は `col = COALESCE(col, VALUES(col))` で更新する
+      （＝既存値がNULLのときだけ新値で埋め、既に値があれば上書きしない）。
+      信頼性の低いフォールバック源（例: Yahoo財務）が権威データを壊さないための穴埋め専用指定。"""
     if not rows:
         return
     col_list = ",".join(f"`{c}`" for c in columns)
     row_ph = "(" + ",".join(["%s"] * len(columns)) + ")"
     if update_cols is None:
         update_cols = columns
-    updates = ",".join(f"`{c}`=VALUES(`{c}`)" for c in update_cols)
+    fill_only = set(fill_only_cols or ())
+    updates = ",".join(
+        (f"`{c}`=COALESCE(`{c}`,VALUES(`{c}`))" if c in fill_only else f"`{c}`=VALUES(`{c}`)")
+        for c in update_cols)
     for i in range(0, len(rows), batch_size):
         batch = rows[i : i + batch_size]
         values_ph = ",".join([row_ph] * len(batch))
