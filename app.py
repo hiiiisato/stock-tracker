@@ -1143,6 +1143,8 @@ _EVENTS_CSS = """
 }
 .ev-stock-link:hover { color: #58a6ff; }
 .ev-rank { font-size: 11px; color: #484f58; }
+.ev-cat { font-size: 11px; font-weight: 700; color: #d2a8ff; background: #bc8cff14;
+  border: 1px solid #bc8cff40; border-radius: 8px; padding: 1px 8px; white-space: nowrap; }
 .ev-news-list { font-size: 12px; color: #8b949e; line-height: 1.65; }
 .ev-news-item { display: flex; gap: 6px; }
 .ev-news-cat {
@@ -1666,11 +1668,15 @@ def _build_events_page(event_date_str: str = None, period: str = "daily") -> str
             ai_html   = _render_ai_summary(s.get("ai_summary") or "")
             news_html  = _render_news_items(s["news_items"] or "",
                                             collapsed=bool(ai_html))
+            from event_classifier import label_of as _cat_label
+            _cat = _cat_label(s.get("reason_category"))
+            cat_html = f'<span class="ev-cat">{_cat}</span>' if _cat else ""
             sign = "+" if pct > 0 else "−"
             cards.append(f"""<div class="ev-card">
   <div class="ev-card-top">
     <span class="ev-pct {color}">{sign}{pct:.1f}%</span>
     <a class="ev-stock-link" href="/stock/{code}">{name}（{code}）</a>
+    {cat_html}
     {mcap_html}
     <span class="ev-rank">{rk_str}</span>
   </div>
@@ -2073,6 +2079,8 @@ _STOCK_CSS = """
 .ep-days { color:#8b949e; margin-left:6px; font-size:11.5px; }
 .ep-up { color:#3fb950; font-weight:700; margin-left:6px; }
 .ep-dn { color:#f85149; font-weight:700; margin-left:6px; }
+.ev-cat { font-size: 11px; font-weight: 700; color: #d2a8ff; background: #bc8cff14;
+  border: 1px solid #bc8cff40; border-radius: 8px; padding: 1px 8px; white-space: nowrap; }
 .s-name { font-size: 22px; font-weight: 700; color: #e6edf3; line-height: 1.3; }
 .s-meta { font-size: 12px; color: #8b949e; margin-top: 4px; }
 .s-price-row {
@@ -6454,14 +6462,14 @@ def _build_stock_page(code: str) -> str:
     # イベント履歴（price_events）
     cur.execute("""
         SELECT event_date, direction, change_pct, ranking, period,
-               news_items, ai_summary
+               news_items, ai_summary, reason_category
         FROM price_events
         WHERE code = %s
         ORDER BY event_date DESC, period
         LIMIT 15
     """, (code,))
     ev_cols = ["event_date","direction","change_pct","ranking","period",
-               "news_items","ai_summary"]
+               "news_items","ai_summary","reason_category"]
     events = [dict(zip(ev_cols, r)) for r in cur.fetchall()]
 
     # メモ（stock_memos）
@@ -7318,10 +7326,14 @@ def _build_stock_page(code: str) -> str:
             ai_html   = _render_ai_summary(ev.get("ai_summary") or "")
             news_html = _render_news_items(ev["news_items"] or "",
                                            collapsed=bool(ai_html))
+            from event_classifier import label_of as _cat_label
+            _cat = _cat_label(ev.get("reason_category"))
+            cat_html = f'<span class="ev-cat">{_cat}</span>' if _cat else ""
             ev_cards.append(f"""<div class="event-card">
   <div class="event-header">
     <span class="event-date">{d}</span>
     <span class="event-badge {direc}">{sign}{abs(pct):.1f}%</span>
+    {cat_html}
     <span class="event-period">{rk_str}</span>
   </div>
   {ai_html}

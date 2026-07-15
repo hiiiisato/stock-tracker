@@ -40,12 +40,14 @@ def _format_news_text(news_items: list) -> str:
 def _ensure_ai_summary_column():
     conn = get_conn()
     cur = conn.cursor()
-    try:
-        cur.execute("ALTER TABLE price_events ADD COLUMN ai_summary TEXT")
-        conn.commit()
-        print("  [migration] price_events.ai_summary カラムを追加しました")
-    except Exception:
-        pass
+    for coldef in ("ai_summary TEXT",
+                   "reason_category VARCHAR(20)",   # 機械分類の理由カテゴリ（event_classifier）
+                   "reason_confidence VARCHAR(4)"):  # high(開示由来) / med(テーマ/地合い/継続・Gemini)
+        try:
+            cur.execute(f"ALTER TABLE price_events ADD COLUMN {coldef}")
+            conn.commit()
+        except Exception:
+            pass
     cur.close()
     conn.close()
 
@@ -241,24 +243,27 @@ def _get_recent_events_context(codes: list, ranking_date: date, days: int = 21) 
 
 def _save_event(code: str, event_date: date, direction: str, change_pct: float,
                 ranking: int, period: str, news_text: str | None,
-                ai_summary: str | None) -> bool:
+                ai_summary: str | None, reason_category: str | None = None,
+                reason_confidence: str | None = None) -> bool:
     try:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO price_events
               (code, event_date, direction, change_pct, ranking, period,
-               news_items, ai_summary, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+               news_items, ai_summary, reason_category, reason_confidence, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             ON DUPLICATE KEY UPDATE
               direction  = VALUES(direction),
               change_pct = VALUES(change_pct),
               ranking    = VALUES(ranking),
               news_items = VALUES(news_items),
               ai_summary = VALUES(ai_summary),
+              reason_category = VALUES(reason_category),
+              reason_confidence = VALUES(reason_confidence),
               created_at = NOW()
         """, (code, event_date, direction, change_pct, ranking, period,
-              news_text, ai_summary))
+              news_text, ai_summary, reason_category, reason_confidence))
         conn.commit()
         cur.close()
         conn.close()
@@ -296,13 +301,20 @@ def research_and_save(code: str, event_date: date, direction: str,
         "price_history": _get_price_history_context([code], event_date).get(code),
         "recent_events": _get_recent_events_context([code], event_date).get(code),
     }])
-    ai_summary = result.get(code)
+    res = result.get(code)
+    ai_summary = res.get("summary") if isinstance(res, dict) else res
+    gem_cat    = res.get("category") if isinstance(res, dict) else None
 
-    if ai_summary:
-        print(f"    [AI要約完了] {code}")
+    # 機械分類（開示由来等）を優先し、無ければGeminiの分類
+    import event_classifier as _ec
+    conn = get_conn(); cur = conn.cursor()
+    cls = _ec.classify_batch(cur, event_date, [(code, direction, change_pct)]).get(code, {})
+    cur.close(); conn.close()
+    category   = cls.get("category") or (gem_cat if gem_cat in _ec.REASON_CATEGORIES else None)
+    confidence = cls.get("confidence") or ("med" if category else None)
 
     return _save_event(code, event_date, direction, change_pct, ranking, period,
-                       news_text, ai_summary)
+                       news_text, ai_summary, category, confidence)
 
 
 def _get_daily_movers(ranking_date: date, threshold: float, max_n: int) -> tuple:
@@ -476,6 +488,17 @@ def research_top_movers(target_date: date = None, period: str = "daily") -> int:
         for c, _, pct, d in all_targets
     ]
 
+    # ── Phase 1.5: 理由の機械分類（開示由来・継続・テーマ・地合い） ──────
+    # 一次データ(disclosures/forecast_revisions/theme_daily_stats)で確定できる理由を
+    # AIより先に機械判定する（誤りゼロ・コストゼロ）。Geminiは残り＋要約文を担当。
+    import event_classifier as _ec
+    conn2 = get_conn(); cur2 = conn2.cursor()
+    cls = _ec.classify_batch(cur2, ranking_date, [(c, d, pct) for c, _, pct, d in all_targets])
+    cur2.close(); conn2.close()
+    n_machine = sum(1 for v in cls.values() if v["category"])
+    print(f"  [Phase 1.5] 機械分類: {n_machine}/{len(all_targets)}件を一次データから確定")
+
+    # ── Phase 2: 全銘柄をまとめて AI 要約（要約文＋未分類のカテゴリ補完） ──
     if batch_data:
         print(f"\n  [Phase 2] AI 要約バッチ処理 ({len(batch_data)}銘柄)...")
         summaries = summarize_news_batch(batch_data)
@@ -483,19 +506,28 @@ def research_top_movers(target_date: date = None, period: str = "daily") -> int:
         summaries = {}
         print("  [Phase 2] 対象なし → AI 要約スキップ")
 
-    # ── Phase 3: 全件 DB 保存 ────────────────────────────────────────────
+    # ── Phase 3: 全件 DB 保存（機械分類を優先、無ければGemini補完カテゴリ） ──
     print(f"\n  [Phase 3] DB 保存...")
     saved = 0
     for code, rank, pct, direction in all_targets:
         news      = news_by_code.get(code, [])
         news_text = _format_news_text(news) if news else None
-        ai_sum    = summaries.get(code)
+        res       = summaries.get(code)
+        ai_sum    = res.get("summary") if isinstance(res, dict) else res
+        gem_cat   = res.get("category") if isinstance(res, dict) else None
+
+        m = cls.get(code, {})
+        category   = m.get("category") or (gem_cat if gem_cat in _ec.REASON_CATEGORIES else None)
+        confidence = m.get("confidence") or ("med" if category else None)
 
         if _save_event(code, ranking_date, direction, pct, rank, period,
-                       news_text, ai_sum):
+                       news_text, ai_sum, category, confidence):
             saved += 1
 
-    print(f"  [Phase 3] 完了: {saved}/{len(all_targets)} 件保存")
+    n_cat = sum(1 for c, _, _, _ in all_targets
+                if (cls.get(c, {}).get("category")
+                    or (isinstance(summaries.get(c), dict) and summaries[c].get("category"))))
+    print(f"  [Phase 3] 完了: {saved}/{len(all_targets)} 件保存（理由カテゴリ確定: {n_cat}件）")
     return saved
 
 
@@ -511,14 +543,15 @@ def get_events_for_date(event_date: date = None, period: str = "daily") -> dict:
 
     cur.execute("""
         SELECT pe.code, s.name, pe.direction, pe.change_pct,
-               pe.ranking, pe.news_items, pe.ai_summary, f.market_cap
+               pe.ranking, pe.news_items, pe.ai_summary, f.market_cap,
+               pe.reason_category
         FROM price_events pe
         JOIN stocks s ON pe.code = s.code
         LEFT JOIN stock_fundamentals f ON pe.code = f.code
         WHERE pe.event_date = %s AND pe.period = %s
         ORDER BY pe.direction, ABS(pe.change_pct) DESC
     """, (event_date, period))
-    cols = ["code","name","direction","change_pct","ranking","news_items","ai_summary","market_cap"]
+    cols = ["code","name","direction","change_pct","ranking","news_items","ai_summary","market_cap","reason_category"]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     cur.close()
     conn.close()

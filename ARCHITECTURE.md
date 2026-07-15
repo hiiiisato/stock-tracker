@@ -117,8 +117,14 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   未設定なら送信スキップ（例外を出さない）。LINE初回設定手順は line_notify.py の docstring
 - `swing_scorer.py` — スイング候補スコア → `swing_scores`（/swing ページで表示）
   ※旧 `swing_notifier.py`（スイングのLINE通知）はテスト用途のみで廃止し archive/ へ移動（2026-07）
-- `event_researcher.py` — 急騰急落銘柄の要因をニュース検索+Geminiで要約 → `price_events`
-- `research_strategy.py` — event_researcher の調査対象選定ロジック・閾値
+- `event_researcher.py` — 急騰急落銘柄の要因をニュース検索+Geminiで要約 → `price_events`。
+  Phase1.5で `event_classifier` が理由を機械分類（`reason_category`）してからGeminiが要約＋残りの分類を補完
+- `event_classifier.py` — 株価変動の「理由」を機械分類 → `price_events.reason_category`。
+  自由文だけでは集計/持続日数分析/戦略検証ができないため14カテゴリのタクソノミーに分類。
+  一次データ優先: ①開示由来(disclosures/forecast_revisions)で決算好感/失望・上方/下方修正・自社株買い・
+  TOB・提携等を機械確定(信頼度high) ②テーマ物色/地合い連動/継続を theme_daily_stats/TOPIX/直近イベントで判定(med)
+  ③残りはGeminiが構造化出力(【分類】)で補完。REASON_CATEGORIES が表示バッジ・集計の単一の真実
+- `research_strategy.py` — event_researcher の調査対象選定・閾値＋ニュース取得(TDnet/kabutan/Google)＋Gemini要約
 - `theme_report.py` — テーマレポートHTML生成（app.py の /report から利用）
 - `daily_report.py` — 日次相場レポートHTML生成（app.py の /daily から利用）。結論→数字→資金フロー変化→
   騰落TOP5+理由+スパークライン→トリガー銘柄(基準は TRIGGER_DEFS)→好材料開示→ウォッチリスト。

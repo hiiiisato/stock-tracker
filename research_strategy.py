@@ -298,8 +298,11 @@ def _call_gemini_batch(client, batch: list) -> dict:
 
         sections.append(f"▼ STOCK:{s['code']} {name_label} {date_str} {dir_label}\n" + "\n".join(parts))
 
+    from event_classifier import REASON_CATEGORIES
+    cat_guide = " / ".join(f"{k}={v[1]}" for k, v in REASON_CATEGORIES.items())
+
     output_template = "\n\n".join(
-        f"STOCK:{c}\n【変動理由】\n（1〜2文）\n【背景・詳細】\n（3〜5文）\n【参考ソース】\n（根拠にした開示・記事名を箇条書き）"
+        f"STOCK:{c}\n【分類】（下記カテゴリから1つ選ぶ）\n【変動理由】\n（1〜2文）\n【背景・詳細】\n（3〜5文）\n【参考ソース】\n（根拠にした開示・記事名を箇条書き）"
         for c in codes
     )
 
@@ -327,6 +330,13 @@ def _call_gemini_batch(client, batch: list) -> dict:
 - 前置き・後書き・余分な説明は不要
 - 「AIが解説」「値動きの背景をAIが解説」等のYahoo Finance自動生成ページは情報源として使用しないこと
 - 【参考ソース】には実際に根拠として使った開示・記事のタイトルを書くこと（使っていない媒体名を並べない）
+
+## 分類ルール（【分類】に書く理由カテゴリ・下記から必ず1つのキーを選ぶ）
+{cat_guide}
+- 決算短信への反応は earnings_beat（好感で上昇）/ earnings_miss（失望で下落）。業績予想の修正は guidance_up/guidance_down。
+- 明確な個別材料が無く、所属テーマ全体やTOPICの連れ高/連れ安なら theme（テーマ物色）か market（地合い連動）。
+- 前日からの急騰/急落が続いているだけなら continuation。仕手・需給的な急変なら supply_demand。
+- どれにも当てはまらない・材料不明なら unknown。【分類】にはキー（例: earnings_beat）だけを書く。
 
 ## 出力フォーマット（全銘柄分を続けて出力）
 
@@ -359,25 +369,31 @@ def _call_gemini_batch(client, batch: list) -> dict:
 
 def _parse_batch_response(text: str, codes: list) -> dict:
     """
-    "STOCK:XXXX\n内容..." 形式の Gemini レスポンスを銘柄コードごとに分割する。
+    "STOCK:XXXX\n内容..." 形式の Gemini レスポンスを銘柄コードごとに分割し、
+    {code: {"summary": 変動理由本文, "category": 分類キー|None}} を返す。
     """
+    from event_classifier import REASON_CATEGORIES
     result = {}
-    # STOCK:4文字英数字（4桁数字 + 285A のような英数混じりコード対応）の位置で分割
     parts = re.split(r"(?=STOCK:[A-Z0-9]{4})", text.strip())
     for part in parts:
         m = re.match(r"STOCK:([A-Z0-9]{4})\s*\n?([\s\S]*)", part.strip())
-        if m:
-            code    = m.group(1)
-            content = m.group(2).strip()
-            if code in codes and content:
-                result[code] = content
-                print(f"    [AI要約完了] {code}")
+        if not m:
+            continue
+        code, content = m.group(1), m.group(2).strip()
+        if code not in codes or not content:
+            continue
+        # 【分類】キーを抽出し、本文からは分類行を除いて要約として保存
+        cat = None
+        cm = re.search(r"【分類】\s*[:：]?\s*([A-Za-z_]+)", content)
+        if cm and cm.group(1) in REASON_CATEGORIES:
+            cat = cm.group(1)
+        summary = re.sub(r"【分類】.*?(?=\n【|$)", "", content, count=1, flags=re.S).strip()
+        result[code] = {"summary": summary or content, "category": cat}
+        print(f"    [AI要約完了] {code}{f'（{cat}）' if cat else ''}")
 
-    # 取得できなかった銘柄は None
     for code in codes:
         if code not in result:
             result[code] = None
-
     return result
 
 

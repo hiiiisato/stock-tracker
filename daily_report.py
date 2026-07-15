@@ -173,7 +173,7 @@ def _fetch_movers(cur, target: date) -> dict:
     for direction, key in [("DESC", "gainers"), ("ASC", "losers")]:
         cur.execute(f"""
             SELECT dp.code, s.name, dp.change_pct, f.market_cap,
-                   pe.ai_summary
+                   pe.ai_summary, pe.reason_category
             FROM daily_prices dp
             JOIN stocks s ON s.code = dp.code AND s.is_active = 1 AND s.market_id IN (2,3,4)
             JOIN stock_fundamentals f ON f.code = dp.code AND f.market_cap >= 5e9
@@ -183,11 +183,13 @@ def _fetch_movers(cur, target: date) -> dict:
             ORDER BY dp.change_pct {direction}
             LIMIT 5
         """, (target, target))
-        for code, name, chg, mcap, reason in cur.fetchall():
+        from event_classifier import label_of as _cat_label
+        for code, name, chg, mcap, reason, rcat in cur.fetchall():
             out[key].append({
                 "code": str(code), "name": name, "chg": float(chg or 0),
                 "mcap_oku": float(mcap) / 1e8 if mcap else None,
                 "reason": _extract_reason(reason),
+                "cat": _cat_label(rcat),
             })
     # スパークライン用の30日終値
     codes = [m["code"] for m in out["gainers"] + out["losers"]]
@@ -394,6 +396,8 @@ body { background: #0d1117; color: #c9d1d9;
 .mv-main { flex: 1; min-width: 0; }
 .mv-name { font-weight: 700; font-size: 13.5px; }
 .mv-meta { font-size: 11px; color: #484f58; }
+.mv-cat { font-size: 11px; font-weight: 700; color: #d2a8ff; background: #bc8cff14;
+  border: 1px solid #bc8cff40; border-radius: 6px; padding: 0 6px; white-space: nowrap; }
 .mv-reason { font-size: 12px; color: #9da7b3; margin-top: 2px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .mv-spark { flex-shrink: 0; }
@@ -626,10 +630,11 @@ def build_report_html(target_date: date | None = None) -> str:
         for m in items:
             mc = f'{m["mcap_oku"]:,.0f}億円' if m["mcap_oku"] else ""
             reason = f'<div class="mv-reason">{esc(m["reason"])}</div>' if m["reason"] else ""
+            cat = f'<span class="mv-cat">{esc(m["cat"])}</span> ' if m.get("cat") else ""
             rows += f"""<div class="mv-row">
   <div class="mv-chg">{_chg_html(m["chg"])}</div>
   <div class="mv-main">
-    <div class="mv-name"><a href="/stock/{m["code"]}">{esc(m["name"])}</a> <span class="mv-meta">{m["code"]} {mc}</span></div>
+    <div class="mv-name">{cat}<a href="/stock/{m["code"]}">{esc(m["name"])}</a> <span class="mv-meta">{m["code"]} {mc}</span></div>
     {reason}
   </div>
   {_spark_svg(m.get("series", []))}
