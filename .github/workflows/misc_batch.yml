@@ -65,6 +65,13 @@ jobs:
         if: ${{ github.event.schedule != '0 21 4,14,24 * *' && inputs.job != 'fund_watch' }}
         run: python edinet_segments.py --all
 
+      # EDINET有報で過去業績(operating_income等)の欠損を穴埋め（fill-only・優先度=直近欠損順）。
+      # texts/segments の後に置き、edinetdb.jp 100件/日の残枠だけを消費（残枠が尽きたら自動停止）。
+      # 一度きりの過去分キャッチアップが主目的。埋め終われば対象が消えて自然に静かになる。
+      - name: 業績欠損の穴埋め（EDINET有報）
+        if: ${{ github.event.schedule != '0 21 4,14,24 * *' && inputs.job != 'fund_watch' }}
+        run: python financials_edinet.py
+
       # 会社概要・kabutanテーマタグの定期メンテ（150件/日 ≒ 月次で全銘柄一巡）。
       # 市場時間と無関係なので夕方のメイン便ではなく夜間に実行する。
       - name: 会社概要・テーマタグ取得

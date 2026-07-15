@@ -31,6 +31,7 @@ J-Quants 無料枠・EDINET）のみで構成。
 | daily.yml | 平日20:30 イブニング便 | `python daily_run.py --evening` | 夜間の適時開示回収→市況考察→日次レポート確定版を上書き保存→**確定版をLINE通知**→AIファンド意思決定 |
 | misc_batch.yml | 毎日23:45 | `python edinet_texts.py --all` | EDINET本文ドリップ取得（edinetdb.jp 10件/日） |
 | misc_batch.yml | 毎日23:45 | `python edinet_segments.py --all` | 事業セグメント時系列（80件/日→90日周期巡回。edinetdb.jp 無料枠100/日をtextsと分け合う） |
+| misc_batch.yml | 毎日23:45 | `python financials_edinet.py` | 過去業績(op等)欠損の穴埋め（EDINET有報・fill-only）。texts/segmentsの後で残枠のみ消費・自動停止 |
 | misc_batch.yml | 5/15/25日 6:00 | `python fund_watch.py` | ファンド月次レポート取込 |
 
 **GitHub Actions cron の注意**: 発火は数十分〜数時間遅延することがある（実測で2時間超）。
@@ -86,6 +87,13 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - `financials_tdnet.py` — TDnet決算短信XBRL(サマリー)から実績+会社予想を取得（financialsに未来日付期=予想として入る）。
   kabutanがデータセンターIP遮断のため公式一次データに置換(2026-07)。`import_recent(days)` で直近短信を取込。
   earnings_refresh から呼ばれ、detect_revisions が上方/下方修正を検知。旧 `financials_kabutan.py` は archive/ へ
+- `financials_edinet.py` — **EDINET公式有報XBRL（edinetdb.jp経由）で過去業績の欠損を穴埋め**。
+  Yahoo/kabutanで埋まらなかった `operating_income` 等（op欠損は約2200銘柄）を、公式有報の
+  精密値で補完。**fill-only**（`bulk_upsert` の `fill_only_cols` で全列COALESCE＝既存TDnet値は上書きせずNULLだけ埋める）。
+  EDINETの円単位生値を百万円に丸めてTDnet由来データと桁を揃える。`fiscal_year` を既存NULL行の
+  `YEAR(period_end)` に対応させ既存行のみ更新（新しい期は作らない）。優先度=直近欠損期がより新しい順。
+  edinetdb.jp無料枠100件/日の残枠内で段階処理（レスポンスの残数ヘッダで自動停止）→ `financials_edinet_meta` に取得済記録。
+  misc_batch.yml の夜間トリオで texts/segments の**後**に実行し残枠のみ消費（既存ジョブを枯渇させない）
 - `earnings_calendar_jpx.py` — JPX公式「決算発表予定日」Excelを取込 → `earnings_schedule`（決算跨ぎ管理）
 - `fundamentals.py` — PER/PBR/時価総額等 → `stock_fundamentals`
 - `market_indices.py` — 海外・国内指数 → `market_index_prices`
