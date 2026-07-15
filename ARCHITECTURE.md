@@ -95,8 +95,10 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   Yahoo由来の `op=0` 疑似欠損(rev>0)をNULLに戻して補完対象化。
   **(2) 有報の豊富な年次データを蓄積**: 同じレスポンスで返る損益内訳・CF・capex・R&D・従業員・給与・
   ガバナンス・持合い・TSR等（約60項目）を `financials_edinet_annual`（生値精密・EDINET権威データで全更新）へ。
-  対象は **Tier1=op欠損優先（直近欠損期が新しい順）→ Tier2=未取得銘柄の付随データ収集**。
-  edinetdb.jp無料枠100件/日の残数ヘッダで自動停止 → `financials_edinet_meta` に取得済記録（90日周期で再取得）。
+  **年次・四半期の両対応**（`period=annual`/`quarterly_standalone`）。四半期は period_end 列が無いため
+  `(会計年度, 四半期, 決算月)` から四半期末日を導出（`_q_end`）して既存Q行に対応。
+  取得タスクの優先度: **①年次op欠損 →②四半期op欠損 →③未取得銘柄の付随データ**。
+  edinetdb.jp無料枠100件/日の残数ヘッダで自動停止 → 期種別メタ（`financials_edinet_meta`/`_qmeta`）に取得済記録（90日周期で再取得）。
   **枠集中のため edinet_texts/segments は一時停止中**（misc_batch.yml の `if: false`。キャッチアップ後に再開）
 - `earnings_calendar_jpx.py` — JPX公式「決算発表予定日」Excelを取込 → `earnings_schedule`（決算跨ぎ管理）
 - `fundamentals.py` — PER/PBR/時価総額等 → `stock_fundamentals`
@@ -198,7 +200,8 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | 価格 | `stock_splits` | splits.py（分割イベント。J-Quants公式が正） |
 | 価格 | `market_index_prices` | market_indices.py |
 | 財務 | `financials` | financials.py + financials_tdnet.py（TDnet短信XBRL・**未来日付の期=会社予想**）+ financials_edinet.py（有報で欠損穴埋め） |
-| 財務 | `financials_edinet_annual` `financials_edinet_meta` | financials_edinet.py（有報の豊富な年次データ約60項目・生値精密／取得済メタ） |
+| 財務 | `financials_edinet_annual` `financials_edinet_quarterly` | financials_edinet.py（有報の豊富な年次/四半期データ約60項目・生値精密） |
+| 財務 | `financials_edinet_meta` `financials_edinet_qmeta` | financials_edinet.py（年次/四半期の取得済メタ・90日周期で再取得） |
 | 財務 | `financials_forecast` `dividends` `stock_fundamentals` | 各取得モジュール |
 | 指標 | `price_stats` | compute_price_stats.py（最新値のみ） |
 | 指標 | `price_stats_history` | compute_stats_history.py（週次・バックテスト用） |

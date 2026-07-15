@@ -29,6 +29,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import calendar
 import datetime as _dt
 import time
 
@@ -131,9 +132,9 @@ EXTRA_COLS: list[tuple[str, str, str, str]] = [
     ("split_adjustment_factor", "split_adjustment_factor", "DOUBLE", "num"),
     # トレーサビリティ
     ("accounting_standard", "accounting_standard", "VARCHAR(8)", "str"),
-    ("doc_id", "doc_id", "VARCHAR(16)", "str"),
-    ("submit_date", "submit_date", "VARCHAR(20)", "str"),
-    ("edinet_filing_url", "edinet_filing_url", "VARCHAR(255)", "str"),
+    ("doc_id", "doc_id", "VARCHAR(128)", "str"),  # 四半期はdocIDが複数連結され長い
+    ("submit_date", "submit_date", "VARCHAR(32)", "str"),
+    ("edinet_filing_url", "edinet_filing_url", "VARCHAR(512)", "str"),
 ]
 
 
@@ -174,27 +175,32 @@ def normalize_zero_artifacts(cur) -> int:
     """
     cur.execute(
         "UPDATE financials SET operating_income=NULL "
-        "WHERE operating_income=0 AND revenue>0 AND period_type='A'"
+        "WHERE operating_income=0 AND revenue>0 AND period_type IN ('A','Q')"
     )
     return cur.rowcount
 
 
+# 取得済み管理は期種別に分ける(年次=financials_edinet_meta / 四半期=financials_edinet_qmeta)。
+META_TABLE = {"A": "financials_edinet_meta", "Q": "financials_edinet_qmeta"}
+
+
 def _ensure_meta(cur) -> None:
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS financials_edinet_meta (
-            code         VARCHAR(10) PRIMARY KEY,
-            edinet_code  VARCHAR(8),
-            status       VARCHAR(16),
-            filled_cells INT DEFAULT 0,
-            last_fetched DATETIME
+    for tbl in META_TABLE.values():
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {tbl} (
+                code         VARCHAR(10) PRIMARY KEY,
+                edinet_code  VARCHAR(8),
+                status       VARCHAR(16),
+                filled_cells INT DEFAULT 0,
+                last_fetched DATETIME
+            )
+            """
         )
-        """
-    )
 
 
 def _ensure_extra_table(cur) -> None:
-    """有報の豊富な年次データを丸ごと残す表(financials_edinet_annual)を用意する。"""
+    """有報の豊富なデータを丸ごと残す表(年次 financials_edinet_annual / 四半期 _quarterly)。"""
     col_defs = ",\n            ".join(f"`{c}` {t}" for c, _s, t, _k in EXTRA_COLS)
     cur.execute(
         f"""
@@ -208,6 +214,31 @@ def _ensure_extra_table(cur) -> None:
         )
         """
     )
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS financials_edinet_quarterly (
+            code        VARCHAR(10) NOT NULL,
+            fiscal_year INT NOT NULL,
+            quarter     TINYINT NOT NULL,
+            period_end  DATE,
+            {col_defs},
+            updated_at  DATETIME,
+            UNIQUE KEY uq_code_fy_q (code, fiscal_year, quarter)
+        )
+        """
+    )
+
+
+def _q_end(fiscal_year: int, quarter: int, fye_month: int) -> _dt.date | None:
+    """(会計年度, 四半期, 決算月) から四半期末日を導出。Q4=決算月末、Q3=−3ヶ月…と遡る。"""
+    if not fye_month or quarter not in (1, 2, 3, 4):
+        return None
+    m = fye_month - 3 * (4 - quarter)
+    y = fiscal_year
+    while m <= 0:
+        m += 12
+        y -= 1
+    return _dt.date(y, m, calendar.monthrange(y, m)[1])
 
 
 def _fye(cur, code: str) -> tuple[int, int] | None:
@@ -236,11 +267,11 @@ def _period_end(fiscal_year: int, fye: tuple[int, int] | None) -> _dt.date | Non
             return None
 
 
-def _fetch(edinet_code: str) -> list[dict]:
-    """1銘柄の全年度財務を取得。残枠が尽きていれば QuotaExhausted を送出。"""
+def _fetch(edinet_code: str, period: str = "annual") -> list[dict]:
+    """1銘柄の財務を取得(period='annual' or 'quarterly_standalone')。残枠切れは QuotaExhausted。"""
     r = requests.get(
         f"{BASE}/companies/{edinet_code}/financials",
-        headers=HEADERS, timeout=20,
+        headers=HEADERS, params={"period": period}, timeout=20,
     )
     # レート制限ヘッダで事前・事後に判定
     daily_rem = r.headers.get("X-Ratelimit-Remaining")
@@ -260,11 +291,13 @@ def _fetch(edinet_code: str) -> list[dict]:
     return data
 
 
-def _targets(cur, limit: int, only_codes: list[str] | None, force: bool) -> list[tuple[str, str]]:
-    """取得対象を (code, edinet_code) で返す。2段構え:
-      Tier1 = op がNULLの銘柄(欠損穴埋め優先。直近欠損期が新しい順)
-      Tier2 = まだ有報を取得していない銘柄(付随データの全体カバレッジ構築。コード順)
-    どちらも REFRESH_DAYS 以内に取得済みなら除外。Tier1 を使い切って枠が余ればTier2へ。"""
+def _targets(cur, limit: int, only_codes: list[str] | None, force: bool) -> list[tuple[str, str, str]]:
+    """取得タスクを (code, edinet_code, kind) で優先度順に返す。kind: 'A'=年次 / 'Q'=四半期。
+    優先度:
+      ① 年次のop欠損(穴埋め最優先・直近欠損が新しい順)
+      ② 四半期のop欠損/ゼロ(穴埋め)
+      ③ 年次の未取得銘柄(付随データの全体カバレッジ)
+    各期種の meta で REFRESH_DAYS 以内取得済みは除外。上限まで①→②→③の順で詰める。"""
     stale = _dt.datetime.now() - _dt.timedelta(days=REFRESH_DAYS)
 
     if only_codes:
@@ -274,56 +307,59 @@ def _targets(cur, limit: int, only_codes: list[str] | None, force: bool) -> list
             f"WHERE s.code IN ({ph}) AND s.edinet_code IS NOT NULL AND s.edinet_code<>''",
             only_codes,
         )
-        return [(r[0], r[1]) for r in cur.fetchall()][:limit]
+        base = [(r[0], r[1]) for r in cur.fetchall()]
+        # 指定コードは年次・四半期の両方を対象にする
+        return ([(c, e, "A") for c, e in base] + [(c, e, "Q") for c, e in base])[:limit]
 
-    fresh_filter = "" if force else "AND (m.last_fetched IS NULL OR m.last_fetched < %s)"
+    tasks: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
 
-    # Tier1: op欠損（穴埋め優先）
-    p1: list = []
-    sql1 = f"""
+    def _add(rows, kind):
+        for c, ec in rows:
+            if (c, kind) in seen:
+                continue
+            seen.add((c, kind))
+            tasks.append((c, ec, kind))
+            if len(tasks) >= limit:
+                return True
+        return False
+
+    fresh = "" if force else "AND (m.last_fetched IS NULL OR m.last_fetched < %s)"
+    sp = [] if force else [stale]
+
+    # ① 年次op欠損（穴埋め最優先）
+    cur.execute(f"""
         SELECT f.code, s.edinet_code, MAX(f.period_end) AS mx
-        FROM financials f
-        JOIN stocks s ON s.code = f.code
-        LEFT JOIN financials_edinet_meta m ON m.code = f.code
+        FROM financials f JOIN stocks s ON s.code=f.code
+        LEFT JOIN financials_edinet_meta m ON m.code=f.code
         WHERE f.period_type='A' AND f.operating_income IS NULL
-          AND s.edinet_code IS NOT NULL AND s.edinet_code<>''
-          {fresh_filter}
-        GROUP BY f.code, s.edinet_code
-        ORDER BY mx DESC
-        LIMIT %s
-    """
-    if not force:
-        p1.append(stale)
-    p1.append(limit)
-    cur.execute(sql1, p1)
-    tier1 = [(r[0], r[1]) for r in cur.fetchall()]
-    if len(tier1) >= limit:
-        return tier1
+          AND s.edinet_code IS NOT NULL AND s.edinet_code<>'' {fresh}
+        GROUP BY f.code, s.edinet_code ORDER BY mx DESC LIMIT %s
+    """, sp + [limit])
+    if _add([(r[0], r[1]) for r in cur.fetchall()], "A"):
+        return tasks
 
-    # Tier2: 未取得銘柄（付随データの全体カバレッジ）
-    remaining = limit - len(tier1)
-    seen = {c for c, _ in tier1}
-    p2: list = []
-    sql2 = f"""
+    # ② 四半期op欠損（穴埋め）
+    cur.execute(f"""
+        SELECT f.code, s.edinet_code, MAX(f.period_end) AS mx
+        FROM financials f JOIN stocks s ON s.code=f.code
+        LEFT JOIN financials_edinet_qmeta m ON m.code=f.code
+        WHERE f.period_type='Q' AND f.operating_income IS NULL
+          AND s.edinet_code IS NOT NULL AND s.edinet_code<>'' {fresh}
+        GROUP BY f.code, s.edinet_code ORDER BY mx DESC LIMIT %s
+    """, sp + [limit])
+    if _add([(r[0], r[1]) for r in cur.fetchall()], "Q"):
+        return tasks
+
+    # ③ 年次の未取得（付随データの全体カバレッジ）
+    cur.execute(f"""
         SELECT s.code, s.edinet_code
-        FROM stocks s
-        LEFT JOIN financials_edinet_meta m ON m.code = s.code
-        WHERE s.edinet_code IS NOT NULL AND s.edinet_code<>''
-          {fresh_filter}
-        ORDER BY s.code
-        LIMIT %s
-    """
-    if not force:
-        p2.append(stale)
-    p2.append(remaining + len(seen))  # seen分を差し引く前提で多めに取る
-    cur.execute(sql2, p2)
-    for c, ec in cur.fetchall():
-        if c in seen:
-            continue
-        tier1.append((c, ec))
-        if len(tier1) >= limit:
-            break
-    return tier1
+        FROM stocks s LEFT JOIN financials_edinet_meta m ON m.code=s.code
+        WHERE s.edinet_code IS NOT NULL AND s.edinet_code<>'' {fresh}
+        ORDER BY s.code LIMIT %s
+    """, sp + [limit])
+    _add([(r[0], r[1]) for r in cur.fetchall()], "A")
+    return tasks
 
 
 def _null_periods(cur, code: str) -> dict[int, _dt.date]:
@@ -334,6 +370,81 @@ def _null_periods(cur, code: str) -> dict[int, _dt.date]:
         (code,),
     )
     return {r[0].year: r[0] for r in cur.fetchall()}
+
+
+def _null_q_periods(cur, code: str) -> set[_dt.date]:
+    """code の op がNULLな四半期(Q)期末の集合を返す。"""
+    cur.execute(
+        "SELECT period_end FROM financials "
+        "WHERE code=%s AND period_type='Q' AND operating_income IS NULL",
+        (code,),
+    )
+    return {r[0] for r in cur.fetchall()}
+
+
+_EXTRA_NAMES = [c for c, _s, _t, _k in EXTRA_COLS]
+
+
+def _process_annual(cur, code: str, recs: list[dict], now) -> tuple[int, int]:
+    """年次: financials のop欠損を穴埋め + financials_edinet_annual に全保存。(穴埋めセル, 保存件数)。"""
+    by_year = {r.get("fiscal_year"): r for r in recs if r.get("fiscal_year")}
+
+    null_map = _null_periods(cur, code)
+    rows: list[list] = []
+    for year, pend in null_map.items():
+        rec = by_year.get(year)
+        if not rec:
+            continue
+        vals = {col: _to_million(rec.get(src)) for src, col in FIELD_MAP.items()}
+        if all(v is None for v in vals.values()):
+            continue
+        rows.append([code, pend, "A"] + [vals[c] for c in _FIN_COLS])
+    filled = 0
+    if rows:
+        cols = ["code", "period_end", "period_type"] + _FIN_COLS
+        bulk_upsert(cur, "financials", cols, rows, update_cols=_FIN_COLS, fill_only_cols=_FIN_COLS)
+        filled = sum(1 for r in rows for v in r[3:] if v is not None)
+
+    fye = _fye(cur, code)
+    extra = [[code, y, _period_end(y, fye)]
+             + [_cast(k, rec.get(s)) for _c, s, _t, k in EXTRA_COLS] + [now]
+             for y, rec in by_year.items()]
+    if extra:
+        ecols = ["code", "fiscal_year", "period_end"] + _EXTRA_NAMES + ["updated_at"]
+        bulk_upsert(cur, "financials_edinet_annual", ecols, extra,
+                    update_cols=["period_end"] + _EXTRA_NAMES + ["updated_at"])
+    return filled, len(extra)
+
+
+def _process_quarterly(cur, code: str, recs: list[dict], now) -> tuple[int, int]:
+    """四半期: op欠損を穴埋め + financials_edinet_quarterly に全保存。(穴埋めセル, 保存件数)。"""
+    fye = _fye(cur, code)
+    fye_m = fye[0] if fye else None
+    null_q = _null_q_periods(cur, code)
+
+    rows: list[list] = []
+    extra: list[list] = []
+    for rec in recs:
+        fy, q = rec.get("fiscal_year"), rec.get("quarter")
+        if not fy or not q:
+            continue
+        pe = _q_end(fy, q, fye_m)
+        if pe and pe in null_q:
+            vals = {col: _to_million(rec.get(src)) for src, col in FIELD_MAP.items()}
+            if not all(v is None for v in vals.values()):
+                rows.append([code, pe, "Q"] + [vals[c] for c in _FIN_COLS])
+        extra.append([code, fy, q, pe]
+                     + [_cast(k, rec.get(s)) for _c, s, _t, k in EXTRA_COLS] + [now])
+    filled = 0
+    if rows:
+        cols = ["code", "period_end", "period_type"] + _FIN_COLS
+        bulk_upsert(cur, "financials", cols, rows, update_cols=_FIN_COLS, fill_only_cols=_FIN_COLS)
+        filled = sum(1 for r in rows for v in r[3:] if v is not None)
+    if extra:
+        ecols = ["code", "fiscal_year", "quarter", "period_end"] + _EXTRA_NAMES + ["updated_at"]
+        bulk_upsert(cur, "financials_edinet_quarterly", ecols, extra,
+                    update_cols=["period_end"] + _EXTRA_NAMES + ["updated_at"])
+    return filled, len(extra)
 
 
 def backfill(daily_limit: int = DAILY_LIMIT, only_codes: list[str] | None = None,
@@ -354,15 +465,18 @@ def backfill(daily_limit: int = DAILY_LIMIT, only_codes: list[str] | None = None
 
     targets = _targets(cur, daily_limit, only_codes, force)
     if verbose:
-        print(f"対象 {len(targets)} 銘柄(Tier1=op欠損優先→Tier2=未取得の付随データ)")
+        na = sum(1 for _c, _e, k in targets if k == "A")
+        print(f"対象 {len(targets)} タスク(年次{na}/四半期{len(targets)-na})"
+              f" 優先: ①年次op欠損 →②四半期op欠損 →③未取得の付随データ")
 
     stats = {"fetched": 0, "filled_codes": 0, "filled_cells": 0,
              "rich_codes": 0, "rich_rows": 0, "no_data": 0, "stopped": False}
     now = _dt.datetime.now()
 
-    for code, ec in targets:
+    for code, ec, kind in targets:
+        period = "annual" if kind == "A" else "quarterly_standalone"
         try:
-            recs = _fetch(ec)
+            recs = _fetch(ec, period)
         except QuotaExhausted:
             stats["stopped"] = True
             if verbose:
@@ -370,68 +484,39 @@ def backfill(daily_limit: int = DAILY_LIMIT, only_codes: list[str] | None = None
             break
         except Exception as e:  # noqa: BLE001
             if verbose:
-                print(f"  [{code}/{ec}] 取得失敗: {str(e)[:80]}")
+                print(f"  [{code}/{ec}/{kind}] 取得失敗: {str(e)[:80]}")
             time.sleep(DELAY)
             continue
 
         stats["fetched"] += 1
-        by_year = {r.get("fiscal_year"): r for r in recs if r.get("fiscal_year")}
+        if kind == "A":
+            filled, rich = _process_annual(cur, code, recs, now)
+        else:
+            filled, rich = _process_quarterly(cur, code, recs, now)
 
-        # (1) financials の op欠損を穴埋め(fill-only・百万丸め)
-        null_map = _null_periods(cur, code)
-        rows: list[list] = []
-        for year, pend in null_map.items():
-            rec = by_year.get(year)
-            if not rec:
-                continue
-            vals = {col: _to_million(rec.get(src)) for src, col in FIELD_MAP.items()}
-            if all(v is None for v in vals.values()):
-                continue
-            rows.append([code, pend, "A"] + [vals[c] for c in _FIN_COLS])
-
-        filled_cells = 0
-        if rows:
-            cols = ["code", "period_end", "period_type"] + _FIN_COLS
-            bulk_upsert(
-                cur, "financials", cols, rows,
-                update_cols=_FIN_COLS,        # キー列は更新しない
-                fill_only_cols=_FIN_COLS,     # 全列 COALESCE(既存NULLのみ埋める)
-            )
-            filled_cells = sum(1 for r in rows for v in r[3:] if v is not None)
+        if filled:
             stats["filled_codes"] += 1
-            stats["filled_cells"] += filled_cells
-
-        # (2) 有報の年次データを丸ごと保存(financials_edinet_annual・EDINET権威データで全更新)
-        fye = _fye(cur, code)
-        extra_rows: list[list] = []
-        for year, rec in by_year.items():
-            pe = _period_end(year, fye)
-            vals = [_cast(kind, rec.get(src)) for _c, src, _t, kind in EXTRA_COLS]
-            extra_rows.append([code, year, pe] + vals + [now])
-        if extra_rows:
-            ecols = ["code", "fiscal_year", "period_end"] + [c for c, _s, _t, _k in EXTRA_COLS] + ["updated_at"]
-            upd = ["period_end"] + [c for c, _s, _t, _k in EXTRA_COLS] + ["updated_at"]
-            bulk_upsert(cur, "financials_edinet_annual", ecols, extra_rows, update_cols=upd)
-            stats["rich_rows"] += len(extra_rows)
+            stats["filled_cells"] += filled
+        if rich:
             stats["rich_codes"] += 1
+            stats["rich_rows"] += rich
         else:
             stats["no_data"] += 1
 
-        status = "filled" if rows else ("rich" if extra_rows else "no_data")
+        status = "filled" if filled else ("rich" if rich else "no_data")
         cur.execute(
-            """
-            INSERT INTO financials_edinet_meta (code, edinet_code, status, filled_cells, last_fetched)
+            f"""
+            INSERT INTO {META_TABLE[kind]} (code, edinet_code, status, filled_cells, last_fetched)
             VALUES (%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
               edinet_code=VALUES(edinet_code), status=VALUES(status),
               filled_cells=VALUES(filled_cells), last_fetched=VALUES(last_fetched)
             """,
-            (code, ec, status, filled_cells, now),
+            (code, ec, status, filled, now),
         )
         conn.commit()
         if verbose:
-            note = f"穴埋め{filled_cells}セル" if rows else "op欠損なし"
-            print(f"  [{code}] {ec}: {note} / 年次{len(extra_rows)}件保存")
+            print(f"  [{code}] {ec} {kind}: 穴埋め{filled}セル / {'年次' if kind=='A' else '四半期'}{rich}件保存")
 
         if _fetch._stop:
             stats["stopped"] = True
