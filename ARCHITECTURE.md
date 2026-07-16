@@ -31,7 +31,7 @@ J-Quants 無料枠・EDINET）のみで構成。
 | daily.yml | 平日20:30 イブニング便 | `python daily_run.py --evening` | 夜間の適時開示回収→市況考察→日次レポート確定版を上書き保存→**確定版をLINE通知**→AIファンド意思決定 |
 | misc_batch.yml | ~~毎日23:45~~ **一時停止中** | `python edinet_texts.py --all` | EDINET本文ドリップ（`if:false`。財務キャッチアップ中は枠譲渡） |
 | misc_batch.yml | ~~毎日23:45~~ **一時停止中** | `python edinet_segments.py --all` | 事業セグメント時系列（`if:false`。同上） |
-| misc_batch.yml | 毎日23:45 | `python financials_edinet.py` | 過去業績(op等)欠損の穴埋め＋有報年次データ蓄積（EDINET）。texts/segments停止中は100/日フル枠で最短キャッチアップ・自動停止 |
+| misc_batch.yml | 毎日**00:30 JST** | `python financials_edinet.py` | 過去業績(op等)欠損の穴埋め＋有報年次/四半期データ蓄積（EDINET）。**枠リセット(00:00 JST)直後**に走らせフレッシュな100/日を使い切る。自動停止 |
 | misc_batch.yml | 5/15/25日 6:00 | `python fund_watch.py` | ファンド月次レポート取込 |
 
 **GitHub Actions cron の注意**: 発火は数十分〜数時間遅延することがある（実測で2時間超）。
