@@ -5,7 +5,7 @@ on:
   schedule:
     # edinetdb.jp の日次枠は 00:00 JST(=15:00 UTC)にリセットされるため、その直後に走らせて
     # フレッシュな100枠を使い切る。旧設定(23:45 JST)はリセット15分前で使いかけの窓を掴んでいた。
-    - cron: '30 15 * * *'       # 00:30 JST 毎日: EDINET財務取得(financials_edinet)＋(停止中のtexts/segments)
+    - cron: '30 15 * * *'       # 00:30 JST 毎日: EDINET財務取得＋テーママスタ同期(みんかぶ)＋会社概要
     - cron: '0 21 4,14,24 * *'  # 5,15,25日 6:00 JST: ファンド月次レポート取込
   workflow_dispatch:
     inputs:
@@ -73,6 +73,12 @@ jobs:
       - name: 業績欠損の穴埋め＋有報データ蓄積（EDINET）
         if: ${{ github.event.schedule != '0 21 4,14,24 * *' && inputs.job != 'fund_watch' }}
         run: python financials_edinet.py
+
+      # 統一テーママスタ同期（みんかぶの関連度付きテーマを正とする。120テーマ/日≒週1周）。
+      # みんかぶがGHAのIPを遮断した場合は既存データ維持でログに残る（壊れない設計）。
+      - name: テーママスタ同期（みんかぶ）
+        if: ${{ github.event.schedule != '0 21 4,14,24 * *' && inputs.job != 'fund_watch' }}
+        run: python theme_master.py
 
       # 会社概要・kabutanテーマタグの定期メンテ（150件/日 ≒ 月次で全銘柄一巡）。
       # 市場時間と無関係なので夕方のメイン便ではなく夜間に実行する。

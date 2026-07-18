@@ -124,12 +124,15 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - `compute_stats_history.py` — 週次スナップショット → `price_stats_history`（バックテスト用・PIT補正=期末+45日）。
   fscore も PIT（`_pit_fm`）で再現・全履歴バックフィル済み
 - `compute_theoretical.py` — はっしゃん式理論株価 → `theoretical_values`。係数は config.py
-- `theme_master.py` — **統一テーママスタ（2026-07ゼロベース再設計）**。自前キュレーション+kabutan人気ランキング+
-  資金流入実績から厳選100テーマを選定（指数構成・地域・市場区分等の非テーマは除外）。
-  関連度スコア(0-100)= kabutanタグ+EDINET事業内容/セグメント本文一致+テーマ集中度+Gemini曖昧帯判定+手動ロック。
-  tier(3=コア/2=関連/1=周辺)で階層化し、**集計(money_flow等)は tier>=2 のみ** → コングロ汚染を原理的に排除。
-  `theme_members.manual_lock`(pin3/pin2/pin1/exclude)は自動更新に常に勝つ（手動メンテ用）。
-  candidateテーマは品質ゲート(tier2構成5銘柄+)で自動active昇格。週次更新は daily_run 月曜（money_flowより先）
+- `theme_master.py` — **統一テーママスタ（みんかぶを正とする。2026-07再設計）**。
+  minkabu.jp の全テーマ(~780)と**銘柄ごとの編集済み関連度(0-100)**を同期（kabutanと同じ
+  ミンカブ・ジ・インフォノイド運営でテーマ体系は同一だが、関連度はみんかぶのみ公開）。
+  tier: 関連度70+=3(コア)/50+=2(関連)。**集計(money_flow等)は tier>=2 のみ**。
+  指数構成・IPO年度等の非テーマは除外フィルタ。みんかぶから消えて21日で自動archive。
+  `theme_members.manual_lock`(pin3/pin2/pin1/exclude)は同期に常に勝つ（手動メンテ用）。
+  日次で120テーマずつ古い順に巡回(全体≒週1周)・テーマ一覧は毎日取得し新テーマ即日検出。
+  **アクセス注意**: minkabuはUA判定あり（Chrome風UAは503）。必ず `MINKABU_HEADERS`(Safari系UA+Referer)を使う。
+  取得失敗時は既存データ維持（壊れない）。旧ヒューリスティック版(kabutanタグ+EDINET本文+Gemini)はgit履歴参照
 - `theme_score.py` — テーマ別過熱スコア → `theme_daily_stats`
 - `rankings.py` — 日次/週次ランキング → `rankings`
 - `line_notify.py` — LINE Messaging API への汎用テキストpush（`push_text`/`is_configured`）。
@@ -214,7 +217,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | 指標 | `stock_metrics_history` | 旧方式（archive/compute_metrics_history.py）。現役コードから参照なし・更新停止 |
 | 分析 | `theoretical_values` | compute_theoretical.py |
 | 分析 | `rankings` `swing_scores` `price_events` | 各計算モジュール |
-| テーマ | `themes` `theme_members` | **theme_master.py（統一テーママスタ・厳選100テーマ×関連度tier）**。集計は tier>=2 のみ |
+| テーマ | `themes` `theme_members` | **theme_master.py（統一テーママスタ＝みんかぶ全~780テーマ×編集済み関連度）**。集計は tier>=2 のみ |
 | テーマ | `theme_categories` `stock_themes` `theme_daily_stats` | seed_themes.py / theme_score.py（自前キュレーション。stock_themesはtheme_masterへpin移行済み） |
 | テーマ | `kabutan_themes` | company_profile.py（kabutanタグ・証拠データとしてtheme_masterのスコアリングに使用） |
 | 分析 | `money_flow_weekly` | money_flow.py（グループ別の週次資金フロー） |
