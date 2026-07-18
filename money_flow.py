@@ -38,6 +38,12 @@ LOOKBACK_WEEKS = 26      # 計算対象の週数（13週ベースライン + 表
 BASELINE_WEEKS = 13      # flow_ratio のベースライン週数
 MIN_STOCKS     = 5       # グループ最小銘柄数（これ未満は保存しない）
 TOPIX_ETF      = "1306"  # ベンチマーク
+# 銘柄あたりのkabutanテーマ付与数の上限。これを超える銘柄（パナソニック162・NTT103・
+# セブン&アイ57 等の巨大コングロマリット）は、多数テーマに広く付与されタグがノイズ化し、
+# 巨大な売買代金でニッチテーマの指標・代表銘柄を汚染するため、テーマ集計から除外する。
+# ※業種/規模/スタイルのグループには影響しない（テーマ集計のみ）。中央値11・75%ile16 に対し
+#   25 は上位約8%（明確に拡散したコングロ）だけを外す水準。
+THEME_MAX_PER_STOCK = 25
 
 SIZE_BUCKETS = [
     ("mega",  "大型（1兆円以上）",        lambda mc: mc >= 1e12),
@@ -150,7 +156,8 @@ def _load_groups(cur) -> tuple[dict, dict]:
             groups[code].append(("style", key))
             labels[("style", key)] = label
 
-    # kabutanテーマ（銘柄5つ以上のテーマのみ）
+    # kabutanテーマ（銘柄5つ以上のテーマのみ／過剰付与のコングロマリットは除外）。
+    # 除外は「テーマ集計を汚染しない」ためで、対象銘柄自体の分析(銘柄ページ等)には影響しない。
     cur.execute("""
         SELECT kt.theme, kt.code
         FROM kabutan_themes kt
@@ -159,7 +166,10 @@ def _load_groups(cur) -> tuple[dict, dict]:
           AND kt.theme IN (
             SELECT theme FROM kabutan_themes GROUP BY theme HAVING COUNT(*) >= %s
           )
-    """, (MIN_STOCKS,))
+          AND kt.code NOT IN (
+            SELECT code FROM kabutan_themes GROUP BY code HAVING COUNT(*) > %s
+          )
+    """, (MIN_STOCKS, THEME_MAX_PER_STOCK))
     for theme, code in cur.fetchall():
         groups[code].append(("theme", theme))
         labels[("theme", theme)] = theme
@@ -192,6 +202,12 @@ def compute(weeks: int = LOOKBACK_WEEKS) -> int:
     # 銘柄名（top_stocks表示用）
     cur.execute("SELECT code, name FROM stocks WHERE is_active = 1")
     names = dict(cur.fetchall())
+
+    # 代表銘柄の「テーマ特化度」重み用: 銘柄あたりの全kabutanテーマ数。
+    # テーマの代表銘柄は「売買代金 ÷ テーマ数」で選び、多数テーマに緩く付いた大型株より
+    # そのテーマに特化した銘柄が前に出るようにする（表示上の代表性を高める。指標は実額のまま）。
+    cur.execute("SELECT code, COUNT(*) FROM kabutan_themes GROUP BY code")
+    theme_cnt = {c: int(n) for c, n in cur.fetchall()}
 
     # 週次の銘柄別集計: 週間売買代金・週末終値（分割調整済み）
     # ※ 26週×約3700銘柄 ≈ 45万行を1クエリで集計してPython側でグループ展開する
@@ -269,10 +285,13 @@ def compute(weeks: int = LOOKBACK_WEEKS) -> int:
                 a["tv"] += tv
                 if ret is not None:
                     a["rets"].append(ret)
+                    # テーマは特化度(=売買代金÷テーマ数)で代表銘柄を選ぶ。
+                    # 業種/規模/スタイルは該当しないので売買代金そのもの。
+                    score = tv / theme_cnt.get(code, 1) if gtype == "theme" else tv
                     if len(a["tops"]) < 5:
-                        heapq.heappush(a["tops"], (tv, code, ret))
-                    elif tv > a["tops"][0][0]:
-                        heapq.heapreplace(a["tops"], (tv, code, ret))
+                        heapq.heappush(a["tops"], (score, tv, code, ret))
+                    elif score > a["tops"][0][0]:
+                        heapq.heapreplace(a["tops"], (score, tv, code, ret))
 
     # 保存（最初の週はリターン計算不能なので除外。flow_ratioは過去シェアが
     # BASELINE_WEEKS分無くても、最低4週あれば計算する）
@@ -331,7 +350,7 @@ def compute(weeks: int = LOOKBACK_WEEKS) -> int:
         tops = sorted(a["tops"], reverse=True)
         top_json = json.dumps([
             {"code": c, "name": names.get(c, c), "ret": round(r, 1), "tv": round(tv_ / 1e8, 1)}
-            for tv_, c, r in tops
+            for _score, tv_, c, r in tops
         ], ensure_ascii=False)
         last_dt = week_last_dt.get(wk)
         upserts.append((
@@ -343,6 +362,14 @@ def compute(weeks: int = LOOKBACK_WEEKS) -> int:
             round(excess, 2) if excess is not None else None,
             flow_class, last_dt, top_json, now,
         ))
+
+    # 再計算対象週の既存行を先に削除してから入れ直す。これにより、テーマ除外や
+    # 銘柄異動で MIN_STOCKS 未満に落ちたグループの「古い行」が残留するのを防ぐ
+    # （残ると、もう集計対象でないコングロマリットが表示され続けてしまう）。
+    refresh_weeks = sorted(set(week_list[1:]))
+    if refresh_weeks:
+        ph = ",".join(["%s"] * len(refresh_weeks))
+        cur.execute(f"DELETE FROM money_flow_weekly WHERE week_end IN ({ph})", refresh_weeks)
 
     cur.executemany("""
         INSERT INTO money_flow_weekly
