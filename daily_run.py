@@ -373,6 +373,18 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
         _log("rankings", "failed", error=str(e))
 
     # 資金フロー週次集計（テーマ/業種/規模/スタイル別。直近26週を再計算=自己修復）
+    # テーママスタ週次更新（月曜のみ）: テーマ選定→関連度スコア→AI曖昧帯判定→自動昇格。
+    # money_flow のテーマ集計が参照するため、必ず資金フローより先に実行する。
+    if not rankings_only and datetime.now().weekday() == 0:
+        print("\n[テーママスタ] 週次更新（選定・関連度・AI判定）...")
+        try:
+            from theme_master import run_weekly as theme_master_weekly
+            theme_master_weekly(with_ai=True)
+            _log("theme_master", "done", 1)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("theme_master", "failed", error=str(e))
+
     if not rankings_only:
         print("\n[資金フロー] グループ別の週次売買代金シェアを集計中...")
         try:

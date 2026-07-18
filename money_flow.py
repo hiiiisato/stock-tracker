@@ -156,23 +156,34 @@ def _load_groups(cur) -> tuple[dict, dict]:
             groups[code].append(("style", key))
             labels[("style", key)] = label
 
-    # kabutanテーマ（銘柄5つ以上のテーマのみ／過剰付与のコングロマリットは除外）。
-    # 除外は「テーマ集計を汚染しない」ためで、対象銘柄自体の分析(銘柄ページ等)には影響しない。
-    cur.execute("""
-        SELECT kt.theme, kt.code
-        FROM kabutan_themes kt
-        JOIN stocks s ON s.code = kt.code
-        WHERE s.is_active = 1 AND s.market_id IN (2, 3, 4)
-          AND kt.theme IN (
-            SELECT theme FROM kabutan_themes GROUP BY theme HAVING COUNT(*) >= %s
-          )
-          AND kt.code NOT IN (
-            SELECT code FROM kabutan_themes GROUP BY code HAVING COUNT(*) > %s
-          )
-    """, (MIN_STOCKS, THEME_MAX_PER_STOCK))
-    for theme, code in cur.fetchall():
-        groups[code].append(("theme", theme))
-        labels[("theme", theme)] = theme
+    # テーマ: 統一テーママスタ(theme_master.py)の active テーマ × tier>=2(コア/関連)のみ。
+    # 旧: kabutanタグ直接参照（コングロ汚染のため2026-07に廃止。タグは証拠データとして
+    # theme_master のスコアリングに使われる）。フォールバック: マスタ未構築なら旧方式。
+    try:
+        from theme_master import load_theme_groups
+        tg, tl = load_theme_groups(cur, min_tier=2)
+        if not tl:
+            raise RuntimeError("テーママスタが空")
+        for code, glist in tg.items():
+            groups[code].extend(glist)
+        labels.update(tl)
+    except Exception as e:  # noqa: BLE001  (テーブル未作成等)
+        print(f"  [theme_master] 読込失敗・kabutanタグに fallback: {str(e)[:60]}")
+        cur.execute("""
+            SELECT kt.theme, kt.code
+            FROM kabutan_themes kt
+            JOIN stocks s ON s.code = kt.code
+            WHERE s.is_active = 1 AND s.market_id IN (2, 3, 4)
+              AND kt.theme IN (
+                SELECT theme FROM kabutan_themes GROUP BY theme HAVING COUNT(*) >= %s
+              )
+              AND kt.code NOT IN (
+                SELECT code FROM kabutan_themes GROUP BY code HAVING COUNT(*) > %s
+              )
+        """, (MIN_STOCKS, THEME_MAX_PER_STOCK))
+        for theme, code in cur.fetchall():
+            groups[code].append(("theme", theme))
+            labels[("theme", theme)] = theme
     return groups, labels
 
 
