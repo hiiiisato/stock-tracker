@@ -236,11 +236,26 @@ def get_latest_values() -> list:
     return results
 
 
+def _split_factor_map(cur, sym: str, from_date) -> dict:
+    """ETF(.T)の株式分割・併合の調整係数を daily_prices から取得する。
+    daily_prices は J-Quants公式AdjustmentFactorで adj_close が調整済み。
+    factor(日) = adj_close / close（併合前<1・調整不要日=1）を返し、生OHLCに掛けて調整する。
+    market_index_prices は生値OHLCのため、これを掛けないと併合日でチャートが崩れる
+    （例: 1306は2026-03-30に10:1併合し 3827→376 に段差）。"""
+    code = sym[:-2] if sym.endswith(".T") else sym   # "1306.T" -> "1306"
+    cur.execute("""
+        SELECT date, close, adj_close FROM daily_prices
+        WHERE code = %s AND date >= %s AND close IS NOT NULL AND close > 0 AND adj_close IS NOT NULL
+    """, (code, from_date))
+    return {r[0]: float(r[2]) / float(r[1]) for r in cur.fetchall() if r[1]}
+
+
 def get_history_for_chart(days: int = 90) -> dict:
     """
     ローソク足チャート用に各指数の直近 N 日間の OHLC データを返す。
     戻り値: {symbol: {"name": str, "dates": [...], "opens": [...],
                       "highs": [...], "lows": [...], "closes": [...]}, ...}
+    ※ 国内ETF(1306/2516等 .T)は株式分割・併合を J-Quants公式係数で調整して返す。
     """
     from_date = date.today() - timedelta(days=days)
     conn = get_conn()
@@ -254,15 +269,23 @@ def get_history_for_chart(days: int = 90) -> dict:
             ORDER BY date
         """, (sym, from_date))
         rows = cur.fetchall()
-        if rows:
-            result[sym] = {
-                "name":   cfg["name"],
-                "dates":  [str(r[0]) for r in rows],
-                "opens":  [float(r[1]) if r[1] is not None else float(r[4]) for r in rows],
-                "highs":  [float(r[2]) if r[2] is not None else float(r[4]) for r in rows],
-                "lows":   [float(r[3]) if r[3] is not None else float(r[4]) for r in rows],
-                "closes": [float(r[4]) for r in rows],
-            }
+        if not rows:
+            continue
+        # ETFは分割・併合を調整（indexや為替は対象外＝係数マップが空で恒等）
+        fmap = _split_factor_map(cur, sym, from_date) if sym.endswith(".T") else {}
+
+        def _adj(r, i):
+            v = r[i] if r[i] is not None else r[4]
+            return round(float(v) * fmap.get(r[0], 1.0), 4)
+
+        result[sym] = {
+            "name":   cfg["name"],
+            "dates":  [str(r[0]) for r in rows],
+            "opens":  [_adj(r, 1) for r in rows],
+            "highs":  [_adj(r, 2) for r in rows],
+            "lows":   [_adj(r, 3) for r in rows],
+            "closes": [_adj(r, 4) for r in rows],
+        }
     cur.close()
     conn.close()
     return result
