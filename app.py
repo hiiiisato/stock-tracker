@@ -451,6 +451,7 @@ def _nav(active: str = "") -> str:
         ("events",    "/events",     "ランキング・イベント"),
         ("disclosures", "/disclosures", "適時開示"),
         ("earnings",  "/earnings",   "決算"),
+        ("youtube",   "/youtube",    "YouTube週報"),
         ("funds",     "/funds",      "ファンドウォッチ"),
         ("aifund",    "/aifund",     "AIファンド"),
         ("swing",     "/swing",      "スイング"),
@@ -8756,6 +8757,139 @@ def themes_page():
     if not html:
         html = _build_themes_page()
         _set("themes_page", html)
+    return html
+
+
+_YT_CSS = """
+.yt-wrap { display: flex; flex-direction: column; gap: 16px; }
+.yt-weekly { background: linear-gradient(135deg, #161b22, #1a2230); border: 1px solid #30363d;
+  border-radius: 12px; padding: 16px 20px; }
+.yt-weekly-title { font-size: 14px; font-weight: 700; color: #e6edf3; margin-bottom: 8px; }
+.yt-summary { font-size: 14px; color: #c9d1d9; line-height: 1.9; }
+.yt-meta { font-size: 12px; color: #8b949e; margin-top: 8px; line-height: 1.8; }
+.yt-chip { display: inline-block; font-size: 11px; padding: 2px 9px; border-radius: 10px;
+  background: rgba(88,166,255,0.12); color: #79c0ff; margin: 2px 3px 2px 0; }
+.yt-stock-chip { display: inline-flex; gap: 5px; align-items: center; font-size: 12px;
+  padding: 3px 10px; border-radius: 8px; background: #21262d; margin: 2px 4px 2px 0;
+  text-decoration: none; color: #e6edf3; }
+.yt-stock-chip:hover { background: #30363d; }
+.yt-stock-chip small { color: #8b949e; }
+.yt-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+.yt-card { background: #161b22; border: 1px solid #21262d; border-radius: 10px; padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 8px; }
+.yt-card-hd { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: #8b949e; }
+.yt-card-title { font-size: 13.5px; font-weight: 700; line-height: 1.5; }
+.yt-card-title a { color: #e6edf3; text-decoration: none; }
+.yt-card-title a:hover { color: #58a6ff; }
+.yt-market { font-size: 12.5px; color: #a5b1bd; line-height: 1.7; }
+.yt-stance { font-size: 12px; color: #d2a8ff; }
+.yt-action { font-size: 12px; color: #3fb950; }
+.yt-sv { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 6px; }
+.yt-sv.bull { background: rgba(232,64,64,0.15); color: #E84040; }
+.yt-sv.bear { background: rgba(58,159,224,0.15); color: #3A9FE0; }
+.yt-sv.neu  { background: #21262d; color: #8b949e; }
+.yt-stock-row { font-size: 12px; color: #c9d1d9; line-height: 1.7; }
+.yt-stock-row a { color: #79c0ff; text-decoration: none; font-weight: 600; }
+@media (max-width: 768px) { .yt-cards { grid-template-columns: 1fr; } }
+"""
+
+
+def _build_youtube_page() -> str:
+    """YouTube週報: 株系チャンネルの週次巡回結果（youtube_insights.py が蓄積）。"""
+    import html as _h
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT week_end, n_videos, summary, consensus, divergence, themes_json, stocks_json, created_at
+            FROM youtube_weekly ORDER BY week_end DESC LIMIT 1
+        """)
+        wk = cur.fetchone()
+        cur.execute("""
+            SELECT video_id, channel, title, published, market, stance, actionable,
+                   themes_json, stocks_json
+            FROM youtube_videos
+            WHERE status='analyzed' AND published >= DATE_SUB(NOW(), INTERVAL 14 DAY)
+            ORDER BY published DESC LIMIT 30
+        """)
+        vids = cur.fetchall()
+    except Exception:  # noqa: BLE001  テーブル未作成
+        wk, vids = None, []
+    cur.close(); conn.close()
+
+    def _sv_cls(v):
+        return "bull" if "強気" in (v or "") else ("bear" if "弱気" in (v or "") else "neu")
+
+    weekly_html = ""
+    if wk:
+        week_end, n_videos, summary, consensus, divergence, tj, sj, created = wk
+        themes = _json.loads(tj or "[]")
+        stocks = _json.loads(sj or "[]")
+        theme_chips = "".join(
+            f'<span class="yt-chip" title="{_h.escape(str(t.get("note") or ""))}">{_h.escape(str(t.get("theme") or ""))}</span>'
+            for t in themes)
+        stock_chips = "".join(
+            (f'<a class="yt-stock-chip" href="/stock/{_h.escape(str(s["code"]))}" title="{_h.escape(str(s.get("note") or ""))}">'
+             if s.get("code") else '<span class="yt-stock-chip">')
+            + f'{_h.escape(str(s.get("name") or ""))}<small>{_h.escape(str(s.get("code") or ""))}</small>'
+            + ('</a>' if s.get("code") else '</span>')
+            for s in stocks)
+        div_html = (f'<div>⚡ 見方が分かれる点: {_h.escape(divergence)}</div>' if divergence else "")
+        weekly_html = f"""<div class="yt-weekly">
+  <div class="yt-weekly-title">📺 今週のまとめ（{week_end} 時点・{n_videos}本の動画を横断）</div>
+  <div class="yt-summary">{_h.escape(summary or "")}</div>
+  <div class="yt-meta">
+    <div>🧭 全体トーン: {_h.escape(consensus or "—")}</div>
+    {div_html}
+    <div style="margin-top:6px">🔥 注目テーマ: {theme_chips or "—"}</div>
+    <div style="margin-top:4px">👀 言及銘柄: {stock_chips or "—"}</div>
+  </div>
+</div>"""
+
+    cards = []
+    for vid, ch, title, pub, market, stance, actionable, tj, sj in vids:
+        themes = _json.loads(tj or "[]")
+        stocks = _json.loads(sj or "[]")
+        chips = "".join(f'<span class="yt-chip">{_h.escape(str(t))}</span>' for t in themes[:5])
+        srows = ""
+        for s in stocks[:6]:
+            link = (f'<a href="/stock/{_h.escape(str(s["code"]))}">{_h.escape(s["name"])}</a>'
+                    if s.get("code") else _h.escape(s.get("name") or ""))
+            srows += (f'<div class="yt-stock-row"><span class="yt-sv {_sv_cls(s.get("view"))}">'
+                      f'{_h.escape(s.get("view") or "中立")}</span> {link} — '
+                      f'{_h.escape(s.get("reason") or "")}</div>')
+        act = f'<div class="yt-action">💡 {_h.escape(actionable)}</div>' if actionable else ""
+        cards.append(f"""<div class="yt-card">
+  <div class="yt-card-hd"><span>{_h.escape(ch or "")}</span><span>{pub:%m/%d}</span></div>
+  <div class="yt-card-title"><a href="https://www.youtube.com/watch?v={_h.escape(vid)}" target="_blank" rel="noopener">▶ {_h.escape(title or "")}</a></div>
+  <div class="yt-market">{_h.escape(market or "")}</div>
+  <div class="yt-stance">🧭 {_h.escape(stance or "")}</div>
+  {act}
+  <div>{chips}</div>
+  {srows}
+</div>""")
+
+    empty = ('<p style="color:#8b949e;padding:30px">まだデータがありません。'
+             '週次バッチ（土曜朝）実行後に表示されます。</p>') if not (wk or cards) else ""
+    body = f"""<style>{_YT_CSS}</style>
+<div class="page-header">
+  <div class="page-title">YouTube週報 — 株系チャンネルをAIが週次巡回</div>
+  <div class="page-subtitle">登録チャンネルの新着動画をAIが視聴し、マーケット状況・注目テーマ・言及銘柄を構造化。
+  複数の発信者が同時に言及する銘柄・テーマ＝市場の注目先を機械的に抽出します（毎週土曜更新）</div>
+</div>
+<div class="yt-wrap">
+{weekly_html}
+<div class="yt-cards">{"".join(cards)}</div>
+{empty}
+</div>"""
+    return _page_html("YouTube週報", body, active="youtube")
+
+
+@app.route("/youtube")
+def youtube_page():
+    html = _get("youtube_page")
+    if not html:
+        html = _build_youtube_page()
+        _set("youtube_page", html)
     return html
 
 

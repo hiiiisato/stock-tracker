@@ -33,6 +33,7 @@ J-Quants 無料枠・EDINET）のみで構成。
 | misc_batch.yml | ~~毎日23:45~~ **一時停止中** | `python edinet_segments.py --all` | 事業セグメント時系列（`if:false`。同上） |
 | misc_batch.yml | 毎日**00:30 JST** | `python financials_edinet.py` | 過去業績(op等)欠損の穴埋め＋有報年次/四半期データ蓄積（EDINET）。**枠リセット(00:00 JST)直後**に走らせフレッシュな100/日を使い切る。自動停止 |
 | misc_batch.yml | 5/15/25日 6:00 | `python fund_watch.py` | ファンド月次レポート取込 |
+| misc_batch.yml | 土曜 7:00 | `python youtube_insights.py` | YouTube株動画の週次巡回（Gemini動画理解→構造化→週次サマリー→/youtube） |
 
 **GitHub Actions cron の注意**: 発火は数十分〜数時間遅延することがある（実測で2時間超）。
 このため「メイン+リトライ」の2本立て+`timeout-minutes: 60`+イブニング便で確定、という設計にしている。
@@ -114,6 +115,13 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - `company_profile.py` — kabutan銘柄トップページから会社概要（簡単な事業内容）・会社サイト
   → `stocks.business_summary`/`stocks.website`。日次150件で未取得優先→古い順（約1ヶ月で全銘柄一巡）。
   **テーマタグ取得は2026-07廃止**（ユーザー指示・テーマは theme_master=みんかぶに一本化。kabutan_themesは更新停止・未参照）
+- `youtube_insights.py` — **YouTube株動画の週次巡回（2026-07新設）**。CHANNELS（ハンドル定義）→
+  channel_id解決(HTMLのexternalId・DBキャッシュ) → 公式RSS(キー不要)で直近8日の新着 →
+  **GeminiのYouTube動画理解**(URL直接渡し・無料枠の動画処理8h/日内)で各動画を構造化
+  (マーケット/テーマ/言及銘柄+強弱/相場観) → 銘柄コードはstocksテーブルで検証 →
+  週次サマリー(共通見解・複数言及銘柄・注目テーマ)を横断生成。
+  → `youtube_channels`/`youtube_videos`/`youtube_weekly`。/youtube ページで表示。
+  土曜7時JST週次(misc_batch.yml)。ライブ配信等はタイトルで除外。1回の分析上限 MAX_ANALYZE=10本
 - `fund_watch.py` — ファンド月次レポートPDF取込＋Gemini構造化抽出 → `fund_master`/`fund_reports`。FUND_DEFSの `url_mode` (template/scrape/direct) と `page_range` で各運用会社の方式差を吸収
 - `disclosures.py` — TDnet適時開示の蓄積・分析 → `disclosures`/`market_summary`。タイトルからカテゴリ・ポジネガをルール分類（APIコストゼロ）。好材料（上方修正・増配等）はPDF本文をGeminiで読み修正理由＋関連テーマを抽出、テーマ経由で関連銘柄をサジェスト。業種・テーマ・開示動向から日次市況コメントも生成。**TDnetは約1ヶ月で消えるため毎日蓄積が必須**
 
@@ -202,6 +210,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | `/disclosures` | 適時開示（市況考察・好材料ハイライト・関連銘柄サジェスト・全開示一覧） |
 | `/flows` | 資金フロー（テーマ/業種/規模/スタイル別の週次資金流入度ランキング・週切替可） |
 | `/daily` `/daily/<date>` | 日次相場レポート（daily_report.py が生成する自己完結HTML・逆ピラミッド構成） |
+| `/youtube` | YouTube週報（株系チャンネルの週次AI巡回。今週のまとめ＋動画別カード＋言及銘柄リンク） |
 | `/funds` | ファンドウォッチ（複数ファンド共通銘柄ハイライト） |
 | `/aifund` | AIファンド（模擬運用: 保有8銘柄・次の売買予定と理由・NAV vs TOPIX・売買履歴） |
 | `/themes` | テーマ株一覧（みんかぶ全~1,150テーマ＋手動テーマ）。上部に3枠: **ロングランテーマ**（`LONGRUN_THEMES`=手動15件・構造テーマ・featured='long'）、**気になるテーマ**（`WATCH_THEMES`=オーナー興味の手動・featured='watch'。空なら非表示）、**好調テーマ10**（自動: 6銘柄+&時価総額1兆+足切り→大局スコア順。pin/banで上書き可）。どちらも1年指数ミニチャート付きカード。みんかぶに無い「宇宙開発」「SaaS」は`theme_master.MANUAL_THEMES`の手動キュレーション（origin='manual'・同期対象外）。一覧は**大局×短期の2軸スコア＋四象限判定**（主力トレンド/押し目/大局良好/一過性疑い/冷却）でデフォルト大局順。大局=1年・6ヶ月の対TOPIX超過×資金流入持続週数(26週)×高値圏×増益率中央値 |
@@ -237,6 +246,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | 会社情報 | `stocks.business_summary/website`（カラム） | company_profile.py（簡単な事業内容=kabutan概要） |
 | 会社情報 | `stocks.business_description`（カラム） | edinet_business.py / edinet_texts.py（詳細=有報「事業の内容」） |
 | ファンド | `fund_master` `fund_reports` | fund_watch.py |
+| YouTube | `youtube_channels` `youtube_videos` `youtube_weekly` | youtube_insights.py（週次AI巡回・動画分析・横断サマリー） |
 | アプリ | `watchlist` `stock_memos` `fetch_logs` | app.py / daily_run.py |
 | AIファンド | `ai_fund_state` `ai_fund_positions` `ai_fund_orders` `ai_fund_trades` `ai_fund_nav` `ai_fund_policy` `ai_fund_bench` | ai_fund.py（模擬運用・全売買に理由を記録・投資基準と控え銘柄を日次蓄積） |
 | 決算予定 | `earnings_schedule` | earnings_calendar_jpx.py（JPX公式の決算発表予定日Excel・日次更新）。ai_fund.py `_earnings_dates` が読み取り。kabutan/ J-Quants無料枠(12週遅延)は使用不可のため公式JPXに置換 |
