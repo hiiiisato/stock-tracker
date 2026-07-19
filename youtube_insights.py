@@ -318,6 +318,36 @@ def aggregate_weekly(cur, client, week_end: date) -> bool:
     return True
 
 
+def notify_weekly(cur, week_end: date) -> bool:
+    """週次サマリーをLINEに通知（日次レポートと同じトランスポート・要点＋リンク）。
+    LINE未設定なら送信スキップ（例外を出さない）。"""
+    from line_notify import is_configured, push_text
+    if not is_configured():
+        print("  [YouTube週報LINE] LINE未設定のためスキップ")
+        return False
+    cur.execute("""
+        SELECT n_videos, summary, consensus, themes_json, stocks_json
+        FROM youtube_weekly WHERE week_end = %s
+    """, (week_end,))
+    row = cur.fetchone()
+    if not row:
+        return False
+    n_videos, summary, consensus, tj, sj = row
+    themes = [t.get("theme") for t in json.loads(tj or "[]") if t.get("theme")][:5]
+    stocks = [s.get("name") for s in json.loads(sj or "[]") if s.get("name")][:6]
+    from daily_report import _report_base_url
+    lines = [f"📺 YouTube週報（{week_end.strftime('%m/%d')}・{n_videos}本を巡回）",
+             "", (summary or "")[:300]]
+    if consensus:
+        lines += ["", f"🧭 {consensus[:120]}"]
+    if themes:
+        lines += [f"🔥 テーマ: {'、'.join(themes)}"]
+    if stocks:
+        lines += [f"👀 銘柄: {'、'.join(stocks)}"]
+    lines += ["", f"▶ 詳細\n{_report_base_url()}/youtube"]
+    return push_text("\n".join(lines), label="YouTube週報LINE")
+
+
 # ═══════════════════════════════════════════════════════════
 #  実行
 # ═══════════════════════════════════════════════════════════
@@ -379,8 +409,13 @@ def run_weekly(max_analyze: int = MAX_ANALYZE, verbose: bool = True) -> dict:
             print(f"  ✓ [{v['channel']}] {v['title'][:40]}")
         time.sleep(20)   # 動画1本=数十万トークン。無料枠の分間制限(TPM)に配慮した間隔
 
-    # 週次集約
-    aggregate_weekly(cur, client, date.today())
+    # 週次集約 → LINE通知（集約成功時のみ）
+    if aggregate_weekly(cur, client, date.today()):
+        conn.commit()
+        try:
+            notify_weekly(cur, date.today())
+        except Exception as e:  # noqa: BLE001  通知失敗で本体を落とさない
+            print(f"  [YouTube週報LINE] 送信失敗: {str(e)[:60]}")
     conn.commit()
     cur.close()
     conn.close()
