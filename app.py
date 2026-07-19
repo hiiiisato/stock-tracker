@@ -3577,15 +3577,22 @@ _ATTR_THEMES = {
 
 
 def _pick_mega_themes(themes: list[dict], limit: int = 10) -> list[dict]:
-    """「大テーマ」（SBIロングラン相当）を選ぶ: 規模足切り(8銘柄+・時価総額3兆円+) →
-    大局スコア順。手動指定 featured='pin' は常時掲載・'ban' は除外（自動判定より優先）。"""
+    """「好調テーマ」を選ぶ: 規模足切り(6銘柄+・時価総額1兆円+) → 大局スコア順。
+    手動指定 featured='pin' は常時掲載・'ban' は除外。'long'(ロングラン)は別枠のため除外。"""
     pins  = [t for t in themes if t["featured"] == "pin"]
     autos = [t for t in themes
-             if t["featured"] not in ("pin", "ban")
+             if t["featured"] not in ("pin", "ban", "long")
              and t["name"] not in _ATTR_THEMES
-             and t["n_stocks"] >= 8 and t["mcap_t"] >= 3.0]
+             and t["n_stocks"] >= 6 and t["mcap_t"] >= 1.0]
     out = pins + [t for t in autos if t not in pins]
     return out[:limit]
+
+
+def _pick_longrun_themes(themes: list[dict]) -> list[dict]:
+    """「ロングランテーマ」= 完全手動指定(featured='long')。値下がりしていても重要な
+    構造テーマ（宇宙開発・ドローン等）を掲載する枠。大局スコア順で並べる。"""
+    return sorted([t for t in themes if t["featured"] == "long"],
+                  key=lambda x: -x["macro"])
 
 
 def _build_themes_page() -> str:
@@ -3598,18 +3605,20 @@ def _build_themes_page() -> str:
         body = f"<style>{_THEME_CSS}</style><p style='color:#8b949e;padding:40px'>テーマデータがまだありません。</p>"
         return _page_html("テーマ分析", body, active="themes")
 
-    # ── 大テーマ10（1年テーマ指数ミニチャート付き）──
+    # ── ロングラン（手動15）＋ 好調テーマ（自動10）: 1年テーマ指数ミニチャート付き ──
+    longrun = _pick_longrun_themes(themes)
     mega = _pick_mega_themes(themes, limit=10)
+    card_themes = longrun + mega
     spark_by_tid: dict[int, str] = {}
-    if mega:
+    if card_themes:
         conn = get_conn(); cur = conn.cursor()
-        ph = ",".join(["%s"] * len(mega))
+        ph = ",".join(["%s"] * len(card_themes))
         cur.execute(f"""
             SELECT theme_id, date, index_value FROM theme_daily_stats
             WHERE theme_id IN ({ph}) AND index_value IS NOT NULL
               AND date >= DATE_SUB(CURDATE(), INTERVAL 366 DAY)
             ORDER BY theme_id, date
-        """, [t["id"] for t in mega])
+        """, [t["id"] for t in card_themes])
         series: dict[int, list] = {}
         for tid, _dt, v in cur.fetchall():
             series.setdefault(tid, []).append(float(v))
@@ -3617,12 +3626,11 @@ def _build_themes_page() -> str:
         for tid, vals in series.items():
             spark_by_tid[tid] = _mini_spark(vals, w=225, h=52)
 
-    mega_cards = []
-    for t in mega:
+    def _theme_card(t):
         r1y = t.get("r1y")
         r1y_html = (f'<b class="{"num-up" if r1y >= 0 else "num-down"}">{r1y:+.0f}%</b>'
                     if r1y is not None else "<b>—</b>")
-        mega_cards.append(f"""<a class="th-mega" href="/theme/{t['id']}">
+        return f"""<a class="th-mega" href="/theme/{t['id']}">
   <div class="th-card-top"><span class="th-card-name">{_html.escape(t['name'])}</span>
     <span class="th-verdict {t['vcls']}">{t['verdict']}</span></div>
   <div class="th-mega-chart">{spark_by_tid.get(t['id'], '')}</div>
@@ -3630,9 +3638,12 @@ def _build_themes_page() -> str:
     <span class="th-card-num"><i>直近1年</i>{r1y_html}</span>
     <span class="th-card-num"><i>大局</i><b>{t['macro']:.0f}</b></span>
     <span class="th-card-num"><i>流入</i><b>{t['inflow_w']}週</b></span>
-    <span class="th-card-num"><i>規模</i><b>{t['mcap_t']:.0f}兆</b></span>
+    <span class="th-card-num"><i>規模</i><b>{t['mcap_t']:.1f}兆</b></span>
   </div>
-</a>""")
+</a>"""
+
+    longrun_cards = [_theme_card(t) for t in longrun]
+    mega_cards = [_theme_card(t) for t in mega]
 
     # ── 全テーマ一覧（JSレンダリング・検索/並び替え・デフォルト大局順）──
     tj = _json.dumps([
@@ -3657,7 +3668,10 @@ def _build_themes_page() -> str:
 </div>
 <div class="th-wrap">
 
-<div class="th-sec-title">大テーマ — 規模と持続性を伴う本流（1年チャート）</div>
+<div class="th-sec-title">ロングランテーマ — 値動きに関わらず追う構造テーマ（手動選定・1年チャート）</div>
+<div class="th-cards th-megas">{"".join(longrun_cards)}</div>
+
+<div class="th-sec-title" style="margin-top:18px">好調テーマ — 規模と持続性を伴う本流（自動判定・1年チャート）</div>
 <div class="th-cards th-megas">{"".join(mega_cards)}</div>
 
 <div class="th-sec-title" style="margin-top:18px">全テーマ

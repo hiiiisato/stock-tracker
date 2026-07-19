@@ -78,6 +78,71 @@ def _is_investment_theme(name: str) -> bool:
     return name not in EXCLUDE_EXACT and not EXCLUDE_PATTERNS.search(name)
 
 
+# ── ロングランテーマ（ユーザー完全手動指定・2026-07）─────────────────────
+# テーマタブ上部に「値下がりしていても重要な構造テーマ」として別枠掲載する。
+# featured='long' をこのリストと同期（リスト外のlongは解除。pin/banは別用途で不変）。
+# 「AI」は みんかぶ名「人工知能」、「量子コンピュータ」は「量子コンピューター」に対応。
+LONGRUN_THEMES = [
+    "宇宙開発", "量子コンピューター", "核融合発電", "ドローン", "フィジカルAI",
+    "ペロブスカイト太陽電池", "SaaS", "レアアース", "ロボット", "光デバイス",
+    "防衛", "サイバーセキュリティ", "半導体", "データセンター", "人工知能",
+]
+
+# みんかぶに存在しないテーマの手動定義（origin='manual'・同期対象外・手動pinで構成）。
+# 構成はみんかぶ関連テーマ＋EDINET事業内容の本文一致で検証したクリーンな銘柄のみ
+# （kabutanタグのコングロ汚染〔宇宙にトヨタ・SaaSにNTT等〕は再現しない）。
+# relevance: pin3(コア)=85 / pin2(関連)=65
+MANUAL_THEMES: dict[str, dict] = {
+    "宇宙開発": {
+        "description": "ロケット・人工衛星・衛星データ・宇宙インフラ。衛星コンステレーションや月面探査など"
+                       "国策と民間投資が重なる長期成長領域。",
+        "core": ["186A", "290A", "402A", "464A", "9348", "9412"],   # アストロスケール/Synspective/アクセルスペース/QPS/ispace/スカパーJSAT
+        "related": ["7011", "7012", "7013", "6503", "6701", "3741", "6946", "5572", "5570"],
+    },
+    "SaaS": {
+        "description": "クラウド経由でソフトウェアを提供するサブスクリプション型ビジネス。"
+                       "ストック収益の積み上げで成長する国内SaaS企業群。",
+        "core": ["4478", "3994", "3923", "4776", "4443", "4071", "4475", "4194"],  # freee/マネフォ/ラクス/サイボウズ/Sansan/プラスアルファ/HENNGE/ビジョナル
+        "related": ["4733", "3915", "3853", "3762", "2326", "5243", "3993", "4419", "4684"],
+    },
+}
+
+
+def ensure_manual_and_longrun(cur, verbose: bool = True) -> None:
+    """手動テーマ(MANUAL_THEMES)の作成と、ロングラン指定(featured='long')の同期。冪等。"""
+    now = datetime.now().replace(microsecond=0)
+    for name, spec in MANUAL_THEMES.items():
+        cur.execute("SELECT id FROM themes WHERE name=%s", (name,))
+        row = cur.fetchone()
+        if row:
+            tid = row[0]
+            cur.execute("UPDATE themes SET status='active', "
+                        "description=COALESCE(NULLIF(description,''), %s) WHERE id=%s",
+                        (spec["description"], tid))
+        else:
+            cur.execute(
+                "INSERT INTO themes (name, status, origin, description, created_at, updated_at) "
+                "VALUES (%s,'active','manual',%s,%s,%s)", (name, spec["description"], now, now))
+            tid = cur.lastrowid
+        rows = ([(tid, c, 85, 3, "手動キュレーション(コア)", "pin3", now) for c in spec["core"]]
+                + [(tid, c, 65, 2, "手動キュレーション(関連)", "pin2", now) for c in spec["related"]])
+        cur.executemany("""
+            INSERT INTO theme_members (theme_id, code, relevance, tier, evidence, manual_lock, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE relevance=VALUES(relevance), tier=VALUES(tier),
+              evidence=VALUES(evidence), manual_lock=VALUES(manual_lock), updated_at=VALUES(updated_at)
+        """, rows)
+    # featured='long' をリストと同期（pin/banは触らない）
+    ph = ",".join(["%s"] * len(LONGRUN_THEMES))
+    cur.execute(f"UPDATE themes SET featured='long' WHERE name IN ({ph}) AND status='active'",
+                LONGRUN_THEMES)
+    cur.execute(f"UPDATE themes SET featured='' WHERE featured='long' AND name NOT IN ({ph})",
+                LONGRUN_THEMES)
+    if verbose:
+        cur.execute("SELECT COUNT(*) FROM themes WHERE featured='long'")
+        print(f"  ロングランテーマ: {cur.fetchone()[0]}件 (手動テーマ{len(MANUAL_THEMES)}件含む)")
+
+
 # ═══════════════════════════════════════════════════════════
 #  スキーマ
 # ═══════════════════════════════════════════════════════════
@@ -207,6 +272,7 @@ def sync(max_themes: int = DAILY_SYNC_THEMES, only_theme: str | None = None,
     conn = get_conn()
     cur = conn.cursor()
     ensure_tables(cur)
+    ensure_manual_and_longrun(cur, verbose=verbose)
     conn.commit()
 
     # ① テーマ一覧の同期（only_theme指定時はスキップ）
