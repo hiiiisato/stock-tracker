@@ -112,8 +112,10 @@ def ensure_tables(cur) -> None:
         )
     """)
     # 旧スキーマからの移行（列が無ければ追加・説明文は長いので拡張）
+    # featured: 大テーマ(ロングラン)の手動指定。'pin'=常時掲載 / 'ban'=除外 / ''=自動判定
     for ddl in ["ADD COLUMN last_seen DATETIME", "ADD COLUMN last_synced DATETIME",
-                "MODIFY description VARCHAR(1000)"]:
+                "MODIFY description VARCHAR(1000)",
+                "ADD COLUMN featured VARCHAR(4) DEFAULT ''"]:
         try:
             cur.execute(f"ALTER TABLE themes {ddl}")
         except Exception:  # noqa: BLE001  既に存在

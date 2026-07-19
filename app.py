@@ -917,7 +917,8 @@ def _build_home() -> str:
     theme_card = ""
     try:
         import html as _html3
-        tscores = _compute_theme_scores()[:5]
+        # ホームの「今買うべき」は総合（大局×短期）順。一覧のデフォルトは大局順と使い分け
+        tscores = sorted(_compute_theme_scores(), key=lambda x: -x["score"])[:5]
         t_rows = ""
         for t in tscores:
             chips = "".join(f'<span class="th-chip {c}">{_html3.escape(x)}</span>' for c, x in t["chips"][:2])
@@ -3176,6 +3177,7 @@ _THEME_CSS = """
 .th-verdict.v-hot   { background: rgba(210,153,34,0.18); color: #d29922; }
 .th-verdict.v-cool  { background: rgba(58,159,224,0.12); color: #3A9FE0; }
 .th-verdict.v-neu   { background: #21262d; color: #8b949e; }
+.th-verdict.v-neu2  { background: rgba(88,166,255,0.12); color: #79c0ff; }
 .th-score { font-size: 15px; font-weight: 700; color: #e6edf3; }
 .th-chip {
   display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 10px;
@@ -3224,6 +3226,15 @@ _THEME_CSS = """
   background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
   padding: 5px 12px; font-size: 13px; width: 240px; max-width: 55vw;
 }
+/* 大テーマ（ロングラン）カード: 1年ミニチャート付き */
+.th-megas { grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); }
+.th-mega {
+  background: #161b22; border: 1px solid #21262d; border-radius: 10px; padding: 12px 14px;
+  text-decoration: none; display: flex; flex-direction: column; gap: 8px; transition: border-color .15s;
+}
+.th-mega:hover { border-color: #58a6ff66; }
+.th-mega-chart { background: #0d1117; border-radius: 6px; padding: 4px 6px; }
+.th-mega-chart svg { display: block; width: 100%; }
 .th-sortsel {
   background: #161b22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
   padding: 5px 8px; font-size: 12px;
@@ -3311,6 +3322,60 @@ def _compute_theme_scores() -> list[dict]:
     # テーマの構成銘柄数(tier>=2)
     cur.execute("SELECT theme_id, COUNT(*) FROM theme_members WHERE tier >= 2 GROUP BY theme_id")
     n_by_theme = {r[0]: int(r[1]) for r in cur.fetchall()}
+
+    # ── 大局データ（2026-07追加: 短期ノイズに惑わされないための長期軸）──
+    # アンカー日方式: 全系列(28万行)ロードを避け、120/240営業日前の断面だけ取る
+    cur.execute("SELECT DISTINCT date FROM theme_daily_stats ORDER BY date")
+    all_dates = [r[0] for r in cur.fetchall()]
+    d120 = all_dates[-121] if len(all_dates) >= 121 else all_dates[0]
+    d240 = all_dates[-241] if len(all_dates) >= 241 else all_dates[0]
+    anchor: dict[int, dict] = {}
+    for key, dt in (("i120", d120), ("i240", d240)):
+        cur.execute("SELECT theme_id, index_value FROM theme_daily_stats "
+                    "WHERE date = %s AND index_value IS NOT NULL", (dt,))
+        for tid, v in cur.fetchall():
+            anchor.setdefault(tid, {})[key] = float(v)
+    cur.execute("SELECT theme_id, MAX(index_value) FROM theme_daily_stats "
+                "WHERE date >= %s GROUP BY theme_id", (d240,))
+    hi1y = {r[0]: float(r[1] or 0) for r in cur.fetchall()}
+    # TOPIX(1306)の同期間リターン（超過リターン算出用）
+    def _tpx_at(dt):
+        cur.execute("SELECT COALESCE(adj_close, close) FROM daily_prices "
+                    "WHERE code='1306' AND date <= %s ORDER BY date DESC LIMIT 1", (dt,))
+        r = cur.fetchone()
+        return float(r[0]) if r and r[0] else None
+    tpx_now, tpx_120, tpx_240 = _tpx_at(all_dates[-1]), _tpx_at(d120), _tpx_at(d240)
+    tpx_r6m = (tpx_now / tpx_120 - 1) * 100 if tpx_now and tpx_120 else 0.0
+    tpx_r1y = (tpx_now / tpx_240 - 1) * 100 if tpx_now and tpx_240 else 0.0
+    # 資金流入の持続性: 過去26週でinflowになった週数
+    cur.execute("""
+        SELECT t.id, COUNT(*) FROM money_flow_weekly mf
+        JOIN themes t ON t.name = mf.group_key
+        WHERE mf.group_type='theme' AND mf.flow_class='inflow'
+          AND mf.week_end > DATE_SUB(CURDATE(), INTERVAL 26 WEEK)
+        GROUP BY t.id
+    """)
+    inflow_by_theme = {r[0]: int(r[1]) for r in cur.fetchall()}
+    # 規模（合計時価総額・兆円）と成長性（予想増益率の中央値・±100クリップ）
+    cur.execute("""
+        SELECT tm.theme_id, SUM(f.market_cap) FROM theme_members tm
+        JOIN stock_fundamentals f ON f.code = tm.code
+        WHERE tm.tier >= 2 GROUP BY tm.theme_id
+    """)
+    mcap_by_theme = {r[0]: float(r[1] or 0) / 1e12 for r in cur.fetchall()}
+    cur.execute("""
+        SELECT tm.theme_id, ps.op_growth FROM theme_members tm
+        JOIN price_stats ps ON ps.code = tm.code
+        WHERE tm.tier >= 2 AND ps.op_growth IS NOT NULL
+    """)
+    _g: dict[int, list] = {}
+    for tid, g in cur.fetchall():
+        _g.setdefault(tid, []).append(max(-100.0, min(100.0, float(g))))
+    from statistics import median as _median
+    growth_by_theme = {tid: _median(v) for tid, v in _g.items() if v}
+    # 手動指定（featured: pin=大テーマ常時掲載 / ban=除外）
+    cur.execute("SELECT id, COALESCE(featured,'') FROM themes WHERE status='active'")
+    featured_by_theme = {r[0]: r[1] for r in cur.fetchall()}
     cur.close(); conn.close()
 
     results = []
@@ -3329,51 +3394,84 @@ def _compute_theme_scores() -> list[dict]:
         n_disc = disc_by_theme.get(tid, 0)
         n_ev   = ev_by_theme.get(tid, 0)
 
-        # 判定
-        if chg5 <= -1.5:
+        # ── 短期スコア（現在の勢い: 5日/20日・広がり・サージ・材料）──
+        mom = 50.0
+        mom += max(-15, min(15, chg5 * 2.0))
+        mom += max(-10, min(10, chg20 * 0.6))
+        mom += (breadth - 0.5) * 30
+        mom += min(max(surge - 1.0, 0), 2) * 6
+        mom += min(n_disc, 3) * 5 + min(n_ev, 4) * 2.5
+        if chg5 >= 10 or heat >= 6:
+            mom -= 12   # 短期過熱
+        elif chg5 <= -1.5:
+            mom -= 18   # 冷却
+        mom = max(0.0, min(100.0, mom))
+
+        # ── 大局スコア（意味のあるテーマか: 長期超過リターン・持続性・高値圏・成長性）──
+        a = anchor.get(tid, {})
+        cur_idx = idx_series[-1]
+        r6m = (cur_idx / a["i120"] - 1) * 100 if a.get("i120") else None
+        r1y = (cur_idx / a["i240"] - 1) * 100 if a.get("i240") else None
+        hi = hi1y.get(tid, 0)
+        near_hi = (cur_idx / hi - 1) * 100 if hi > 0 else 0.0   # 1年高値からの乖離(<=0)
+        infl = inflow_by_theme.get(tid, 0)
+        med_g = growth_by_theme.get(tid, 0.0)
+        macro = 50.0
+        if r1y is not None:
+            macro += max(-20, min(25, (r1y - tpx_r1y) * 0.20))   # 1年のTOPIX超過
+        if r6m is not None:
+            macro += max(-15, min(20, (r6m - tpx_r6m) * 0.30))   # 6ヶ月のTOPIX超過
+        macro += min(infl, 10) * 2.0                              # 資金流入の持続(最大+20)
+        macro += max(-15, near_hi * 0.5)                          # 高値から崩れたら減点
+        macro += max(-5, min(8, med_g * 0.15))                    # 予想増益率(中央値)
+        macro = max(0.0, min(100.0, macro))
+
+        # ── 四象限判定（大局×短期）: 「短期の意味のない値動きに惑わされない」ための主ラベル ──
+        if macro >= 62 and mom >= 58:
+            verdict, vcls = "主力トレンド", "v-run"
+        elif macro >= 62 and mom < 42:
+            verdict, vcls = "押し目", "v-start"
+        elif macro >= 62:
+            verdict, vcls = "大局良好", "v-neu2"
+        elif macro < 40 and mom >= 65:
+            verdict, vcls = "一過性疑い", "v-hot"
+        elif macro < 45 and chg20 < 0:
             verdict, vcls = "冷却", "v-cool"
-        elif chg5 >= 10 or heat >= 6:
-            verdict, vcls = "過熱注意", "v-hot"
-        elif chg20 >= 5 and chg5 > 0:
-            verdict, vcls = "上昇継続", "v-run"
-        elif chg5 >= 1.2 and breadth >= 0.5:
-            verdict, vcls = "初動", "v-start"
         else:
             verdict, vcls = "中立", "v-neu"
 
-        # スコア（買い妙味: 初動・上昇継続を高く、過熱・冷却は減点）
-        score = 50.0
-        score += max(-15, min(15, chg5 * 2.0))
-        score += max(-10, min(10, chg20 * 0.6))
-        score += (breadth - 0.5) * 30
-        score += min(max(surge - 1.0, 0), 2) * 6
-        score += min(n_disc, 3) * 5 + min(n_ev, 4) * 2.5
-        if verdict == "過熱注意":
-            score -= 12
-        elif verdict == "冷却":
-            score -= 18
-
         chips = []
+        if r1y is not None and r1y - tpx_r1y >= 20:
+            chips.append(("good", f"1年 対TOPIX+{r1y - tpx_r1y:.0f}pt"))
+        if infl >= 4:
+            chips.append(("good", f"資金流入{infl}週/26週"))
+        if med_g >= 10:
+            chips.append(("good", f"増益率中央値+{med_g:.0f}%"))
         if breadth >= 0.6:
             chips.append(("good", f"上昇銘柄{breadth:.0%}"))
         if surge >= 1.5:
             chips.append(("good", f"売買代金{surge:.1f}倍"))
         if n_disc > 0:
             chips.append(("good", f"上方修正・増配{n_disc}件"))
-        if n_ev >= 2:
-            chips.append(("good", f"急騰イベント{n_ev}銘柄"))
-        if verdict == "過熱注意":
+        if verdict == "一過性疑い":
+            chips.append(("warn", "長期実績なしの急騰"))
+        if chg5 >= 10 or heat >= 6:
             chips.append(("warn", "短期過熱"))
 
         results.append({
-            "id": tid, "name": d["name"], "score": round(score, 1),
+            "id": tid, "name": d["name"],
+            "macro": round(macro, 1), "mom": round(mom, 1),
+            "score": round(macro * 0.6 + mom * 0.4, 1),   # 総合（後方互換用）
             "verdict": verdict, "vcls": vcls,
-            "chg1d": latest[3], "chg5": chg5, "chg20": chg20, "breadth": breadth,
+            "chg1d": latest[3], "chg5": chg5, "chg20": chg20,
+            "r6m": r6m, "r1y": r1y, "breadth": breadth,
             "n_stocks": n_by_theme.get(tid, 0),
+            "mcap_t": mcap_by_theme.get(tid, 0.0),
+            "inflow_w": infl, "featured": featured_by_theme.get(tid, ""),
             "chips": chips,
         })
 
-    results.sort(key=lambda x: -x["score"])
+    results.sort(key=lambda x: -x["macro"])   # デフォルトは大局スコア順（ユーザー指定）
     _set("theme_scores", results)
     return results
 
@@ -3470,39 +3568,78 @@ def _score_theme_stocks(theme_id: int, limit: int = 40) -> list[dict]:
     return scored[:limit]
 
 
+# 大テーマ判定から外す属性ラベル系（投資テーマではなく銘柄属性のタグ）
+_ATTR_THEMES = {
+    "ESG投資", "国際優良株", "国際会計基準", "攻めのIT経営銘柄", "金利上昇メリット",
+    "円安メリット", "円高メリット", "内需株", "外需株", "低位株", "値がさ株", "品薄株",
+    "インバウンド", "トルコ関連", "01銘柄", "電気機器",
+}
+
+
+def _pick_mega_themes(themes: list[dict], limit: int = 10) -> list[dict]:
+    """「大テーマ」（SBIロングラン相当）を選ぶ: 規模足切り(8銘柄+・時価総額3兆円+) →
+    大局スコア順。手動指定 featured='pin' は常時掲載・'ban' は除外（自動判定より優先）。"""
+    pins  = [t for t in themes if t["featured"] == "pin"]
+    autos = [t for t in themes
+             if t["featured"] not in ("pin", "ban")
+             and t["name"] not in _ATTR_THEMES
+             and t["n_stocks"] >= 8 and t["mcap_t"] >= 3.0]
+    out = pins + [t for t in autos if t not in pins]
+    return out[:limit]
+
+
 def _build_themes_page() -> str:
-    """テーマ一覧（みんかぶ統一マスタ・約1,100テーマ）。
-    上部=注目テーマカード（買い妙味上位・代表テーマへ即アクセス）、
-    下部=全テーマの検索・並び替えできる一覧（JSレンダリング）。"""
+    """テーマ一覧（みんかぶ統一マスタ・約1,150テーマ）。
+    上部=大テーマ（規模×大局トレンド×資金流入持続で機械判定＋手動pin・1年ミニチャート付き）、
+    下部=全テーマの検索・並び替え一覧（デフォルト大局スコア順・四象限ラベル）。"""
     import html as _html
     themes = _compute_theme_scores()
     if not themes:
         body = f"<style>{_THEME_CSS}</style><p style='color:#8b949e;padding:40px'>テーマデータがまだありません。</p>"
         return _page_html("テーマ分析", body, active="themes")
 
-    # ── 注目テーマカード（買い妙味上位12・代表銘柄チップ付き）──
-    cards = []
-    for t in themes[:12]:
-        top_stocks = _score_theme_stocks(t["id"], limit=3)
-        stock_chips = "".join(
-            f'<a href="/stock/{s["code"]}" onclick="event.stopPropagation()">{_html.escape(s["name"][:8])}</a>'
-            for s in top_stocks)
-        cards.append(f"""<a class="th-card" href="/theme/{t['id']}">
+    # ── 大テーマ10（1年テーマ指数ミニチャート付き）──
+    mega = _pick_mega_themes(themes, limit=10)
+    spark_by_tid: dict[int, str] = {}
+    if mega:
+        conn = get_conn(); cur = conn.cursor()
+        ph = ",".join(["%s"] * len(mega))
+        cur.execute(f"""
+            SELECT theme_id, date, index_value FROM theme_daily_stats
+            WHERE theme_id IN ({ph}) AND index_value IS NOT NULL
+              AND date >= DATE_SUB(CURDATE(), INTERVAL 366 DAY)
+            ORDER BY theme_id, date
+        """, [t["id"] for t in mega])
+        series: dict[int, list] = {}
+        for tid, _dt, v in cur.fetchall():
+            series.setdefault(tid, []).append(float(v))
+        cur.close(); conn.close()
+        for tid, vals in series.items():
+            spark_by_tid[tid] = _mini_spark(vals, w=225, h=52)
+
+    mega_cards = []
+    for t in mega:
+        r1y = t.get("r1y")
+        r1y_html = (f'<b class="{"num-up" if r1y >= 0 else "num-down"}">{r1y:+.0f}%</b>'
+                    if r1y is not None else "<b>—</b>")
+        mega_cards.append(f"""<a class="th-mega" href="/theme/{t['id']}">
   <div class="th-card-top"><span class="th-card-name">{_html.escape(t['name'])}</span>
     <span class="th-verdict {t['vcls']}">{t['verdict']}</span></div>
+  <div class="th-mega-chart">{spark_by_tid.get(t['id'], '')}</div>
   <div class="th-card-nums">
-    <span class="th-card-num"><i>5日</i><b class="{'num-up' if t['chg5'] >= 0 else 'num-down'}">{t['chg5']:+.1f}%</b></span>
-    <span class="th-card-num"><i>20日</i><b class="{'num-up' if t['chg20'] >= 0 else 'num-down'}">{t['chg20']:+.1f}%</b></span>
-    <span class="th-card-num"><i>妙味</i><b>{t['score']:.0f}</b></span>
-    <span class="th-card-num"><i>銘柄</i><b>{t['n_stocks']}</b></span>
+    <span class="th-card-num"><i>直近1年</i>{r1y_html}</span>
+    <span class="th-card-num"><i>大局</i><b>{t['macro']:.0f}</b></span>
+    <span class="th-card-num"><i>流入</i><b>{t['inflow_w']}週</b></span>
+    <span class="th-card-num"><i>規模</i><b>{t['mcap_t']:.0f}兆</b></span>
   </div>
-  <div class="th-stock-chips">{stock_chips}</div>
 </a>""")
 
-    # ── 全テーマ一覧（JSレンダリング・検索/並び替え）──
+    # ── 全テーマ一覧（JSレンダリング・検索/並び替え・デフォルト大局順）──
     tj = _json.dumps([
-        {"id": t["id"], "n": t["name"], "s": t["score"], "v": t["verdict"], "vc": t["vcls"],
+        {"id": t["id"], "n": t["name"], "m": t["macro"], "s": t["mom"],
+         "v": t["verdict"], "vc": t["vcls"],
          "c1": round(t["chg1d"], 2), "c5": round(t["chg5"], 1), "c20": round(t["chg20"], 1),
+         "r1": round(t["r1y"], 1) if t.get("r1y") is not None else None,
          "br": round(t["breadth"] * 100), "ns": t["n_stocks"]}
         for t in themes
     ], ensure_ascii=False)
@@ -3514,41 +3651,44 @@ def _build_themes_page() -> str:
 
     body = f"""<style>{_THEME_CSS}</style>
 <div class="page-header">
-  <div class="page-title">テーマ株 — 今どのテーマを買うべきか</div>
-  <div class="page-subtitle">みんかぶ全{len(themes)}テーマ（関連度60%以上の銘柄で構成・毎日更新）を
-  モメンタム × 広がり × 資金流入 × 材料でスコアリング（{md} 基準）</div>
+  <div class="page-title">テーマ株 — 意味のあるテーマを追う</div>
+  <div class="page-subtitle">みんかぶ全{len(themes)}テーマ。<b>大局</b>=1年/6ヶ月の対TOPIX超過 × 資金流入の持続(26週) × 高値圏 × 増益率、
+  <b>短期</b>=5日/20日の勢い × 広がり × 売買代金 で採点（{md} 基準）</div>
 </div>
 <div class="th-wrap">
 
-<div class="th-sec-title">注目テーマ（買い妙味 上位12）</div>
-<div class="th-cards">{"".join(cards)}</div>
+<div class="th-sec-title">大テーマ — 規模と持続性を伴う本流（1年チャート）</div>
+<div class="th-cards th-megas">{"".join(mega_cards)}</div>
 
 <div class="th-sec-title" style="margin-top:18px">全テーマ
   <input id="th-q" class="th-search" type="search" placeholder="テーマ名で検索（例: 半導体）" autocomplete="off">
   <select id="th-sort" class="th-sortsel">
-    <option value="s">買い妙味順</option>
-    <option value="c1">前日比順</option>
-    <option value="c5">5日騰落順</option>
+    <option value="m">大局スコア順</option>
+    <option value="s">短期スコア順</option>
+    <option value="r1">1年騰落順</option>
     <option value="c20">20日騰落順</option>
+    <option value="c5">5日騰落順</option>
+    <option value="c1">前日比順</option>
     <option value="n">名前順</option>
   </select>
 </div>
 <div class="th-scroll"><table class="th-table" id="th-list">
-  <thead><tr><th>テーマ</th><th>判定</th><th>妙味</th><th>前日</th><th>5日</th><th>20日</th><th>上昇比率</th><th>銘柄数</th></tr></thead>
+  <thead><tr><th>テーマ</th><th>判定</th><th>大局</th><th>短期</th><th>1年</th><th>20日</th><th>5日</th><th>前日</th><th>銘柄数</th></tr></thead>
   <tbody></tbody>
 </table></div>
 <div class="th-help">
-判定の見方: <b>初動</b>=動き始めで広がりあり（仕込み妙味） / <b>上昇継続</b>=20日トレンドが本物 /
-<b>過熱注意</b>=短期急騰で反落リスク / <b>冷却</b>=資金流出中。<br>
-テーマ名クリックで、テーマ指数チャート・関連度付き構成銘柄・「どの銘柄を買うべきか」ランキングへ。
-検索は全テーマ対象（通常表示は上位150）。
+判定は<b>大局×短期の四象限</b>: <b>主力トレンド</b>=大局も短期も強い（一番乗るべき） /
+<b>押し目</b>=大局は強いが短期調整中（仕込み場の候補） / <b>大局良好</b>=長期実績あり・短期は普通 /
+<b>一過性疑い</b>=長期実績がないのに急騰（追わない警告） / <b>冷却</b>=大局・短期とも弱い。<br>
+「意味のあるテーマ」= 大局スコア（1年/6ヶ月のTOPIX超過・26週の資金流入持続・高値圏維持・構成銘柄の増益率）が高いテーマ。
+短期の値動きだけで上位に来ることはありません。検索は全テーマ対象（通常表示は上位150）。
 </div>
 </div>
 <script>
 (function() {{
   // 状態は純粋JSオブジェクトで管理（DOMのform値には持たせない）
   var THEMES = {tj};
-  var state = {{q: "", sort: "s"}};
+  var state = {{q: "", sort: "m"}};   // デフォルト大局スコア順（短期ノイズで順位が暴れない）
   function pct(v, digits) {{
     var cls = v > 0 ? "num-up" : v < 0 ? "num-down" : "";
     return '<span class="' + cls + '">' + (v > 0 ? "+" : "") + v.toFixed(digits) + '%</span>';
@@ -3561,17 +3701,19 @@ def _build_themes_page() -> str:
     }}
     rows.sort(state.sort === "n"
       ? function(a, b) {{ return a.n.localeCompare(b.n, "ja"); }}
-      : function(a, b) {{ return (b[state.sort] || 0) - (a[state.sort] || 0); }});
+      : function(a, b) {{ return (b[state.sort] ?? -999) - (a[state.sort] ?? -999); }});
     if (!state.q) rows = rows.slice(0, 150);
     var html = rows.map(function(t) {{
       return '<tr><td><a class="tname" href="/theme/' + t.id + '">' + t.n + '</a></td>'
         + '<td><span class="th-verdict ' + t.vc + '">' + t.v + '</span></td>'
-        + '<td class="th-score">' + t.s.toFixed(0) + '</td>'
-        + '<td>' + pct(t.c1, 2) + '</td><td>' + pct(t.c5, 1) + '</td><td>' + pct(t.c20, 1) + '</td>'
-        + '<td>' + t.br + '%</td><td>' + t.ns + '</td></tr>';
+        + '<td class="th-score">' + t.m.toFixed(0) + '</td>'
+        + '<td style="color:#8b949e;font-weight:600">' + t.s.toFixed(0) + '</td>'
+        + '<td>' + (t.r1 === null ? "—" : pct(t.r1, 0)) + '</td>'
+        + '<td>' + pct(t.c20, 1) + '</td><td>' + pct(t.c5, 1) + '</td><td>' + pct(t.c1, 2) + '</td>'
+        + '<td>' + t.ns + '</td></tr>';
     }}).join("");
     document.querySelector("#th-list tbody").innerHTML =
-      html || '<tr><td colspan="8" style="color:#8b949e">該当するテーマがありません</td></tr>';
+      html || '<tr><td colspan="9" style="color:#8b949e">該当するテーマがありません</td></tr>';
   }}
   document.getElementById("th-q").addEventListener("input", function(e) {{ state.q = e.target.value.trim(); render(); }});
   document.getElementById("th-sort").addEventListener("change", function(e) {{ state.sort = e.target.value; render(); }});
@@ -8797,7 +8939,9 @@ def theme_page(theme_id: int):
     if t_info:
         head_stats = f"""<div class="th-head-stats">
   <span class="th-verdict {t_info['vcls']}">{t_info['verdict']}</span>
-  <span class="th-head-stat">買い妙味 <b>{t_info['score']:.0f}</b></span>
+  <span class="th-head-stat">大局 <b>{t_info['macro']:.0f}</b></span>
+  <span class="th-head-stat">短期 <b>{t_info['mom']:.0f}</b></span>
+  <span class="th-head-stat">資金流入 <b>{t_info['inflow_w']}週/26週</b></span>
   <span class="th-head-stat">上昇銘柄比率 <b>{t_info['breadth']:.0%}</b></span>
 </div>"""
 
