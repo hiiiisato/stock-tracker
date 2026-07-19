@@ -8790,95 +8790,139 @@ _YT_CSS = """
 .yt-sv.neu  { background: #21262d; color: #8b949e; }
 .yt-stock-row { font-size: 12px; color: #c9d1d9; line-height: 1.7; }
 .yt-stock-row a { color: #79c0ff; text-decoration: none; font-weight: 600; }
-@media (max-width: 768px) { .yt-cards { grid-template-columns: 1fr; } }
+/* 週次レポート本文（1本のレポート形式） */
+.yt-report { background: #161b22; border: 1px solid #21262d; border-radius: 12px;
+  padding: 8px 22px 18px; }
+.yt-h3 { font-size: 15px; font-weight: 700; color: #e6edf3; margin: 18px 0 6px;
+  padding-bottom: 5px; border-bottom: 1px solid #21262d; }
+.yt-h4 { font-size: 13.5px; font-weight: 700; color: #79c0ff; margin: 12px 0 4px; }
+.yt-p { font-size: 13.5px; color: #c9d1d9; line-height: 1.9; margin: 6px 0; }
+.yt-ul { margin: 4px 0 8px 18px; padding: 0; }
+.yt-ul li { font-size: 13.5px; color: #c9d1d9; line-height: 1.9; }
+.yt-report a { color: #79c0ff; text-decoration: none; }
+.yt-report a:hover { text-decoration: underline; }
+.yt-sources { background: #161b22; border: 1px solid #21262d; border-radius: 10px;
+  padding: 10px 16px; }
+.yt-sources summary { font-size: 12px; color: #8b949e; cursor: pointer; }
+.yt-src-row { display: flex; gap: 10px; align-items: baseline; font-size: 12.5px;
+  padding: 5px 0; border-bottom: 1px solid #21262d55; }
+.yt-src-ch { color: #8b949e; font-size: 11px; white-space: nowrap; }
+.yt-src-row a { color: #c9d1d9; text-decoration: none; flex: 1; }
+.yt-src-row a:hover { color: #58a6ff; }
+.yt-src-dt { color: #484f58; font-size: 11px; }
+@media (max-width: 768px) { .yt-cards { grid-template-columns: 1fr; } .yt-report { padding: 4px 14px 14px; } }
 """
 
 
+def _yt_md_to_html(md: str, cur) -> str:
+    """週次レポートMarkdown → HTML（簡易変換）。全テキストはエスケープ済みで安全。
+    本文中の「(4桁コード)」は stocks テーブルで実在確認して銘柄ページへ自動リンク化。"""
+    import html as _h
+    # 本文中の銘柄コード候補を収集→実在確認
+    codes = set(re.findall(r"[（(]([0-9][0-9A-Z]{3})[)）]", md or ""))
+    valid: set = set()
+    if codes:
+        ph = ",".join(["%s"] * len(codes))
+        cur.execute(f"SELECT code FROM stocks WHERE code IN ({ph})", list(codes))
+        valid = {r[0] for r in cur.fetchall()}
+
+    def _inline(text: str) -> str:
+        t = _h.escape(text)
+        t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
+        # (7203) → 銘柄ページへリンク（DBに実在するコードのみ・誤リンク防止）
+        t = re.sub(r"[（(]([0-9][0-9A-Z]{3})[)）]",
+                   lambda m: (f'(<a href="/stock/{m.group(1)}">{m.group(1)}</a>)'
+                              if m.group(1) in valid else m.group(0)), t)
+        return t
+
+    out, in_list = [], False
+    for line in (md or "").splitlines():
+        s = line.strip()
+        if not s:
+            if in_list:
+                out.append("</ul>"); in_list = False
+            continue
+        if s.startswith("### "):
+            if in_list: out.append("</ul>"); in_list = False
+            out.append(f'<h4 class="yt-h4">{_inline(s[4:])}</h4>')
+        elif s.startswith("## "):
+            if in_list: out.append("</ul>"); in_list = False
+            out.append(f'<h3 class="yt-h3">{_inline(s[3:])}</h3>')
+        elif s.startswith(("- ", "* ")):
+            if not in_list: out.append('<ul class="yt-ul">'); in_list = True
+            out.append(f"<li>{_inline(s[2:])}</li>")
+        else:
+            if in_list: out.append("</ul>"); in_list = False
+            out.append(f'<p class="yt-p">{_inline(s)}</p>')
+    if in_list:
+        out.append("</ul>")
+    return "".join(out)
+
+
 def _build_youtube_page() -> str:
-    """YouTube週報: 株系チャンネルの週次巡回結果（youtube_insights.py が蓄積）。"""
+    """YouTube週報: 全チャンネルの情報を集約した「1本の週次レポート」を主役に表示。
+    個別動画は出典として折りたたみ（youtube_insights.py が蓄積）。"""
     import html as _h
     conn = get_conn(); cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT week_end, n_videos, summary, consensus, divergence, themes_json, stocks_json, created_at
+            SELECT week_end, n_videos, summary, consensus, themes_json, stocks_json, report_md
             FROM youtube_weekly ORDER BY week_end DESC LIMIT 1
         """)
         wk = cur.fetchone()
         cur.execute("""
-            SELECT video_id, channel, title, published, market, stance, actionable,
-                   themes_json, stocks_json
+            SELECT video_id, channel, title, published, stance
             FROM youtube_videos
             WHERE status='analyzed' AND published >= DATE_SUB(NOW(), INTERVAL 14 DAY)
             ORDER BY published DESC LIMIT 30
         """)
         vids = cur.fetchall()
-    except Exception:  # noqa: BLE001  テーブル未作成
-        wk, vids = None, []
-    cur.close(); conn.close()
-
-    def _sv_cls(v):
-        return "bull" if "強気" in (v or "") else ("bear" if "弱気" in (v or "") else "neu")
-
-    weekly_html = ""
-    if wk:
-        week_end, n_videos, summary, consensus, divergence, tj, sj, created = wk
-        themes = _json.loads(tj or "[]")
-        stocks = _json.loads(sj or "[]")
-        theme_chips = "".join(
-            f'<span class="yt-chip" title="{_h.escape(str(t.get("note") or ""))}">{_h.escape(str(t.get("theme") or ""))}</span>'
-            for t in themes)
-        stock_chips = "".join(
-            (f'<a class="yt-stock-chip" href="/stock/{_h.escape(str(s["code"]))}" title="{_h.escape(str(s.get("note") or ""))}">'
-             if s.get("code") else '<span class="yt-stock-chip">')
-            + f'{_h.escape(str(s.get("name") or ""))}<small>{_h.escape(str(s.get("code") or ""))}</small>'
-            + ('</a>' if s.get("code") else '</span>')
-            for s in stocks)
-        div_html = (f'<div>⚡ 見方が分かれる点: {_h.escape(divergence)}</div>' if divergence else "")
-        weekly_html = f"""<div class="yt-weekly">
-  <div class="yt-weekly-title">📺 今週のまとめ（{week_end} 時点・{n_videos}本の動画を横断）</div>
+        report_html, head_html = "", ""
+        if wk:
+            week_end, n_videos, summary, consensus, tj, sj, report_md = wk
+            stocks = _json.loads(sj or "[]")
+            stock_chips = "".join(
+                (f'<a class="yt-stock-chip" href="/stock/{_h.escape(str(s["code"]))}" title="{_h.escape(str(s.get("note") or ""))}">'
+                 if s.get("code") else '<span class="yt-stock-chip">')
+                + f'{_h.escape(str(s.get("name") or ""))}<small>{_h.escape(str(s.get("code") or ""))}</small>'
+                + ('</a>' if s.get("code") else '</span>')
+                for s in stocks)
+            head_html = f"""<div class="yt-weekly">
+  <div class="yt-weekly-title">📺 今週の結論（{week_end}・{n_videos}本を横断集約）</div>
   <div class="yt-summary">{_h.escape(summary or "")}</div>
   <div class="yt-meta">
-    <div>🧭 全体トーン: {_h.escape(consensus or "—")}</div>
-    {div_html}
-    <div style="margin-top:6px">🔥 注目テーマ: {theme_chips or "—"}</div>
-    <div style="margin-top:4px">👀 言及銘柄: {stock_chips or "—"}</div>
+    <div>🧭 {_h.escape(consensus or "—")}</div>
+    <div style="margin-top:6px">👀 言及銘柄: {stock_chips or "—"}</div>
   </div>
 </div>"""
+            if report_md:
+                report_html = f'<div class="yt-report">{_yt_md_to_html(report_md, cur)}</div>'
+    except Exception:  # noqa: BLE001  テーブル未作成
+        wk, vids, report_html, head_html = None, [], "", ""
+    cur.close(); conn.close()
 
-    cards = []
-    for vid, ch, title, pub, market, stance, actionable, tj, sj in vids:
-        themes = _json.loads(tj or "[]")
-        stocks = _json.loads(sj or "[]")
-        chips = "".join(f'<span class="yt-chip">{_h.escape(str(t))}</span>' for t in themes[:5])
-        srows = ""
-        for s in stocks[:6]:
-            link = (f'<a href="/stock/{_h.escape(str(s["code"]))}">{_h.escape(s["name"])}</a>'
-                    if s.get("code") else _h.escape(s.get("name") or ""))
-            srows += (f'<div class="yt-stock-row"><span class="yt-sv {_sv_cls(s.get("view"))}">'
-                      f'{_h.escape(s.get("view") or "中立")}</span> {link} — '
-                      f'{_h.escape(s.get("reason") or "")}</div>')
-        act = f'<div class="yt-action">💡 {_h.escape(actionable)}</div>' if actionable else ""
-        cards.append(f"""<div class="yt-card">
-  <div class="yt-card-hd"><span>{_h.escape(ch or "")}</span><span>{pub:%m/%d}</span></div>
-  <div class="yt-card-title"><a href="https://www.youtube.com/watch?v={_h.escape(vid)}" target="_blank" rel="noopener">▶ {_h.escape(title or "")}</a></div>
-  <div class="yt-market">{_h.escape(market or "")}</div>
-  <div class="yt-stance">🧭 {_h.escape(stance or "")}</div>
-  {act}
-  <div>{chips}</div>
-  {srows}
-</div>""")
+    src_rows = "".join(
+        f'<div class="yt-src-row"><span class="yt-src-ch">{_h.escape(ch or "")}</span>'
+        f'<a href="https://www.youtube.com/watch?v={_h.escape(vid)}" target="_blank" rel="noopener">▶ {_h.escape(title or "")}</a>'
+        f'<span class="yt-src-dt">{pub:%m/%d}</span></div>'
+        for vid, ch, title, pub, _st in vids)
+    sources_html = (f"""<details class="yt-sources">
+  <summary>出典: 分析した動画 {len(vids)}本（クリックで展開）</summary>
+  {src_rows}
+</details>""" if vids else "")
 
     empty = ('<p style="color:#8b949e;padding:30px">まだデータがありません。'
-             '週次バッチ（土曜朝）実行後に表示されます。</p>') if not (wk or cards) else ""
+             '週次バッチ（土曜朝）実行後に表示されます。</p>') if not wk else ""
     body = f"""<style>{_YT_CSS}</style>
 <div class="page-header">
   <div class="page-title">YouTube週報 — 株系チャンネルをAIが週次巡回</div>
-  <div class="page-subtitle">登録チャンネルの新着動画をAIが視聴し、マーケット状況・注目テーマ・言及銘柄を構造化。
+  <div class="page-subtitle">登録チャンネルの新着動画をAIが視聴し、全チャンネルの情報を1本のレポートに集約。
   複数の発信者が同時に言及する銘柄・テーマ＝市場の注目先を機械的に抽出します（毎週土曜更新）</div>
 </div>
 <div class="yt-wrap">
-{weekly_html}
-<div class="yt-cards">{"".join(cards)}</div>
+{head_html}
+{report_html}
+{sources_html}
 {empty}
 </div>"""
     return _page_html("YouTube週報", body, active="youtube")
