@@ -829,9 +829,12 @@ def _candidates(cur, exclude: set[str], regime_up: bool = True) -> list[dict]:
         ORDER BY zscore DESC LIMIT 5
     """)
     for theme, z in cur.fetchall():
+        # テーマ所属は統一マスタ(みんかぶ・tier>=2)。kabutan_themesは2026-07廃止
         cur.execute(
             sel + base_from.replace(
-                "WHERE", "WHERE p.code IN (SELECT code FROM kabutan_themes WHERE theme = %s) AND", 1) + """
+                "WHERE",
+                "WHERE p.code IN (SELECT tm.code FROM theme_members tm "
+                "JOIN themes t ON t.id = tm.theme_id WHERE t.name = %s AND tm.tier >= 2) AND", 1) + """
             AND p.chg25d < 12 AND p.chg5d > -5 AND p.ma200_slope >= 0 AND p.rsi14 < 65
             ORDER BY p.turnover_20d DESC LIMIT 3
         """, (theme,))
@@ -853,19 +856,23 @@ def _candidates(cur, exclude: set[str], regime_up: bool = True) -> list[dict]:
     # 出遅れ(+3.7%)の約2倍と実測。テーマ強度は株価ベース（平均25日騰落+10%以上・メンバー8以上）。
     # レジームゲート対象（モメンタム系のため）
     if regime_up:
+        # テーマ所属は統一マスタ(みんかぶ・tier>=2)。kabutan_themesは2026-07廃止
         cur.execute("""
-            SELECT kt.theme, AVG(p.chg25d) AS t_mom, COUNT(*) AS n
-            FROM kabutan_themes kt
-            JOIN stocks s ON s.code = kt.code AND s.is_active = 1
-            JOIN price_stats p ON p.code = kt.code
-            WHERE p.turnover_20d >= 3 AND p.close BETWEEN 300 AND 24000
-            GROUP BY kt.theme HAVING n >= 8 AND t_mom >= 10
+            SELECT t.name, AVG(p.chg25d) AS t_mom, COUNT(*) AS n
+            FROM theme_members tm
+            JOIN themes t ON t.id = tm.theme_id AND t.status = 'active'
+            JOIN stocks s ON s.code = tm.code AND s.is_active = 1
+            JOIN price_stats p ON p.code = tm.code
+            WHERE tm.tier >= 2 AND p.turnover_20d >= 3 AND p.close BETWEEN 300 AND 24000
+            GROUP BY t.id, t.name HAVING n >= 8 AND t_mom >= 10
             ORDER BY t_mom DESC LIMIT 5
         """)
         for theme, t_mom, _n in cur.fetchall():
             cur.execute(
                 sel + base_from.replace(
-                    "WHERE", "WHERE p.code IN (SELECT code FROM kabutan_themes WHERE theme = %s) AND", 1) + """
+                    "WHERE",
+                    "WHERE p.code IN (SELECT tm.code FROM theme_members tm "
+                    "JOIN themes t ON t.id = tm.theme_id WHERE t.name = %s AND tm.tier >= 2) AND", 1) + """
                 AND p.close > p.ma25 AND p.chg5d > -4 AND p.rsi14 < 85
                 ORDER BY p.chg25d DESC LIMIT 3
             """, (theme,))

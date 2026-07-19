@@ -27,8 +27,8 @@ from config import get_conn, bulk_upsert
 #  チューニングパラメータ（変更しやすいよう先頭にまとめる）
 # ═══════════════════════════════════════════════════════════
 
-# relevance スコアに対する加重（周辺=1, 関連=2, コア=3）
-RELEVANCE_WEIGHTS: dict[int, float] = {1: 1.0, 2: 2.0, 3: 3.0}
+# テーマ指数の銘柄加重: みんかぶ関連度(60-100)をそのまま重みに使う
+# （コア80点は関連60点の1.33倍の影響。テーマの主役の動きが指数に強く出る）
 
 # 資金流入比率（turnover_surge）の基準ウィンドウ（営業日）
 SURGE_WINDOW = 20
@@ -52,20 +52,22 @@ HEAT_WEIGHTS: dict[str, float] = {
 # ═══════════════════════════════════════════════════════════
 
 def _get_theme_stocks(conn) -> dict[int, list[dict]]:
-    """小分類テーマ別の銘柄リスト {theme_id: [{code, weight}]} を返す"""
+    """テーマ別の銘柄リスト {theme_id: [{code, weight}]} を返す。
+    ソースは統一テーママスタ(theme_master.py＝みんかぶ)。集計は tier>=2(関連度60+)のみ。
+    旧: theme_categories/stock_themes(自前21テーマ) — 2026-07にみんかぶへ統一。"""
     cur = conn.cursor()
     cur.execute("""
-        SELECT tc.id, st.code, st.relevance
-        FROM theme_categories tc
-        JOIN stock_themes st ON st.theme_id = tc.id
-        JOIN stocks s ON s.code = st.code
-        WHERE tc.level = 2 AND s.is_active = TRUE
+        SELECT tm.theme_id, tm.code, tm.relevance
+        FROM theme_members tm
+        JOIN themes t ON t.id = tm.theme_id
+        JOIN stocks s ON s.code = tm.code
+        WHERE t.status = 'active' AND tm.tier >= 2 AND s.is_active = TRUE
     """)
     result: dict[int, list[dict]] = defaultdict(list)
     for theme_id, code, relevance in cur.fetchall():
         result[theme_id].append({
             "code": code,
-            "weight": RELEVANCE_WEIGHTS.get(int(relevance), 1.0),
+            "weight": float(relevance or 60),
         })
     cur.close()
     return dict(result)
@@ -101,8 +103,10 @@ def _compute_raw_day(conn, target_date: date, theme_stocks: dict) -> int:
             continue
 
         total_weight = sum(s["weight"] for s, _ in hits)
+        # 個別リターンは±25%にクリップ（ウィンズライズ）。新規上場初日や特殊イベントの
+        # 数百%リターンが1銘柄でテーマ指数を吹き飛ばすのを防ぐ（指数の頑健化）
         avg_chg = sum(
-            s["weight"] * float(p[1] or 0) for s, p in hits
+            s["weight"] * max(-25.0, min(25.0, float(p[1] or 0))) for s, p in hits
         ) / total_weight
 
         total_t = sum(int(p[2] or 0) for _, p in hits)
@@ -140,53 +144,60 @@ def _compute_raw_day(conn, target_date: date, theme_stocks: dict) -> int:
     return len(rows)
 
 
-def _update_derived(conn) -> int:
+def _update_derived(conn, since: date | None = None) -> int:
     """
-    全行の index_value / turnover_surge / heat_score を再計算して UPDATE する。
-    生統計(_compute_raw_day)が揃った後に呼ぶ。
+    index_value / turnover_surge / heat_score を再計算して upsert する。
+    since=None : 全期間の完全再計算（初回・--all・--reindex用）
+    since=日付 : その日以降の行だけ更新する増分モード（日次用）。
+                 みんかぶ統一で1,100超テーマ×全期間=数十万行の毎日全更新は重いため、
+                 過去70日分だけロードし、先頭行の保存済みindex_valueを起点(アンカー)に
+                 前進計算する（70日 ≒ 営業日47日 > SURGE_WINDOW+HEAT_WINDOW で窓は充足）。
     """
+    from datetime import timedelta
     cur = conn.cursor()
-    cur.execute("""
-        SELECT id, date, theme_id, avg_change_pct, total_turnover, breadth_ratio
-        FROM theme_daily_stats
-        ORDER BY theme_id, date
-    """)
+    if since is None:
+        cur.execute("""
+            SELECT date, theme_id, avg_change_pct, total_turnover, breadth_ratio, index_value
+            FROM theme_daily_stats ORDER BY theme_id, date
+        """)
+    else:
+        cur.execute("""
+            SELECT date, theme_id, avg_change_pct, total_turnover, breadth_ratio, index_value
+            FROM theme_daily_stats WHERE date >= %s ORDER BY theme_id, date
+        """, (since - timedelta(days=70),))
     all_rows = cur.fetchall()
 
-    # theme_id ごとに時系列リストへ整理
     theme_data: dict[int, list[dict]] = defaultdict(list)
-    for id_, dt, theme_id, avg_chg, total_t, breadth in all_rows:
+    for dt, theme_id, avg_chg, total_t, breadth, idx_stored in all_rows:
         theme_data[int(theme_id)].append({
-            "id": int(id_),
             "date": dt,
             "avg_change_pct": float(avg_chg or 0),
             "total_turnover": int(total_t or 0),
             "breadth_ratio":  float(breadth or 0.5),
+            "index_stored":   float(idx_stored) if idx_stored is not None else None,
         })
 
-    updates = []
+    out_rows = []
     for theme_id, data in theme_data.items():
         turnovers = [d["total_turnover"] for d in data]
 
         # Pass 1: index_value と turnover_surge
         for i, d in enumerate(data):
-            # 累積指数（初日=100、各日の加重平均リターンを複利積み上げ）
             if i == 0:
-                d["index_value"] = 100.0
+                # 全再計算なら100起点。増分ならアンカー（保存済みindexを信頼して継続）
+                d["index_value"] = 100.0 if since is None else (d["index_stored"] or 100.0)
             else:
                 d["index_value"] = round(
                     data[i - 1]["index_value"] * (1 + d["avg_change_pct"] / 100), 4
                 )
-
-            # 資金流入比率: 今日の売買代金 ÷ 直近N日の平均
-            window = turnovers[max(0, i - SURGE_WINDOW):i]  # 今日を除いた過去N日
+            window = turnovers[max(0, i - SURGE_WINDOW):i]
             avg_t = sum(window) / len(window) if window else turnovers[i]
-            d["turnover_surge"] = round(
-                turnovers[i] / avg_t if avg_t > 0 else 1.0, 4
-            )
+            d["turnover_surge"] = round(turnovers[i] / avg_t if avg_t > 0 else 1.0, 4)
 
-        # Pass 2: heat_score（index_value が確定してから計算）
+        # Pass 2: heat_score
         for i, d in enumerate(data):
+            if since is not None and d["date"] < since:
+                continue   # 増分モードでは対象日以降のみ書き込む
             ref_idx = data[max(0, i - HEAT_WINDOW)]["index_value"]
             ret_5d  = (d["index_value"] / ref_idx - 1) * 100 if ref_idx else 0
             heat = (
@@ -194,21 +205,25 @@ def _update_derived(conn) -> int:
               + HEAT_WEIGHTS["flow"]    * (d["turnover_surge"] - 1) * 10
               + HEAT_WEIGHTS["breadth"] * (d["breadth_ratio"]  - 0.5) * 20
             )
-            updates.append((
-                d["index_value"],
-                d["turnover_surge"],
-                round(heat, 4),
-                d["id"],
-            ))
+            # 列型のレンジにクリップ（index DECIMAL(12,4) / surge・heat DECIMAL(8,4)）。
+            # 売買代金ほぼゼロのテーマのsurge爆発等で書込みエラーにならないよう防御
+            out_rows.append([
+                d["date"], theme_id,
+                min(d["index_value"], 99999999.0),
+                min(d["turnover_surge"], 9999.0),
+                max(-9999.0, min(9999.0, round(heat, 4))),
+            ])
 
-    cur.executemany("""
-        UPDATE theme_daily_stats
-        SET index_value=%s, turnover_surge=%s, heat_score=%s, updated_at=NOW()
-        WHERE id=%s
-    """, updates)
+    # (date, theme_id) ユニークキーで既存行の派生3列だけ更新（batched・数十万行でも実用速度）
+    bulk_upsert(
+        cur, "theme_daily_stats",
+        ["date", "theme_id", "index_value", "turnover_surge", "heat_score"],
+        out_rows,
+        update_cols=["index_value", "turnover_surge", "heat_score"],
+    )
     conn.commit()
     cur.close()
-    return len(updates)
+    return len(out_rows)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -229,7 +244,7 @@ def compute_day(target_date: date = None) -> None:
     theme_stocks = _get_theme_stocks(conn)
     n_raw = _compute_raw_day(conn, target_date, theme_stocks)
     print(f"  生統計: {n_raw} テーマ更新")
-    n_der = _update_derived(conn)
+    n_der = _update_derived(conn, since=target_date)   # 増分（対象日以降のみ）
     print(f"  派生値: {n_der} 行更新")
     conn.close()
 

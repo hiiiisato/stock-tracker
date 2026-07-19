@@ -2,7 +2,7 @@
 資金フロー分析 — 「どこに資金が流入しているか」を週次で多角的に集計する。
 
 グループ軸（4種類）:
-  theme  : kabutanテーマタグ（kabutan_themes、銘柄ごとに多数付与 → AI株・防衛・半導体など細かい切り口）
+  theme  : 統一テーママスタ（theme_master.py＝みんかぶ関連度付き・tier>=2のみ）
   sector : 東証33業種（sectors）
   size   : 時価総額帯（大型≥1兆 / 準大型3000億-1兆 / 中型1000-3000億 / 小型300-1000億 / 超小型<300億）
   style  : 投資スタイル（高配当・バリュー・グロース・好業績・高ROE・低位株）
@@ -38,12 +38,6 @@ LOOKBACK_WEEKS = 26      # 計算対象の週数（13週ベースライン + 表
 BASELINE_WEEKS = 13      # flow_ratio のベースライン週数
 MIN_STOCKS     = 5       # グループ最小銘柄数（これ未満は保存しない）
 TOPIX_ETF      = "1306"  # ベンチマーク
-# 銘柄あたりのkabutanテーマ付与数の上限。これを超える銘柄（パナソニック162・NTT103・
-# セブン&アイ57 等の巨大コングロマリット）は、多数テーマに広く付与されタグがノイズ化し、
-# 巨大な売買代金でニッチテーマの指標・代表銘柄を汚染するため、テーマ集計から除外する。
-# ※業種/規模/スタイルのグループには影響しない（テーマ集計のみ）。中央値11・75%ile16 に対し
-#   25 は上位約8%（明確に拡散したコングロ）だけを外す水準。
-THEME_MAX_PER_STOCK = 25
 
 SIZE_BUCKETS = [
     ("mega",  "大型（1兆円以上）",        lambda mc: mc >= 1e12),
@@ -156,34 +150,13 @@ def _load_groups(cur) -> tuple[dict, dict]:
             groups[code].append(("style", key))
             labels[("style", key)] = label
 
-    # テーマ: 統一テーママスタ(theme_master.py)の active テーマ × tier>=2(コア/関連)のみ。
-    # 旧: kabutanタグ直接参照（コングロ汚染のため2026-07に廃止。タグは証拠データとして
-    # theme_master のスコアリングに使われる）。フォールバック: マスタ未構築なら旧方式。
-    try:
-        from theme_master import load_theme_groups
-        tg, tl = load_theme_groups(cur, min_tier=2)
-        if not tl:
-            raise RuntimeError("テーママスタが空")
-        for code, glist in tg.items():
-            groups[code].extend(glist)
-        labels.update(tl)
-    except Exception as e:  # noqa: BLE001  (テーブル未作成等)
-        print(f"  [theme_master] 読込失敗・kabutanタグに fallback: {str(e)[:60]}")
-        cur.execute("""
-            SELECT kt.theme, kt.code
-            FROM kabutan_themes kt
-            JOIN stocks s ON s.code = kt.code
-            WHERE s.is_active = 1 AND s.market_id IN (2, 3, 4)
-              AND kt.theme IN (
-                SELECT theme FROM kabutan_themes GROUP BY theme HAVING COUNT(*) >= %s
-              )
-              AND kt.code NOT IN (
-                SELECT code FROM kabutan_themes GROUP BY code HAVING COUNT(*) > %s
-              )
-        """, (MIN_STOCKS, THEME_MAX_PER_STOCK))
-        for theme, code in cur.fetchall():
-            groups[code].append(("theme", theme))
-            labels[("theme", theme)] = theme
+    # テーマ: 統一テーママスタ(theme_master.py＝みんかぶ・関連度付き)の active テーマ ×
+    # tier>=2(コア/関連)のみ。kabutanタグ(kabutan_themes)の参照は2026-07に全廃（ユーザー指示）。
+    from theme_master import load_theme_groups
+    tg, tl = load_theme_groups(cur, min_tier=2)
+    for code, glist in tg.items():
+        groups[code].extend(glist)
+    labels.update(tl)
     return groups, labels
 
 
@@ -214,11 +187,14 @@ def compute(weeks: int = LOOKBACK_WEEKS) -> int:
     cur.execute("SELECT code, name FROM stocks WHERE is_active = 1")
     names = dict(cur.fetchall())
 
-    # 代表銘柄の「テーマ特化度」重み用: 銘柄あたりの全kabutanテーマ数。
-    # テーマの代表銘柄は「売買代金 ÷ テーマ数」で選び、多数テーマに緩く付いた大型株より
-    # そのテーマに特化した銘柄が前に出るようにする（表示上の代表性を高める。指標は実額のまま）。
-    cur.execute("SELECT code, COUNT(*) FROM kabutan_themes GROUP BY code")
-    theme_cnt = {c: int(n) for c, n in cur.fetchall()}
+    # 代表銘柄の選定用: みんかぶ関連度 (テーマ名, code) → relevance。
+    # テーマの代表銘柄は「関連度が高い順 → 同関連度内で売買代金順」で選ぶ（指標は実額のまま）。
+    cur.execute("""
+        SELECT t.name, tm.code, tm.relevance FROM theme_members tm
+        JOIN themes t ON t.id = tm.theme_id
+        WHERE t.status='active' AND tm.tier >= 2
+    """)
+    theme_rel = {(n, c): int(r or 0) for n, c, r in cur.fetchall()}
 
     # 週次の銘柄別集計: 週間売買代金・週末終値（分割調整済み）
     # ※ 26週×約3700銘柄 ≈ 45万行を1クエリで集計してPython側でグループ展開する
@@ -298,7 +274,8 @@ def compute(weeks: int = LOOKBACK_WEEKS) -> int:
                     a["rets"].append(ret)
                     # テーマは特化度(=売買代金÷テーマ数)で代表銘柄を選ぶ。
                     # 業種/規模/スタイルは該当しないので売買代金そのもの。
-                    score = tv / theme_cnt.get(code, 1) if gtype == "theme" else tv
+                    # テーマ: 関連度優先(同関連度内は売買代金順)。1e15倍で桁を分離(tv最大~1e13)
+                    score = (theme_rel.get((gkey, code), 0) * 1e15 + tv) if gtype == "theme" else tv
                     if len(a["tops"]) < 5:
                         heapq.heappush(a["tops"], (score, tv, code, ret))
                     elif score > a["tops"][0][0]:

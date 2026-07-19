@@ -90,7 +90,7 @@ def ensure_tables(cur) -> None:
             status      VARCHAR(12) NOT NULL DEFAULT 'active',   -- active/archived
             origin      VARCHAR(20),          -- minkabu / curated / manual
             keywords    VARCHAR(255),         -- （旧設計の名残・手動メモ用に残置）
-            description VARCHAR(255),
+            description VARCHAR(1000),
             hot_rank    INT,
             last_seen   DATETIME,             -- みんかぶ一覧で最後に確認した日時
             last_synced DATETIME,             -- 構成銘柄を最後に同期した日時
@@ -111,10 +111,11 @@ def ensure_tables(cur) -> None:
             PRIMARY KEY (theme_id, code)
         )
     """)
-    # 旧スキーマからの移行（列が無ければ追加）
-    for col, typedef in [("last_seen", "DATETIME"), ("last_synced", "DATETIME")]:
+    # 旧スキーマからの移行（列が無ければ追加・説明文は長いので拡張）
+    for ddl in ["ADD COLUMN last_seen DATETIME", "ADD COLUMN last_synced DATETIME",
+                "MODIFY description VARCHAR(1000)"]:
         try:
-            cur.execute(f"ALTER TABLE themes ADD COLUMN {col} {typedef}")
+            cur.execute(f"ALTER TABLE themes {ddl}")
         except Exception:  # noqa: BLE001  既に存在
             pass
 
@@ -149,12 +150,22 @@ def fetch_theme_list(session: requests.Session) -> list[str]:
     return names
 
 
-def fetch_members(session: requests.Session, theme: str) -> dict[str, int]:
-    """1テーマの構成銘柄と関連度を全ページ取得。{code: relevance}"""
+def fetch_members(session: requests.Session, theme: str) -> tuple[dict[str, int], str]:
+    """1テーマの構成銘柄と関連度を全ページ取得。({code: relevance}, 説明文)"""
     members: dict[str, int] = {}
+    description = ""
     quoted = urllib.parse.quote(theme)
     for page in range(1, MAX_MEMBER_PAGES + 1):
         r = _get(session, f"{BASE}/theme/{quoted}", {"page": page} if page > 1 else None)
+        if page == 1:
+            # テーマ説明文（p.c_caution）。定型プレフィックス「株式テーマ「X」に関連する
+            # 銘柄一覧です。〜掲載しています。」を除去して本文だけ残す
+            m = re.search(r'<p class="c_caution[^"]*">(.*?)</p>', r.text, re.S)
+            if m:
+                raw = html.unescape(re.sub(r"<[^>]+>", "", m.group(1))).strip()
+                raw = re.sub(r"^株式テーマ「.*?」に関連する銘柄一覧です。", "", raw)
+                raw = re.sub(r"^このテーマに関連する\d+銘柄の株価、前日比、関連度を掲載しています。", "", raw)
+                description = raw.strip()[:1000]
         # 行ごとに (コード, 関連度) を抽出。関連度はVueコンポーネントの :value 属性
         chunks = re.split(r"<tr[ >]", r.text)[1:]
         added = 0
@@ -169,7 +180,7 @@ def fetch_members(session: requests.Session, theme: str) -> dict[str, int]:
         if added == 0:
             break
         time.sleep(DELAY)
-    return members
+    return members, description
 
 
 # ═══════════════════════════════════════════════════════════
@@ -258,7 +269,7 @@ def sync(max_themes: int = DAILY_SYNC_THEMES, only_theme: str | None = None,
 
     for tid, tname in targets:
         try:
-            members = fetch_members(session, tname)
+            members, description = fetch_members(session, tname)
         except Exception as e:  # noqa: BLE001
             stats["failed"] += 1
             if verbose:
@@ -299,7 +310,9 @@ def sync(max_themes: int = DAILY_SYNC_THEMES, only_theme: str | None = None,
                     DELETE FROM theme_members
                     WHERE theme_id=%s AND updated_at < %s AND manual_lock NOT LIKE 'pin%%'
                 """, (tid, now))
-                cur.execute("UPDATE themes SET last_synced=%s, updated_at=%s WHERE id=%s", (now, now, tid))
+                cur.execute("UPDATE themes SET last_synced=%s, updated_at=%s, "
+                            "description=COALESCE(NULLIF(%s,''), description) WHERE id=%s",
+                            (now, now, description, tid))
                 conn.commit()
                 stats["synced"] += 1
                 stats["member_rows"] += len(rows)

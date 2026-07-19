@@ -94,10 +94,8 @@ def fetch_one(code: str) -> dict | None:
                 data["summary"] = td.text.strip()[:1000]
             elif key == "会社サイト":
                 data["website"] = td.text.strip()[:255]
-            elif key == "テーマ":
-                links = td.find_all("a")
-                names = [a.text.strip() for a in links] if links else td.text.split()
-                data["themes"] = [t[:80] for t in names if t.strip()]
+            # 「テーマ」タグの取得は2026-07に廃止（ユーザー指示）。テーマは theme_master.py
+            # （みんかぶ・関連度付き）に一本化。kabutan_themes テーブルは更新停止・参照もしない。
         return data
     except Exception as e:
         print(f"  [company_profile] {code}: {e}")
@@ -127,12 +125,7 @@ def _save(code: str, data: dict, now: str):
                     SET s.market_id = m.id
                     WHERE s.code = %s AND s.market_id IS NULL
                 """, (mcode, code))
-            themes = data.get("themes") or []
-            if themes:
-                cur.execute("DELETE FROM kabutan_themes WHERE code = %s", (code,))
-                cur.executemany(
-                    "INSERT IGNORE INTO kabutan_themes (code, theme) VALUES (%s, %s)",
-                    [(code, t) for t in themes])
+            # kabutan_themes への保存は2026-07に廃止（テーマは theme_master.py に一本化）
             conn.commit()
             cur.close()
             conn.close()

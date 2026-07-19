@@ -257,11 +257,11 @@ def fetch_theme_stocks(max_workers: int = 4) -> int:
     conn = get_conn()
     cur  = conn.cursor()
     cur.execute("""
-        SELECT DISTINCT st.code
-        FROM stock_themes st
-        JOIN stocks s ON st.code = s.code
-        WHERE s.is_active = TRUE
-        ORDER BY st.code
+        SELECT DISTINCT tm.code
+        FROM theme_members tm
+        JOIN stocks s ON tm.code = s.code
+        WHERE tm.tier >= 2 AND s.is_active = TRUE
+        ORDER BY tm.code
     """)
     codes = [r[0] for r in cur.fetchall()]
     cur.close()

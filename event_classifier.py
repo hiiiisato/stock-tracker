@@ -109,17 +109,17 @@ def _topix_change(cur, ranking_date: date) -> float | None:
 
 
 def _load_theme_moves(cur, codes: list[str], ranking_date: date) -> dict:
-    """銘柄が所属する自前テーマのうち当日変動が最も大きいものを返す
+    """銘柄が所属するテーマ（統一マスタ・tier>=2）のうち当日変動が最も大きいものを返す
     {code: (theme_name, avg_change_pct, breadth_ratio)}。stock_count>=5 のテーマのみ。"""
     if not codes:
         return {}
     ph = ",".join(["%s"] * len(codes))
     cur.execute(f"""
-        SELECT st.code, tc.name, tds.avg_change_pct, tds.breadth_ratio
-        FROM stock_themes st
-        JOIN theme_daily_stats tds ON tds.theme_id = st.theme_id AND tds.date = %s
-        JOIN theme_categories tc ON tc.id = st.theme_id
-        WHERE st.code IN ({ph}) AND tds.stock_count >= 5
+        SELECT tm.code, t.name, tds.avg_change_pct, tds.breadth_ratio
+        FROM theme_members tm
+        JOIN themes t ON t.id = tm.theme_id AND t.status = 'active'
+        JOIN theme_daily_stats tds ON tds.theme_id = tm.theme_id AND tds.date = %s
+        WHERE tm.code IN ({ph}) AND tm.tier >= 2 AND tds.stock_count >= 5
     """, (ranking_date, *codes))
     out: dict = {}
     for code, name, avg, breadth in cur.fetchall():

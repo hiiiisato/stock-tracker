@@ -25,7 +25,6 @@ from bs4 import BeautifulSoup as _BS
 from flask import Flask, abort, redirect, request, jsonify
 
 from config import get_conn, db
-from theme_report import generate_report
 
 app = Flask(__name__)
 
@@ -3207,8 +3206,54 @@ _THEME_CSS = """
 .th-head-stats { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 6px 0 2px; }
 .th-head-stat { font-size: 12px; color: #8b949e; }
 .th-head-stat b { color: #e6edf3; font-size: 14px; }
+
+/* 一覧: 注目テーマカード・検索 */
+.th-sec-title { font-size: 14px; font-weight: 700; color: #c9d1d9; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.th-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.th-card {
+  background: #161b22; border: 1px solid #21262d; border-radius: 10px; padding: 12px 14px;
+  text-decoration: none; display: flex; flex-direction: column; gap: 8px; transition: border-color .15s;
+}
+.th-card:hover { border-color: #58a6ff66; }
+.th-card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.th-card-name { font-size: 15px; font-weight: 700; color: #e6edf3; }
+.th-card-nums { display: flex; gap: 14px; flex-wrap: wrap; }
+.th-card-num i { font-style: normal; font-size: 10px; color: #8b949e; display: block; }
+.th-card-num b { font-size: 14px; color: #e6edf3; }
+.th-search {
+  background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
+  padding: 5px 12px; font-size: 13px; width: 240px; max-width: 55vw;
+}
+.th-sortsel {
+  background: #161b22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
+  padding: 5px 8px; font-size: 12px;
+}
+
+/* 詳細: 指標カード・関連度バー・ミニチャート */
+.td-desc { font-size: 13px; color: #a5b1bd; line-height: 1.8; background: #161b22;
+  border: 1px solid #21262d; border-radius: 8px; padding: 12px 16px; }
+.td-stats { display: flex; gap: 12px; flex-wrap: wrap; }
+.td-stat {
+  background: #161b22; border: 1px solid #21262d; border-radius: 10px;
+  padding: 10px 18px; min-width: 108px; text-align: center;
+}
+.td-stat i { font-style: normal; font-size: 11px; color: #8b949e; display: block; margin-bottom: 2px; }
+.td-stat b { font-size: 20px; font-weight: 700; }
+.td-chart-bar { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.td-range-btn {
+  background: #161b22; color: #8b949e; border: 1px solid #30363d; border-radius: 6px;
+  padding: 3px 12px; font-size: 12px; cursor: pointer;
+}
+.td-range-btn.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+.rel-bar-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.rel-bar { width: 52px; height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; }
+.rel-bar i { display: block; height: 100%; background: #58a6ff; border-radius: 4px; }
+.rel-val { font-size: 11px; color: #8b949e; }
+.mini-chart svg { display: block; }
 @media (max-width: 768px) {
   .th-table td, .th-table th { padding: 6px 5px; }
+  .td-stat { padding: 8px 12px; min-width: 88px; }
+  .td-stat b { font-size: 17px; }
 }
 """
 
@@ -3226,12 +3271,13 @@ def _compute_theme_scores() -> list[dict]:
         return cached
 
     conn = get_conn(); cur = conn.cursor()
+    # ソースは統一テーママスタ(theme_master.py＝みんかぶ・関連度付き)。2026-07に旧自前21テーマから統一
     cur.execute("""
-        SELECT tds.theme_id, tc.name, tds.date, tds.index_value, tds.heat_score,
+        SELECT tds.theme_id, t.name, tds.date, tds.index_value, tds.heat_score,
                tds.avg_change_pct, tds.breadth_ratio, tds.turnover_surge
         FROM theme_daily_stats tds
-        JOIN theme_categories tc ON tds.theme_id = tc.id
-        WHERE tc.level = 2
+        JOIN themes t ON tds.theme_id = t.id
+        WHERE t.status = 'active'
           AND tds.date >= DATE_SUB(CURDATE(), INTERVAL 45 DAY)
         ORDER BY tds.theme_id, tds.date
     """)
@@ -3241,25 +3287,30 @@ def _compute_theme_scores() -> list[dict]:
             (dt, float(idx or 0), float(heat or 0), float(chg or 0),
              float(breadth or 0), float(surge or 0)))
 
-    # テーマ内の直近14日の好材料開示・値上がりイベント数
+    # テーマ内の直近14日の好材料開示・値上がりイベント数（tier>=2＝コア/関連のみ）
     cur.execute("""
-        SELECT st.theme_id, COUNT(DISTINCT d.id)
-        FROM stock_themes st
-        JOIN disclosures d ON d.code = st.code
-        WHERE d.category IN ('earnings_up','div_up')
+        SELECT tm.theme_id, COUNT(DISTINCT d.id)
+        FROM theme_members tm
+        JOIN disclosures d ON d.code = tm.code
+        WHERE tm.tier >= 2
+          AND d.category IN ('earnings_up','div_up')
           AND d.disclosed_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
-        GROUP BY st.theme_id
+        GROUP BY tm.theme_id
     """)
     disc_by_theme = {r[0]: int(r[1]) for r in cur.fetchall()}
     cur.execute("""
-        SELECT st.theme_id, COUNT(DISTINCT pe.code)
-        FROM stock_themes st
-        JOIN price_events pe ON pe.code = st.code
-        WHERE pe.direction = 'up' AND pe.period = 'daily'
+        SELECT tm.theme_id, COUNT(DISTINCT pe.code)
+        FROM theme_members tm
+        JOIN price_events pe ON pe.code = tm.code
+        WHERE tm.tier >= 2
+          AND pe.direction = 'up' AND pe.period = 'daily'
           AND pe.event_date >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
-        GROUP BY st.theme_id
+        GROUP BY tm.theme_id
     """)
     ev_by_theme = {r[0]: int(r[1]) for r in cur.fetchall()}
+    # テーマの構成銘柄数(tier>=2)
+    cur.execute("SELECT theme_id, COUNT(*) FROM theme_members WHERE tier >= 2 GROUP BY theme_id")
+    n_by_theme = {r[0]: int(r[1]) for r in cur.fetchall()}
     cur.close(); conn.close()
 
     results = []
@@ -3317,7 +3368,8 @@ def _compute_theme_scores() -> list[dict]:
         results.append({
             "id": tid, "name": d["name"], "score": round(score, 1),
             "verdict": verdict, "vcls": vcls,
-            "chg5": chg5, "chg20": chg20, "breadth": breadth,
+            "chg1d": latest[3], "chg5": chg5, "chg20": chg20, "breadth": breadth,
+            "n_stocks": n_by_theme.get(tid, 0),
             "chips": chips,
         })
 
@@ -3333,18 +3385,19 @@ def _score_theme_stocks(theme_id: int, limit: int = 40) -> list[dict]:
     理論株価の上昇余地、好材料開示（上方修正・増配）、関連度、流動性。
     """
     conn = get_conn(); cur = conn.cursor()
+    # 統一テーママスタ(みんかぶ関連度60-100)の tier>=2(コア/関連)のみ採点対象
     cur.execute("""
-        SELECT st.code, s.name, st.relevance,
+        SELECT tm.code, s.name, tm.relevance,
                ps.close, ps.chg5d, ps.chg25d, ps.ma25, ps.ma75, ps.ma200_slope,
                ps.dev_high52w, ps.rsi14, ps.turnover_20d,
                ps.rev_growth, ps.op_growth,
                f.market_cap, tv.upside_pct
-        FROM stock_themes st
-        JOIN stocks s ON st.code = s.code
-        LEFT JOIN price_stats ps ON st.code = ps.code
-        LEFT JOIN stock_fundamentals f ON st.code = f.code
-        LEFT JOIN theoretical_values tv ON st.code = tv.code
-        WHERE st.theme_id = %s AND s.is_active = TRUE
+        FROM theme_members tm
+        JOIN stocks s ON tm.code = s.code
+        LEFT JOIN price_stats ps ON tm.code = ps.code
+        LEFT JOIN stock_fundamentals f ON tm.code = f.code
+        LEFT JOIN theoretical_values tv ON tm.code = tv.code
+        WHERE tm.theme_id = %s AND tm.tier >= 2 AND s.is_active = TRUE
     """, (theme_id,))
     rows = cur.fetchall()
     codes = [r[0] for r in rows]
@@ -3399,8 +3452,9 @@ def _score_theme_stocks(theme_id: int, limit: int = 40) -> list[dict]:
         for l in sorted(good_disc.get(str(code), set())):
             score += 10
             chips.append(("good", l))
-        # 関連度・流動性（turnover_20d は億円単位）
-        score += {3: 10, 2: 5}.get(int(rel or 1), 0)
+        # 関連度（みんかぶ0-100）・流動性（turnover_20d は億円単位）
+        rel = int(rel or 60)
+        score += 10 if rel >= 80 else 7 if rel >= 70 else 4
         if f(t20) is not None and f(t20) >= 1.0:
             score += 5
         elif f(t20) is not None and f(t20) < 0.3:
@@ -3408,7 +3462,7 @@ def _score_theme_stocks(theme_id: int, limit: int = 40) -> list[dict]:
             chips.append(("warn", "低流動性"))
 
         scored.append({
-            "code": str(code), "name": name or str(code), "relevance": int(rel or 1),
+            "code": str(code), "name": name or str(code), "relevance": rel,
             "score": round(score, 1), "close": close, "chg25": chg25,
             "mcap_oku": (f(mcap) or 0) / 1e8, "chips": chips,
         })
@@ -3417,60 +3471,114 @@ def _score_theme_stocks(theme_id: int, limit: int = 40) -> list[dict]:
 
 
 def _build_themes_page() -> str:
-    """テーマ分析ハブ: 「今買うべきテーマ」ランキング＋各テーマの注目銘柄。"""
+    """テーマ一覧（みんかぶ統一マスタ・約1,100テーマ）。
+    上部=注目テーマカード（買い妙味上位・代表テーマへ即アクセス）、
+    下部=全テーマの検索・並び替えできる一覧（JSレンダリング）。"""
     import html as _html
     themes = _compute_theme_scores()
     if not themes:
         body = f"<style>{_THEME_CSS}</style><p style='color:#8b949e;padding:40px'>テーマデータがまだありません。</p>"
         return _page_html("テーマ分析", body, active="themes")
 
-    # 上位テーマは「買うべき銘柄」上位3つをインライン表示
-    trs = []
-    for i, t in enumerate(themes):
-        chips_html = "".join(f'<span class="th-chip {c}">{_html.escape(x)}</span>' for c, x in t["chips"])
-        stock_chips = ""
-        if i < 6:
-            top_stocks = _score_theme_stocks(t["id"], limit=3)
-            stock_chips = "".join(
-                f'<a href="/stock/{s["code"]}">{_html.escape(s["name"][:8])}</a>'
-                for s in top_stocks)
-            stock_chips = f'<div class="th-stock-chips">{stock_chips}</div>'
-        trs.append(f"""<tr>
-  <td><a class="tname" href="/theme/{t['id']}">{_html.escape(t['name'])}</a></td>
-  <td><span class="th-verdict {t['vcls']}">{t['verdict']}</span></td>
-  <td class="th-score">{t['score']:.0f}</td>
-  <td class="{'num-up' if t['chg5'] >= 0 else 'num-down'}">{t['chg5']:+.1f}%</td>
-  <td class="{'num-up' if t['chg20'] >= 0 else 'num-down'}">{t['chg20']:+.1f}%</td>
-  <td>{t['breadth']:.0%}</td>
-  <td>{chips_html}</td>
-  <td>{stock_chips}</td>
-</tr>""")
+    # ── 注目テーマカード（買い妙味上位12・代表銘柄チップ付き）──
+    cards = []
+    for t in themes[:12]:
+        top_stocks = _score_theme_stocks(t["id"], limit=3)
+        stock_chips = "".join(
+            f'<a href="/stock/{s["code"]}" onclick="event.stopPropagation()">{_html.escape(s["name"][:8])}</a>'
+            for s in top_stocks)
+        cards.append(f"""<a class="th-card" href="/theme/{t['id']}">
+  <div class="th-card-top"><span class="th-card-name">{_html.escape(t['name'])}</span>
+    <span class="th-verdict {t['vcls']}">{t['verdict']}</span></div>
+  <div class="th-card-nums">
+    <span class="th-card-num"><i>5日</i><b class="{'num-up' if t['chg5'] >= 0 else 'num-down'}">{t['chg5']:+.1f}%</b></span>
+    <span class="th-card-num"><i>20日</i><b class="{'num-up' if t['chg20'] >= 0 else 'num-down'}">{t['chg20']:+.1f}%</b></span>
+    <span class="th-card-num"><i>妙味</i><b>{t['score']:.0f}</b></span>
+    <span class="th-card-num"><i>銘柄</i><b>{t['n_stocks']}</b></span>
+  </div>
+  <div class="th-stock-chips">{stock_chips}</div>
+</a>""")
 
-    latest_report = ""
+    # ── 全テーマ一覧（JSレンダリング・検索/並び替え）──
+    tj = _json.dumps([
+        {"id": t["id"], "n": t["name"], "s": t["score"], "v": t["verdict"], "vc": t["vcls"],
+         "c1": round(t["chg1d"], 2), "c5": round(t["chg5"], 1), "c20": round(t["chg20"], 1),
+         "br": round(t["breadth"] * 100), "ns": t["n_stocks"]}
+        for t in themes
+    ], ensure_ascii=False)
+
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT MAX(date) FROM theme_daily_stats")
     md = cur.fetchone()[0]
     cur.close(); conn.close()
-    if md:
-        latest_report = f'<a href="/report/{md}" style="font-size:12px;color:#58a6ff">資金フロー詳細レポート →</a>'
 
     body = f"""<style>{_THEME_CSS}</style>
 <div class="page-header">
-  <div class="page-title">テーマ分析 — 今どのテーマを買うべきか</div>
-  <div class="page-subtitle">モメンタム × 広がり × 資金流入 × 材料の裏付けでスコアリング（{md} 基準） {latest_report}</div>
+  <div class="page-title">テーマ株 — 今どのテーマを買うべきか</div>
+  <div class="page-subtitle">みんかぶ全{len(themes)}テーマ（関連度60%以上の銘柄で構成・毎日更新）を
+  モメンタム × 広がり × 資金流入 × 材料でスコアリング（{md} 基準）</div>
 </div>
 <div class="th-wrap">
-<div class="th-scroll"><table class="th-table">
-  <tr><th>テーマ</th><th>判定</th><th>買い妙味</th><th>5日</th><th>20日</th><th>上昇銘柄比率</th><th>根拠</th><th>注目銘柄（テーマ内上位）</th></tr>
-  {"".join(trs)}
+
+<div class="th-sec-title">注目テーマ（買い妙味 上位12）</div>
+<div class="th-cards">{"".join(cards)}</div>
+
+<div class="th-sec-title" style="margin-top:18px">全テーマ
+  <input id="th-q" class="th-search" type="search" placeholder="テーマ名で検索（例: 半導体）" autocomplete="off">
+  <select id="th-sort" class="th-sortsel">
+    <option value="s">買い妙味順</option>
+    <option value="c1">前日比順</option>
+    <option value="c5">5日騰落順</option>
+    <option value="c20">20日騰落順</option>
+    <option value="n">名前順</option>
+  </select>
+</div>
+<div class="th-scroll"><table class="th-table" id="th-list">
+  <thead><tr><th>テーマ</th><th>判定</th><th>妙味</th><th>前日</th><th>5日</th><th>20日</th><th>上昇比率</th><th>銘柄数</th></tr></thead>
+  <tbody></tbody>
 </table></div>
 <div class="th-help">
 判定の見方: <b>初動</b>=動き始めで広がりあり（仕込み妙味） / <b>上昇継続</b>=20日トレンドが本物 /
 <b>過熱注意</b>=短期急騰で反落リスク / <b>冷却</b>=資金流出中。<br>
-テーマ名をクリックすると、そのテーマ内で「どの銘柄を買うべきか」のランキング（トレンド・増収増益・理論株価・好材料開示で採点）が見られます。
+テーマ名クリックで、テーマ指数チャート・関連度付き構成銘柄・「どの銘柄を買うべきか」ランキングへ。
+検索は全テーマ対象（通常表示は上位150）。
 </div>
-</div>"""
-    return _page_html("テーマ分析", body, active="themes")
+</div>
+<script>
+(function() {{
+  // 状態は純粋JSオブジェクトで管理（DOMのform値には持たせない）
+  var THEMES = {tj};
+  var state = {{q: "", sort: "s"}};
+  function pct(v, digits) {{
+    var cls = v > 0 ? "num-up" : v < 0 ? "num-down" : "";
+    return '<span class="' + cls + '">' + (v > 0 ? "+" : "") + v.toFixed(digits) + '%</span>';
+  }}
+  function render() {{
+    var rows = THEMES.slice();
+    if (state.q) {{
+      var q = state.q.toLowerCase();
+      rows = rows.filter(function(t) {{ return t.n.toLowerCase().indexOf(q) >= 0; }});
+    }}
+    rows.sort(state.sort === "n"
+      ? function(a, b) {{ return a.n.localeCompare(b.n, "ja"); }}
+      : function(a, b) {{ return (b[state.sort] || 0) - (a[state.sort] || 0); }});
+    if (!state.q) rows = rows.slice(0, 150);
+    var html = rows.map(function(t) {{
+      return '<tr><td><a class="tname" href="/theme/' + t.id + '">' + t.n + '</a></td>'
+        + '<td><span class="th-verdict ' + t.vc + '">' + t.v + '</span></td>'
+        + '<td class="th-score">' + t.s.toFixed(0) + '</td>'
+        + '<td>' + pct(t.c1, 2) + '</td><td>' + pct(t.c5, 1) + '</td><td>' + pct(t.c20, 1) + '</td>'
+        + '<td>' + t.br + '%</td><td>' + t.ns + '</td></tr>';
+    }}).join("");
+    document.querySelector("#th-list tbody").innerHTML =
+      html || '<tr><td colspan="8" style="color:#8b949e">該当するテーマがありません</td></tr>';
+  }}
+  document.getElementById("th-q").addEventListener("input", function(e) {{ state.q = e.target.value.trim(); render(); }});
+  document.getElementById("th-sort").addEventListener("change", function(e) {{ state.sort = e.target.value; render(); }});
+  render();
+}})();
+</script>"""
+    return _page_html("テーマ株", body, active="themes")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -6365,9 +6473,14 @@ def _build_stock_page(code: str) -> str:
         abort(404)
     s_code, s_name, market, sector, s_biz_desc, s_biz_updated, s_biz_summary, s_website = row
 
-    # kabutanテーマタグ（company_profile.py が保存）
-    cur.execute("SELECT theme FROM kabutan_themes WHERE code = %s ORDER BY theme", (code,))
-    kab_themes = [r[0] for r in cur.fetchall()]
+    # 所属テーマ（統一テーママスタ＝みんかぶ・関連度順。テーマ詳細ページへリンク）
+    cur.execute("""
+        SELECT t.id, t.name, tm.relevance FROM theme_members tm
+        JOIN themes t ON t.id = tm.theme_id
+        WHERE tm.code = %s AND t.status = 'active' AND tm.tier >= 2
+        ORDER BY tm.relevance DESC, t.name
+    """, (code,))
+    kab_themes = cur.fetchall()   # [(theme_id, name, relevance), ...]
 
     # Codexが整理した事業概要（business_overviews）。未作成環境でも表示を継続する。
     biz_overview = None
@@ -6414,15 +6527,7 @@ def _build_stock_page(code: str) -> str:
     """, (code, from_dt))
     prices = cur.fetchall()
 
-    # テーマ所属
-    cur.execute("""
-        SELECT tc.name, tc.code, st.relevance
-        FROM stock_themes st
-        JOIN theme_categories tc ON st.theme_id = tc.id
-        WHERE st.code = %s AND tc.level = 2
-        ORDER BY tc.sort_order
-    """, (code,))
-    themes = cur.fetchall()
+    # テーマ所属は kab_themes（統一テーママスタ・上で取得済み）に一本化（旧stock_themesは廃止）
 
     # ─ 決算プレビュー: 次回発表日(JPX)・通期予想への進捗率・過去反応の想定インパクト ─
     # ※日付比較はJST(Python)側で行う。DBサーバーのCURDATE()はUTCで日本の日付と最大9時間ズレるため
@@ -7101,16 +7206,16 @@ def _build_stock_page(code: str) -> str:
     else:
         metrics_panel = ""
 
-    # ─ テーマバッジ ─
-    report_date = _latest_report_date()
-    report_link = f"/report/{report_date}" if report_date else "/"
+    # ─ テーマバッジ（統一テーママスタ＝みんかぶ・関連度付き・テーマ詳細ページへリンク）─
+    import html as _hesc
     badges = []
-    for tname, tcode, rel in themes:
-        lbl, fg, bg = _REL.get(rel, ("?", "#aaa", "#222"))
+    for tid, tname, rel in kab_themes:
+        rel = int(rel or 60)
+        bg = "#1f6feb22" if rel >= 70 else "#21262d"
         badges.append(
-            f'<a class="theme-badge" href="{report_link}" style="background:{bg}">'
-            f'<span style="color:{fg};font-size:11px;font-weight:700">{lbl}</span>'
-            f'<span style="color:#c9d1d9;font-size:13px">{tname}</span>'
+            f'<a class="theme-badge" href="/theme/{tid}" style="background:{bg}">'
+            f'<span style="color:#58a6ff;font-size:11px;font-weight:700">{rel}%</span>'
+            f'<span style="color:#c9d1d9;font-size:13px">{_hesc.escape(tname)}</span>'
             f'</a>'
         )
     theme_html = f'<div class="theme-badges">{"".join(badges)}</div>' if badges else \
@@ -7215,11 +7320,8 @@ def _build_stock_page(code: str) -> str:
                 '</div>'
             )
 
-    # kabutanテーマタグ（チップ表示）
+    # 会社概要内のテーマチップは廃止（「所属テーマ」セクションのバッジに一本化・重複解消）
     kab_themes_html = ""
-    if kab_themes:
-        chips = "".join(f'<span class="co-theme-chip">{_html_mod.escape(t)}</span>' for t in kab_themes)
-        kab_themes_html = f'<div class="co-theme-chips">{chips}</div>'
 
     # 事業セグメント構成（company_segments・edinet_segments.py が日次で更新）
     # 直近3年の売上構成比を「100%積み上げ棒 × 年度」で並べて推移を見せる。
@@ -8302,17 +8404,9 @@ def index():
 
 @app.route("/report/<date_str>")
 def report(date_str: str):
-    try:
-        report_date = date.fromisoformat(date_str)
-    except ValueError:
-        abort(400)
-    key  = f"report_{date_str}"
-    html = _get(key)
-    if not html:
-        print(f"[app] レポート生成: {date_str}")
-        html = generate_report(report_date)
-        _set(key, html)
-    return html
+    # 旧テーマ別資金フローレポート（自前21テーマ用）は2026-07にみんかぶ統一で廃止。
+    # 上位互換のテーマハブへ誘導（theme_report.py は archive/ へ）
+    return redirect("/themes")
 
 
 @app.route("/rankings")
@@ -8563,9 +8657,12 @@ def api_group_list():
     if not cached:
         conn = get_conn(); cur = conn.cursor()
         if gtype == "theme":
+            # 統一テーママスタ(みんかぶ・tier>=2)。kabutan_themesは2026-07廃止
             cur.execute("""
-                SELECT theme, COUNT(*) AS n FROM kabutan_themes
-                GROUP BY theme HAVING n >= 5 ORDER BY n DESC
+                SELECT t.name, COUNT(*) AS n FROM theme_members tm
+                JOIN themes t ON t.id = tm.theme_id
+                WHERE t.status = 'active' AND tm.tier >= 2
+                GROUP BY t.id, t.name HAVING n >= 5 ORDER BY n DESC
             """)
         else:
             cur.execute("""
@@ -8606,76 +8703,238 @@ def flows_page():
     return html
 
 
+def _mini_spark(closes: list[float], w: int = 110, h: int = 34) -> str:
+    """構成銘柄のミニチャート（直近3ヶ月終値のインラインSVG）。上昇=赤/下落=青。"""
+    pts = [c for c in closes if c and c > 0]
+    if len(pts) < 5:
+        return '<span style="color:#484f58;font-size:11px">—</span>'
+    vmin, vmax = min(pts), max(pts)
+    rng = (vmax - vmin) or 1.0
+    pad = 2
+    xs = [pad + i * (w - 2 * pad) / (len(pts) - 1) for i in range(len(pts))]
+    ys = [h - pad - (v - vmin) / rng * (h - 2 * pad) for v in pts]
+    poly = " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
+    color = "#E84040" if pts[-1] >= pts[0] else "#3A9FE0"
+    return (f'<svg width="{w}" height="{h}">'
+            f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="1.4"/></svg>')
+
+
 @app.route("/theme/<int:theme_id>")
 def theme_page(theme_id: int):
+    """テーマ詳細（みんかぶ風・2026-07刷新）:
+    説明文 + 前日/前月/前年比 + テーマ指数vsTOPIXチャート(期間切替) +
+    関連度バー・ミニチャート付き構成銘柄表（買い妙味スコア順） + 周辺銘柄折りたたみ。"""
     import html as _html
     conn = get_conn()
     cur  = conn.cursor()
-    cur.execute("SELECT id, name, level FROM theme_categories WHERE id = %s", (theme_id,))
+    cur.execute("SELECT id, name, description FROM themes WHERE id = %s", (theme_id,))
     theme = cur.fetchone()
-    cur.close(); conn.close()
     if not theme:
+        cur.close(); conn.close()
         return "テーマが見つかりません", 404
+    theme_name, theme_desc = theme[1], theme[2] or ""
 
-    theme_name = theme[1]
+    # ── テーマ指数 vs TOPIX（全期間・チャート用JSON）──
+    cur.execute("""
+        SELECT date, index_value FROM theme_daily_stats
+        WHERE theme_id = %s AND index_value IS NOT NULL ORDER BY date
+    """, (theme_id,))
+    idx_rows = cur.fetchall()
+    dates  = [r[0].isoformat() for r in idx_rows]
+    idxs   = [float(r[1]) for r in idx_rows]
+    cur.execute("""
+        SELECT date, COALESCE(adj_close, close) FROM daily_prices
+        WHERE code = '1306' AND close IS NOT NULL AND date >= %s ORDER BY date
+    """, (idx_rows[0][0] if idx_rows else date.today(),))
+    tpx_map = {r[0].isoformat(): float(r[1]) for r in cur.fetchall()}
+    tpx = [tpx_map.get(d) for d in dates]
 
-    # テーマの現況（スコア・判定）
+    # 前日比 / 前月比(21営業日) / 前年比(240営業日) をテーマ指数から
+    def _idx_chg(n: int):
+        if len(idxs) > n and idxs[-1 - n]:
+            return (idxs[-1] / idxs[-1 - n] - 1) * 100
+        return None
+    chg_d, chg_m, chg_y = _idx_chg(1), _idx_chg(21), _idx_chg(240)
+
+    # ── 構成銘柄（スコア済み・tier>=2）＋ 現値/前日比/配当利回り/ミニチャート ──
+    scored = _score_theme_stocks(theme_id, limit=100)
+    codes = [s["code"] for s in scored]
+    latest_info: dict = {}
+    spark_map: dict = {}
+    if codes:
+        ph = ",".join(["%s"] * len(codes))
+        cur.execute(f"""
+            SELECT dp.code, dp.close, dp.change_pct, f.div_yield
+            FROM daily_prices dp
+            JOIN (SELECT code, MAX(date) mx FROM daily_prices WHERE code IN ({ph}) GROUP BY code) t
+              ON dp.code = t.code AND dp.date = t.mx
+            LEFT JOIN stock_fundamentals f ON f.code = dp.code
+        """, codes)
+        latest_info = {r[0]: (r[1], r[2], r[3]) for r in cur.fetchall()}
+        # ミニチャート用: 直近3ヶ月の終値（分割調整済み）
+        from datetime import timedelta as _td
+        cur.execute(f"""
+            SELECT code, date, COALESCE(adj_close, close) FROM daily_prices
+            WHERE code IN ({ph}) AND date >= %s AND close IS NOT NULL
+            ORDER BY code, date
+        """, (*codes, date.today() - _td(days=95)))
+        for c, _d, cl in cur.fetchall():
+            spark_map.setdefault(c, []).append(float(cl or 0))
+
+    # ── 周辺銘柄（tier=1・折りたたみ表示）──
+    cur.execute("""
+        SELECT tm.code, s.name, tm.relevance
+        FROM theme_members tm JOIN stocks s ON s.code = tm.code
+        WHERE tm.theme_id = %s AND tm.tier = 1 AND s.is_active = TRUE
+        ORDER BY tm.relevance DESC, tm.code
+    """, (theme_id,))
+    periph = cur.fetchall()
+    cur.close(); conn.close()
+
+    # ── HTML組み立て ──
     t_info = next((t for t in _compute_theme_scores() if t["id"] == theme_id), None)
     head_stats = ""
     if t_info:
         head_stats = f"""<div class="th-head-stats">
   <span class="th-verdict {t_info['vcls']}">{t_info['verdict']}</span>
   <span class="th-head-stat">買い妙味 <b>{t_info['score']:.0f}</b></span>
-  <span class="th-head-stat">5日 <b class="{'num-up' if t_info['chg5']>=0 else 'num-down'}">{t_info['chg5']:+.1f}%</b></span>
-  <span class="th-head-stat">20日 <b class="{'num-up' if t_info['chg20']>=0 else 'num-down'}">{t_info['chg20']:+.1f}%</b></span>
   <span class="th-head-stat">上昇銘柄比率 <b>{t_info['breadth']:.0%}</b></span>
 </div>"""
 
-    # 買うべき銘柄ランキング
-    scored = _score_theme_stocks(theme_id)
-    codes = [s["code"] for s in scored]
-    codes_js = _json.dumps(codes)
+    def _stat_card(label, v):
+        if v is None:
+            return f'<div class="td-stat"><i>{label}</i><b style="color:#484f58">—</b></div>'
+        cls = "num-up" if v >= 0 else "num-down"
+        return f'<div class="td-stat"><i>{label}</i><b class="{cls}">{v:+.2f}%</b></div>'
+    stats_html = (_stat_card("前日比", chg_d) + _stat_card("前月比", chg_m)
+                  + _stat_card("前年比", chg_y))
+
+    desc_html = f'<div class="td-desc">{_html.escape(theme_desc)}</div>' if theme_desc else ""
 
     rank_rows = []
     for i, s in enumerate(scored, 1):
         chips = "".join(f'<span class="th-chip {c}">{_html.escape(x)}</span>' for c, x in s["chips"])
         mcap_txt = (f"{s['mcap_oku']/10000:.1f}兆" if s['mcap_oku'] >= 10000
                     else f"{s['mcap_oku']:,.0f}億" if s['mcap_oku'] else "—")
-        chg_html = (f'<span class="{"num-up" if s["chg25"] >= 0 else "num-down"}">{s["chg25"]:+.1f}%</span>'
-                    if s["chg25"] is not None else "—")
+        cl, chg, dy = latest_info.get(s["code"], (None, None, None))
+        cl_txt  = f"{float(cl):,.0f}" if cl else "—"
+        chg_txt = (f'<span class="{"num-up" if float(chg) >= 0 else "num-down"}">{float(chg):+.2f}%</span>'
+                   if chg is not None else "—")
+        dy_txt  = f"{float(dy):.2f}%" if dy else "—"
+        rel = s["relevance"]
+        rel_html = (f'<span class="rel-bar-wrap"><span class="rel-bar"><i style="width:{rel}%"></i></span>'
+                    f'<span class="rel-val">{rel}</span></span>')
+        spark = _mini_spark(spark_map.get(s["code"], []))
         rank_rows.append(
             f'<tr><td>{i}</td>'
             f'<td><a class="sname" href="/stock/{s["code"]}">{_html.escape(s["name"])}</a>'
             f' <span style="color:#484f58;font-size:11px">{s["code"]}</span></td>'
-            f'<td>{"★" * s["relevance"]}</td>'
+            f'<td>{rel_html}</td>'
+            f'<td class="mini-chart">{spark}</td>'
+            f'<td>{cl_txt}</td>'
+            f'<td>{chg_txt}</td>'
             f'<td style="font-weight:700">{s["score"]:.0f}</td>'
-            f'<td>{chg_html}</td>'
             f'<td>{mcap_txt}</td>'
+            f'<td>{dy_txt}</td>'
             f'<td style="white-space:normal">{chips}</td></tr>'
         )
 
+    periph_html = ""
+    if periph:
+        prows = "".join(
+            f'<tr><td><a class="sname" href="/stock/{c}">{_html.escape(n or c)}</a>'
+            f' <span style="color:#484f58;font-size:11px">{c}</span></td>'
+            f'<td><span class="rel-bar-wrap"><span class="rel-bar"><i style="width:{int(r or 50)}%"></i></span>'
+            f'<span class="rel-val">{int(r or 50)}</span></span></td></tr>'
+            for c, n, r in periph)
+        periph_html = f"""<details class="card" style="padding:10px 14px">
+  <summary style="cursor:pointer;color:#8b949e;font-size:13px">周辺銘柄（関連度50%・{len(periph)}銘柄）を表示</summary>
+  <div class="th-scroll"><table class="ts-table" style="margin-top:8px">
+    <tr><th>銘柄</th><th>関連度</th></tr>{prows}
+  </table></div>
+</details>"""
+
+    chart_json = _json.dumps({"dates": dates, "idx": idxs, "tpx": tpx})
+    codes_js = _json.dumps(codes)
+
     body = f"""<style>{_THEME_CSS}</style>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <div class="page-header">
   <div class="page-title">{_html.escape(theme_name)}</div>
-  <div class="page-subtitle"><a href="/themes" style="color:#58a6ff">← テーマ一覧</a>　テーマ銘柄 {len(codes)} 件</div>
+  <div class="page-subtitle"><a href="/themes" style="color:#58a6ff">← テーマ一覧</a>　構成 {len(codes)} 銘柄（関連度60%+）</div>
   {head_stats}
+</div>
+<div class="th-wrap">
+{desc_html}
+<div class="td-stats">{stats_html}</div>
+<div class="card" style="padding:12px 14px">
+  <div class="td-chart-bar">
+    <b style="font-size:13px;color:#c9d1d9;margin-right:6px">テーマ指数 vs TOPIX</b>
+    <button class="td-range-btn" data-d="7">1週間</button>
+    <button class="td-range-btn" data-d="30">1ヶ月</button>
+    <button class="td-range-btn" data-d="90">3ヶ月</button>
+    <button class="td-range-btn active" data-d="180">6ヶ月</button>
+    <button class="td-range-btn" data-d="365">1年</button>
+  </div>
+  <div id="td-chart" style="height:300px"></div>
 </div>
 {_chart_grid_toolbar(codes_js, show_added_sort=False)}
 <div id="view-list">
   <div class="card">
-    <div class="card-header">このテーマで買うべき銘柄は？（トレンド × 増収増益 × 理論株価 × 好材料開示で採点）</div>
+    <div class="card-header">構成銘柄（買い妙味スコア順・トレンド × 増収増益 × 理論株価 × 好材料開示で採点）</div>
     <div class="th-scroll">
       <table class="ts-table">
-        <tr><th>#</th><th>銘柄</th><th>関連度</th><th>スコア</th><th>25日騰落</th><th>時価総額</th><th>評価ポイント</th></tr>
+        <tr><th>#</th><th>銘柄</th><th>関連度</th><th>3ヶ月チャート</th><th>現値</th><th>前日比</th>
+        <th>スコア</th><th>時価総額</th><th>配当利回り</th><th>評価ポイント</th></tr>
         {"".join(rank_rows)}
       </table>
     </div>
   </div>
+  {periph_html}
 </div>
 <div id="view-chart" style="display:none">
   <div class="cg-grid" id="cg-grid"><div class="cg-loading">読み込み中...</div></div>
 </div>
-{_chart_grid_script()}"""
+</div>
+{_chart_grid_script()}
+<script>
+(function() {{
+  var D = {chart_json};
+  var state = {{days: 180}};   // 状態は純粋JSオブジェクトで管理
+  function draw() {{
+    var n = D.dates.length;
+    if (!n) return;
+    var lastDate = new Date(D.dates[n - 1]);
+    var fromTs = lastDate.getTime() - state.days * 86400000;
+    var i0 = 0;
+    while (i0 < n - 1 && new Date(D.dates[i0]).getTime() < fromTs) i0++;
+    var baseI = D.idx[i0];
+    var baseT = null;
+    for (var j = i0; j < n; j++) if (D.tpx[j]) {{ baseT = D.tpx[j]; break; }}
+    var xs = D.dates.slice(i0);
+    var yi = D.idx.slice(i0).map(function(v) {{ return (v / baseI - 1) * 100; }});
+    var yt = D.tpx.slice(i0).map(function(v) {{ return v && baseT ? (v / baseT - 1) * 100 : null; }});
+    Plotly.react("td-chart", [
+      {{x: xs, y: yi, name: "テーマ指数", line: {{color: "#58a6ff", width: 2}}, hovertemplate: "%{{y:+.1f}}%<extra>テーマ</extra>"}},
+      {{x: xs, y: yt, name: "TOPIX", line: {{color: "#8b949e", width: 1.4}}, hovertemplate: "%{{y:+.1f}}%<extra>TOPIX</extra>"}}
+    ], {{
+      template: "plotly_dark", paper_bgcolor: "#161b22", plot_bgcolor: "#161b22",
+      margin: {{l: 42, r: 12, t: 8, b: 34}}, showlegend: true,
+      legend: {{orientation: "h", y: 1.12, font: {{size: 11}}}},
+      yaxis: {{ticksuffix: "%", gridcolor: "#21262d"}}, xaxis: {{gridcolor: "#21262d"}}
+    }}, {{displayModeBar: false, responsive: true}});
+  }}
+  document.querySelectorAll(".td-range-btn").forEach(function(b) {{
+    b.addEventListener("click", function() {{
+      state.days = parseInt(b.dataset.d, 10);
+      document.querySelectorAll(".td-range-btn").forEach(function(x) {{ x.classList.remove("active"); }});
+      b.classList.add("active");
+      draw();
+    }});
+  }});
+  draw();
+}})();
+</script>"""
 
     return _page_html(f"{theme_name} | テーマ", body, active="themes")
 

@@ -111,8 +111,9 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   銘柄ページ「会社概要」内にセグメント構成バーとして表示（app.py `_build_stock_page`）
 - `edinet_business.py` — **EDINET公式API直接**で有報「事業の内容」→ `stocks.business_description`（詳細な事業内容）。
   日次は増分（直近7日の提出分のみ→各社年1回自動更新）。初回は `--backfill` で過去380日を一括。要 `EDINET_API_KEY`（無料）
-- `company_profile.py` — kabutan銘柄トップページから会社概要（簡単な事業内容）・kabutanテーマタグ・会社サイト
-  → `stocks.business_summary`/`stocks.website`/`kabutan_themes`。日次150件で未取得優先→古い順（約1ヶ月で全銘柄一巡）
+- `company_profile.py` — kabutan銘柄トップページから会社概要（簡単な事業内容）・会社サイト
+  → `stocks.business_summary`/`stocks.website`。日次150件で未取得優先→古い順（約1ヶ月で全銘柄一巡）。
+  **テーマタグ取得は2026-07廃止**（ユーザー指示・テーマは theme_master=みんかぶに一本化。kabutan_themesは更新停止・未参照）
 - `fund_watch.py` — ファンド月次レポートPDF取込＋Gemini構造化抽出 → `fund_master`/`fund_reports`。FUND_DEFSの `url_mode` (template/scrape/direct) と `page_range` で各運用会社の方式差を吸収
 - `disclosures.py` — TDnet適時開示の蓄積・分析 → `disclosures`/`market_summary`。タイトルからカテゴリ・ポジネガをルール分類（APIコストゼロ）。好材料（上方修正・増配等）はPDF本文をGeminiで読み修正理由＋関連テーマを抽出、テーマ経由で関連銘柄をサジェスト。業種・テーマ・開示動向から日次市況コメントも生成。**TDnetは約1ヶ月で消えるため毎日蓄積が必須**
 
@@ -133,7 +134,10 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   日次で120テーマずつ古い順に巡回(全体≒週1周)・テーマ一覧は毎日取得し新テーマ即日検出。
   **アクセス注意**: minkabuはUA判定あり（Chrome風UAは503）。必ず `MINKABU_HEADERS`(Safari系UA+Referer)を使う。
   取得失敗時は既存データ維持（壊れない）。旧ヒューリスティック版(kabutanタグ+EDINET本文+Gemini)はgit履歴参照
-- `theme_score.py` — テーマ別過熱スコア → `theme_daily_stats`
+- `theme_score.py` — テーマ別日次統計・過熱スコア → `theme_daily_stats`（全~1,100テーマ・2024-01〜）。
+  ソースは統一テーママスタ（tier>=2・みんかぶ関連度60-100を加重に使用）。個別リターンは±25%に
+  クリップ（新規上場初日等の異常値が指数を歪めない頑健化）。日次は増分計算（過去70日をロードし
+  アンカー継続・派生値はレンジクリップして書込み）。全再計算は `--all`
 - `rankings.py` — 日次/週次ランキング → `rankings`
 - `line_notify.py` — LINE Messaging API への汎用テキストpush（`push_text`/`is_configured`）。
   日次レポート完成通知のトランスポート。環境変数 `LINE_CHANNEL_ACCESS_TOKEN`/`LINE_USER_ID`、
@@ -148,14 +152,14 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   TOB・提携等を機械確定(信頼度high) ②テーマ物色/地合い連動/継続を theme_daily_stats/TOPIX/直近イベントで判定(med)
   ③残りはGeminiが構造化出力(【分類】)で補完。REASON_CATEGORIES が表示バッジ・集計の単一の真実
 - `research_strategy.py` — event_researcher の調査対象選定・閾値＋ニュース取得(TDnet/kabutan/Google)＋Gemini要約
-- `theme_report.py` — テーマレポートHTML生成（app.py の /report から利用）
+- ~~theme_report.py~~ — 旧テーマレポート（2026-07廃止→archive/。/report/<date>は/themesへリダイレクト）
 - `daily_report.py` — 日次相場レポートHTML生成（app.py の /daily から利用）。結論→数字→資金フロー変化→
   騰落TOP5+理由+スパークライン→トリガー銘柄(基準は TRIGGER_DEFS)→好材料開示→ウォッチリスト。
   自己完結HTML（外部JS/CSSなし）なのでメール・LINE転送にも流用可能。
   `notify_report_ready(date)` = 確定版のLINE通知（リンクのみの最小通知。全文URLは `REPORT_BASE_URL` 環境変数、
   既定は `DEFAULT_REPORT_BASE_URL`）。イブニング便の `save_report()` 直後に呼ばれる。
   手動テスト: `python daily_report.py --save --notify` / 保存済みを再通知 `python daily_report.py --notify`
-- `money_flow.py` — 資金フロー週次集計 → `money_flow_weekly`。テーマ(kabutan_themes)/業種/時価総額帯/スタイル別に
+- `money_flow.py` — 資金フロー週次集計 → `money_flow_weekly`。テーマ(統一テーママスタ tier>=2)/業種/時価総額帯/スタイル別に
   週間売買代金シェアの対13週平均比（flow_ratio）・**Zスコア**（母数非依存の流入強度＝今週シェアが過去13週の
   変動幅の何σ分か。小グループの偶然のブレを排除）・騰落率中央値・上昇銘柄比率・対TOPIXを算出。
   **flow_class**で分類: inflow=買い優勢の流入 / dump=大商い×下落の投げ売り / outflow=流出 / neutral。
@@ -197,7 +201,9 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | `/daily` `/daily/<date>` | 日次相場レポート（daily_report.py が生成する自己完結HTML・逆ピラミッド構成） |
 | `/funds` | ファンドウォッチ（複数ファンド共通銘柄ハイライト） |
 | `/aifund` | AIファンド（模擬運用: 保有8銘柄・次の売買予定と理由・NAV vs TOPIX・売買履歴） |
-| `/rankings` `/events` `/theme/<id>` `/swing` `/watchlist` `/report/<date>` | 各分析ページ |
+| `/themes` | テーマ株一覧（みんかぶ全~1,150テーマ。注目テーマカード=買い妙味上位12＋全テーマのJS検索/並び替え） |
+| `/theme/<id>` | テーマ詳細（みんかぶ風・2026-07刷新。説明文＋前日/前月/前年比＋テーマ指数vsTOPIXチャート(期間切替)＋関連度バー・3ヶ月ミニチャート付き構成銘柄表＋周辺銘柄折りたたみ） |
+| `/rankings` `/events` `/swing` `/watchlist` | 各分析ページ（/report/<date>は/themesへリダイレクト） |
 | `/api/chart_grid` `/api/search` `/health` | 補助API |
 
 ## DBテーブル（stock_tracker・27テーブル）
@@ -218,8 +224,9 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | 分析 | `theoretical_values` | compute_theoretical.py |
 | 分析 | `rankings` `swing_scores` `price_events` | 各計算モジュール |
 | テーマ | `themes` `theme_members` | **theme_master.py（統一テーママスタ＝みんかぶ全~780テーマ×編集済み関連度）**。集計は tier>=2 のみ |
-| テーマ | `theme_categories` `stock_themes` `theme_daily_stats` | seed_themes.py / theme_score.py（自前キュレーション。stock_themesはtheme_masterへpin移行済み） |
-| テーマ | `kabutan_themes` | company_profile.py（kabutanタグ・証拠データとしてtheme_masterのスコアリングに使用） |
+| テーマ | `theme_daily_stats` | theme_score.py（テーマ指数・過熱スコア。theme_id=themes.id・みんかぶマスタベース） |
+| テーマ | `theme_categories` `stock_themes` | 旧自前キュレーション（2026-07にみんかぶへ統一・現役コードから参照なし・更新停止。seed_themes.py/theme_report.pyはarchive/へ） |
+| テーマ | `kabutan_themes` | 旧kabutanタグ（2026-07取得廃止・未参照・履歴として残置） |
 | 分析 | `money_flow_weekly` | money_flow.py（グループ別の週次資金フロー） |
 | テキスト | `edinet_text_blocks` `edinet_text_meta` | edinet_texts.py（metaは解決失敗銘柄のnegative cache・再スキャン防止） |
 | 会社情報 | `company_segments` `company_segments_meta` | edinet_segments.py（セグメント別売上・利益の時系列） |

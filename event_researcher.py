@@ -172,11 +172,13 @@ def _get_themes_context(codes: list) -> dict:
     try:
         conn = get_conn(); cur = conn.cursor()
         ph = ",".join(["%s"] * len(codes))
+        # 統一テーママスタ(みんかぶ)のtier>=2。関連度の高い順に上位5テーマまで
         cur.execute(f"""
-            SELECT st.code, GROUP_CONCAT(tc.name ORDER BY st.relevance DESC SEPARATOR '、')
-            FROM stock_themes st JOIN theme_categories tc ON st.theme_id = tc.id
-            WHERE st.code IN ({ph}) AND st.relevance >= 2
-            GROUP BY st.code
+            SELECT tm.code, SUBSTRING_INDEX(
+                GROUP_CONCAT(t.name ORDER BY tm.relevance DESC SEPARATOR '、'), '、', 5)
+            FROM theme_members tm JOIN themes t ON t.id = tm.theme_id
+            WHERE tm.code IN ({ph}) AND tm.tier >= 2 AND t.status = 'active'
+            GROUP BY tm.code
         """, codes)
         result = {str(r[0]): r[1] for r in cur.fetchall() if r[1]}
         cur.close(); conn.close()

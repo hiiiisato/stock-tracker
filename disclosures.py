@@ -189,8 +189,17 @@ def _fetch_pdf_text(pdf_url: str, max_pages: int = 2, max_chars: int = 2500) -> 
 
 
 def _get_theme_names() -> list[str]:
+    """Geminiの関連テーマ抽出用の語彙。統一テーママスタ(みんかぶ)のactiveテーマ名。
+    プロンプト肥大を避けるため構成銘柄数(tier>=2)が多い順に300テーマまで。"""
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT name FROM theme_categories ORDER BY id")
+    cur.execute("""
+        SELECT t.name FROM themes t
+        JOIN theme_members tm ON tm.theme_id = t.id AND tm.tier >= 2
+        WHERE t.status = 'active'
+        GROUP BY t.id, t.name
+        ORDER BY COUNT(*) DESC
+        LIMIT 300
+    """)
     names = [r[0] for r in cur.fetchall()]
     cur.close(); conn.close()
     return names
@@ -340,12 +349,12 @@ def build_market_summary(target_date: date = None) -> bool:
     sector_rows = [{"sector": r[0], "avg_chg": float(r[1]), "n": int(r[2]), "n_up": int(r[3])}
                    for r in cur.fetchall()]
 
-    # テーマ別騰落（theme_daily_stats）
+    # テーマ別騰落（theme_daily_stats・統一テーママスタ。ノイズ回避に5銘柄以上のみ）
     cur.execute("""
-        SELECT tc.name, tds.avg_change_pct, tds.heat_score, tds.breadth_ratio
+        SELECT t.name, tds.avg_change_pct, tds.heat_score, tds.breadth_ratio
         FROM theme_daily_stats tds
-        JOIN theme_categories tc ON tds.theme_id = tc.id
-        WHERE tds.date = %s
+        JOIN themes t ON tds.theme_id = t.id
+        WHERE tds.date = %s AND t.status = 'active' AND tds.stock_count >= 5
         ORDER BY tds.avg_change_pct DESC
     """, (target_date,))
     theme_rows = [{"theme": r[0], "avg_chg": float(r[1] or 0), "heat": float(r[2] or 0),
