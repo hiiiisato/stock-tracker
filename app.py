@@ -3581,7 +3581,7 @@ def _pick_mega_themes(themes: list[dict], limit: int = 10) -> list[dict]:
     手動指定 featured='pin' は常時掲載・'ban' は除外。'long'(ロングラン)は別枠のため除外。"""
     pins  = [t for t in themes if t["featured"] == "pin"]
     autos = [t for t in themes
-             if t["featured"] not in ("pin", "ban", "long")
+             if t["featured"] not in ("pin", "ban", "long", "watch")
              and t["name"] not in _ATTR_THEMES
              and t["n_stocks"] >= 6 and t["mcap_t"] >= 1.0]
     out = pins + [t for t in autos if t not in pins]
@@ -3595,6 +3595,12 @@ def _pick_longrun_themes(themes: list[dict]) -> list[dict]:
                   key=lambda x: -x["macro"])
 
 
+def _pick_watch_themes(themes: list[dict]) -> list[dict]:
+    """「気になるテーマ」= オーナーの興味で完全手動指定(featured='watch')。大局スコア順。"""
+    return sorted([t for t in themes if t["featured"] == "watch"],
+                  key=lambda x: -x["macro"])
+
+
 def _build_themes_page() -> str:
     """テーマ一覧（みんかぶ統一マスタ・約1,150テーマ）。
     上部=大テーマ（規模×大局トレンド×資金流入持続で機械判定＋手動pin・1年ミニチャート付き）、
@@ -3605,10 +3611,11 @@ def _build_themes_page() -> str:
         body = f"<style>{_THEME_CSS}</style><p style='color:#8b949e;padding:40px'>テーマデータがまだありません。</p>"
         return _page_html("テーマ分析", body, active="themes")
 
-    # ── ロングラン（手動15）＋ 好調テーマ（自動10）: 1年テーマ指数ミニチャート付き ──
+    # ── ロングラン（手動）＋気になる（手動）＋好調テーマ（自動10）: 1年ミニチャート付き ──
     longrun = _pick_longrun_themes(themes)
+    watch = _pick_watch_themes(themes)
     mega = _pick_mega_themes(themes, limit=10)
-    card_themes = longrun + mega
+    card_themes = longrun + watch + mega
     spark_by_tid: dict[int, str] = {}
     if card_themes:
         conn = get_conn(); cur = conn.cursor()
@@ -3643,6 +3650,7 @@ def _build_themes_page() -> str:
 </a>"""
 
     longrun_cards = [_theme_card(t) for t in longrun]
+    watch_cards = [_theme_card(t) for t in watch]
     mega_cards = [_theme_card(t) for t in mega]
 
     # ── 全テーマ一覧（JSレンダリング・検索/並び替え・デフォルト大局順）──
@@ -3670,6 +3678,9 @@ def _build_themes_page() -> str:
 
 <div class="th-sec-title">ロングランテーマ — 値動きに関わらず追う構造テーマ（手動選定・1年チャート）</div>
 <div class="th-cards th-megas">{"".join(longrun_cards)}</div>
+
+{f'''<div class="th-sec-title" style="margin-top:18px">気になるテーマ — オーナー注目（手動選定・1年チャート）</div>
+<div class="th-cards th-megas">{"".join(watch_cards)}</div>''' if watch_cards else ""}
 
 <div class="th-sec-title" style="margin-top:18px">好調テーマ — 規模と持続性を伴う本流（自動判定・1年チャート）</div>
 <div class="th-cards th-megas">{"".join(mega_cards)}</div>

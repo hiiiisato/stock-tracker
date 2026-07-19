@@ -88,6 +88,13 @@ LONGRUN_THEMES = [
     "防衛", "サイバーセキュリティ", "半導体", "データセンター", "人工知能",
 ]
 
+# ── 気になるテーマ（オーナーの興味・完全手動指定・2026-07）──────────────────
+# ロングラン/好調とは別枠で、オーナーが個人的に追いたいテーマを掲載する。
+# featured='watch' をこのリストと同期。ロングランと重複する場合はロングランを優先。
+WATCH_THEMES = [
+    "全固体電池",
+]
+
 # みんかぶに存在しないテーマの手動定義（origin='manual'・同期対象外・手動pinで構成）。
 # 構成はみんかぶ関連テーマ＋EDINET事業内容の本文一致で検証したクリーンな銘柄のみ
 # （kabutanタグのコングロ汚染〔宇宙にトヨタ・SaaSにNTT等〕は再現しない）。
@@ -132,15 +139,23 @@ def ensure_manual_and_longrun(cur, verbose: bool = True) -> None:
             ON DUPLICATE KEY UPDATE relevance=VALUES(relevance), tier=VALUES(tier),
               evidence=VALUES(evidence), manual_lock=VALUES(manual_lock), updated_at=VALUES(updated_at)
         """, rows)
-    # featured='long' をリストと同期（pin/banは触らない）
-    ph = ",".join(["%s"] * len(LONGRUN_THEMES))
-    cur.execute(f"UPDATE themes SET featured='long' WHERE name IN ({ph}) AND status='active'",
+    # featured を各リストと同期（pin/banは別用途なので触らない）。
+    # 優先順位: long > watch（同名がある場合はロングラン扱い）
+    long_ph  = ",".join(["%s"] * len(LONGRUN_THEMES))
+    watch_ph = ",".join(["%s"] * len(WATCH_THEMES))
+    cur.execute(f"UPDATE themes SET featured='long' WHERE name IN ({long_ph}) AND status='active'",
                 LONGRUN_THEMES)
-    cur.execute(f"UPDATE themes SET featured='' WHERE featured='long' AND name NOT IN ({ph})",
+    cur.execute(f"UPDATE themes SET featured='watch' WHERE name IN ({watch_ph}) "
+                f"AND status='active' AND name NOT IN ({long_ph})",
+                WATCH_THEMES + LONGRUN_THEMES)
+    # リストから外れた long/watch を解除（pin/banは対象外）
+    cur.execute(f"UPDATE themes SET featured='' WHERE featured='long' AND name NOT IN ({long_ph})",
                 LONGRUN_THEMES)
+    cur.execute(f"UPDATE themes SET featured='' WHERE featured='watch' AND name NOT IN ({watch_ph})",
+                WATCH_THEMES)
     if verbose:
-        cur.execute("SELECT COUNT(*) FROM themes WHERE featured='long'")
-        print(f"  ロングランテーマ: {cur.fetchone()[0]}件 (手動テーマ{len(MANUAL_THEMES)}件含む)")
+        cur.execute("SELECT featured, COUNT(*) FROM themes WHERE featured IN ('long','watch') GROUP BY featured")
+        print(f"  featured同期: {dict(cur.fetchall())} (手動テーマ{len(MANUAL_THEMES)}件含む)")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -177,10 +192,12 @@ def ensure_tables(cur) -> None:
         )
     """)
     # 旧スキーマからの移行（列が無ければ追加・説明文は長いので拡張）
-    # featured: 大テーマ(ロングラン)の手動指定。'pin'=常時掲載 / 'ban'=除外 / ''=自動判定
+    # featured: 掲載枠の手動指定。'long'=ロングラン / 'watch'=気になる / 'pin'=好調常時 /
+    #           'ban'=好調除外 / ''=自動判定
     for ddl in ["ADD COLUMN last_seen DATETIME", "ADD COLUMN last_synced DATETIME",
                 "MODIFY description VARCHAR(1000)",
-                "ADD COLUMN featured VARCHAR(4) DEFAULT ''"]:
+                "ADD COLUMN featured VARCHAR(8) DEFAULT ''",
+                "MODIFY featured VARCHAR(8) DEFAULT ''"]:
         try:
             cur.execute(f"ALTER TABLE themes {ddl}")
         except Exception:  # noqa: BLE001  既に存在

@@ -135,7 +135,8 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   **アクセス注意**: minkabuはUA判定あり（Chrome風UAは503）。必ず `MINKABU_HEADERS`(Safari系UA+Referer)を使う。
   取得失敗時は既存データ維持（壊れない）。旧ヒューリスティック版(kabutanタグ+EDINET本文+Gemini)はgit履歴参照。
   **手動テーマ**: みんかぶに無いテーマは `MANUAL_THEMES`（宇宙開発・SaaS。origin='manual'・同期対象外・構成はpin固定）。
-  **ロングラン指定**: `LONGRUN_THEMES`（完全手動15件）を featured='long' に同期（/themesの別枠掲載用）
+  **掲載枠指定(featured列)**: `LONGRUN_THEMES`(手動15件)→'long' / `WATCH_THEMES`(オーナー興味・手動)→'watch' に毎回同期。
+  好調テーマは自動判定＋'pin'/'ban'で上書き。優先順: long > watch（同名はロングラン扱い）
 - `theme_score.py` — テーマ別日次統計・過熱スコア → `theme_daily_stats`（全~1,100テーマ・2024-01〜）。
   ソースは統一テーママスタ（tier>=2・みんかぶ関連度60-100を加重に使用）。個別リターンは±25%に
   クリップ（新規上場初日等の異常値が指数を歪めない頑健化）。日次は増分計算（過去70日をロードし
@@ -203,7 +204,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | `/daily` `/daily/<date>` | 日次相場レポート（daily_report.py が生成する自己完結HTML・逆ピラミッド構成） |
 | `/funds` | ファンドウォッチ（複数ファンド共通銘柄ハイライト） |
 | `/aifund` | AIファンド（模擬運用: 保有8銘柄・次の売買予定と理由・NAV vs TOPIX・売買履歴） |
-| `/themes` | テーマ株一覧（みんかぶ全~1,150テーマ＋手動テーマ）。上部に2枠: **ロングランテーマ**（`theme_master.LONGRUN_THEMES`=完全手動15件・値下がりしていても重要な構造テーマ。featured='long'）と**好調テーマ10**（自動: 6銘柄+&時価総額1兆+足切り→大局スコア順。pin/banで上書き可）。どちらも1年指数ミニチャート付きカード。みんかぶに無い「宇宙開発」「SaaS」は`theme_master.MANUAL_THEMES`の手動キュレーション（origin='manual'・同期対象外）。一覧は**大局×短期の2軸スコア＋四象限判定**（主力トレンド/押し目/大局良好/一過性疑い/冷却）でデフォルト大局順。大局=1年・6ヶ月の対TOPIX超過×資金流入持続週数(26週)×高値圏×増益率中央値 |
+| `/themes` | テーマ株一覧（みんかぶ全~1,150テーマ＋手動テーマ）。上部に3枠: **ロングランテーマ**（`LONGRUN_THEMES`=手動15件・構造テーマ・featured='long'）、**気になるテーマ**（`WATCH_THEMES`=オーナー興味の手動・featured='watch'。空なら非表示）、**好調テーマ10**（自動: 6銘柄+&時価総額1兆+足切り→大局スコア順。pin/banで上書き可）。どちらも1年指数ミニチャート付きカード。みんかぶに無い「宇宙開発」「SaaS」は`theme_master.MANUAL_THEMES`の手動キュレーション（origin='manual'・同期対象外）。一覧は**大局×短期の2軸スコア＋四象限判定**（主力トレンド/押し目/大局良好/一過性疑い/冷却）でデフォルト大局順。大局=1年・6ヶ月の対TOPIX超過×資金流入持続週数(26週)×高値圏×増益率中央値 |
 | `/theme/<id>` | テーマ詳細（みんかぶ風・2026-07刷新。説明文＋前日/前月/前年比＋テーマ指数vsTOPIXチャート(期間切替)＋関連度バー・3ヶ月ミニチャート付き構成銘柄表＋周辺銘柄折りたたみ） |
 | `/rankings` `/events` `/swing` `/watchlist` | 各分析ページ（/report/<date>は/themesへリダイレクト） |
 | `/api/chart_grid` `/api/search` `/health` | 補助API |
