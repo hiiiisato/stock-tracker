@@ -9083,9 +9083,14 @@ def theme_page(theme_id: int):
     var xs = D.dates.slice(i0);
     var yi = D.idx.slice(i0).map(function(v) {{ return (v / baseI - 1) * 100; }});
     var yt = D.tpx.slice(i0).map(function(v) {{ return v && baseT ? (v / baseT - 1) * 100 : null; }});
+    // 凡例に期間騰落率を出す（TOPIXが平らに見えても「+7%」等と数値で分かるように）
+    function endv(arr) {{ for (var k = arr.length - 1; k >= 0; k--) if (arr[k] != null) return arr[k]; return 0; }}
+    var sfx = function(v) {{ return (v >= 0 ? "+" : "") + v.toFixed(1) + "%"; }};
+    var nmI = "テーマ指数 " + sfx(endv(yi));
+    var nmT = "TOPIX " + sfx(endv(yt));
     Plotly.react("td-chart", [
-      {{x: xs, y: yi, name: "テーマ指数", line: {{color: "#58a6ff", width: 2}}, hovertemplate: "%{{y:+.1f}}%<extra>テーマ</extra>"}},
-      {{x: xs, y: yt, name: "TOPIX", line: {{color: "#8b949e", width: 1.4}}, hovertemplate: "%{{y:+.1f}}%<extra>TOPIX</extra>"}}
+      {{x: xs, y: yi, name: nmI, line: {{color: "#58a6ff", width: 2}}, hovertemplate: "%{{y:+.1f}}%<extra>テーマ</extra>"}},
+      {{x: xs, y: yt, name: nmT, line: {{color: "#8b949e", width: 1.4}}, hovertemplate: "%{{y:+.1f}}%<extra>TOPIX</extra>"}}
     ], {{
       template: "plotly_dark", paper_bgcolor: "#161b22", plot_bgcolor: "#161b22",
       margin: {{l: 42, r: 12, t: 8, b: 34}}, showlegend: true,
