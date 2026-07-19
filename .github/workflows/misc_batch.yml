@@ -36,8 +36,11 @@ jobs:
       JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
       # edinet_texts.py に必要（edinetdb.jp のAPIキー）
       EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
-      # fund_watch.py のPDF構造化抽出に必要
+      # fund_watch.py のPDF構造化抽出・youtube_insights.py の動画理解に必要
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # youtube_insights.py の週報LINE通知に必要
+      LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+      LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
 
     steps:
       - name: Checkout
