@@ -7,7 +7,7 @@ on:
     # フレッシュな100枠を使い切る。旧設定(23:45 JST)はリセット15分前で使いかけの窓を掴んでいた。
     - cron: '30 15 * * *'       # 00:30 JST 毎日: EDINET財務取得＋テーママスタ同期(みんかぶ)＋会社概要
     - cron: '0 21 4,14,24 * *'  # 5,15,25日 6:00 JST: ファンド月次レポート取込
-    - cron: '0 22 * * 5'        # 土曜 07:00 JST: YouTube株動画の週次巡回(youtube_insights)
+    - cron: '0 14 * * 0'        # 日曜 23:00 JST: YouTube株動画の週次巡回(youtube_insights)
   workflow_dispatch:
     inputs:
       job:
@@ -90,8 +90,8 @@ jobs:
         if: ${{ github.event.schedule == '30 15 * * *' || inputs.job == 'edinet_texts' }}
         run: python company_profile.py
 
-      # YouTube株動画の週次巡回（土曜7時JST）。Gemini動画理解で各動画を構造化し、
-      # 週次サマリー（共通見解・複数言及銘柄・注目テーマ）を生成 → /youtube で表示
+      # YouTube株動画の週次巡回（日曜23時JST）。Gemini動画理解で各動画を構造化し、
+      # 全チャンネルを集約した1本の週次レポートを生成 → /youtube で表示・LINE通知
       - name: YouTube株動画 週次巡回
-        if: ${{ github.event.schedule == '0 22 * * 5' || inputs.job == 'youtube' }}
+        if: ${{ github.event.schedule == '0 14 * * 0' || inputs.job == 'youtube' }}
         run: python youtube_insights.py
