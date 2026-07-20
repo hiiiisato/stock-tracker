@@ -115,6 +115,12 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - `company_profile.py` — kabutan銘柄トップページから会社概要（簡単な事業内容）・会社サイト
   → `stocks.business_summary`/`stocks.website`。日次150件で未取得優先→古い順（約1ヶ月で全銘柄一巡）。
   **テーマタグ取得は2026-07廃止**（ユーザー指示・テーマは theme_master=みんかぶに一本化。kabutan_themesは更新停止・未参照）
+- `analyst_consensus.py` — **アナリスト業績コンセンサス取得（2026-07新設・みんかぶ）**。
+  /stock/<code>/analyst_consensus から目標株価(＋1週/1月/3月前の推移)・上昇余地・レーティング
+  (強気買い/買い/中立/売り/強気売りの人数)・**今期のアナリスト予想 vs 会社予想**(売上/営業益/
+  経常益/純益/EPS)を取得 → `analyst_consensus` テーブル。会社予想がコンセンサスを下回る
+  ＝上方修正余地を定量化。時価総額大きい順に日次250件巡回(全体≒2週間で一巡・misc_batch)。
+  UA判定あり(MINKABU_HEADERS)。取得失敗は既存維持。銘柄ページにコンセンサスカードを表示
 - `youtube_insights.py` — **YouTube株動画の週次巡回（2026-07新設）**。CHANNELS（ハンドル定義）→
   channel_id解決(HTMLのexternalId・DBキャッシュ) → 公式RSS(キー不要)で直近8日の新着 →
   **GeminiのYouTube動画理解**(URL直接渡し・無料枠の動画処理8h/日内)で各動画を構造化
@@ -247,6 +253,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | 会社情報 | `stocks.business_description`（カラム） | edinet_business.py / edinet_texts.py（詳細=有報「事業の内容」） |
 | ファンド | `fund_master` `fund_reports` | fund_watch.py |
 | YouTube | `youtube_channels` `youtube_videos` `youtube_weekly` | youtube_insights.py（週次AI巡回・動画分析・横断サマリー） |
+| コンセンサス | `analyst_consensus` | analyst_consensus.py（みんかぶ・目標株価/レーティング/会社予想vsコンセンサス） |
 | アプリ | `watchlist` `stock_memos` `fetch_logs` | app.py / daily_run.py |
 | AIファンド | `ai_fund_state` `ai_fund_positions` `ai_fund_orders` `ai_fund_trades` `ai_fund_nav` `ai_fund_policy` `ai_fund_bench` | ai_fund.py（模擬運用・全売買に理由を記録・投資基準と控え銘柄を日次蓄積） |
 | 決算予定 | `earnings_schedule` | earnings_calendar_jpx.py（JPX公式の決算発表予定日Excel・日次更新）。ai_fund.py `_earnings_dates` が読み取り。kabutan/ J-Quants無料枠(12週遅延)は使用不可のため公式JPXに置換 |

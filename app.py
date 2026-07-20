@@ -2080,6 +2080,35 @@ _STOCK_CSS = """
 .ep-days { color:#8b949e; margin-left:6px; font-size:11.5px; }
 .ep-up { color:#3fb950; font-weight:700; margin-left:6px; }
 .ep-dn { color:#f85149; font-weight:700; margin-left:6px; }
+/* ─ アナリストコンセンサス ─ */
+.cs-card { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px 16px; margin-bottom:16px; }
+.cs-head { font-size:13px; font-weight:700; color:#e6edf3; margin-bottom:8px; display:flex; align-items:baseline; gap:8px; }
+.cs-src { font-size:10px; color:#8b949e; font-weight:400; }
+.cs-item { padding:8px 0; border-top:1px solid #21262d; }
+.cs-item:first-of-type { border-top:none; }
+.cs-lbl { font-size:12px; color:#8b949e; margin-bottom:4px; }
+.cs-lbl b { color:#e6edf3; } .cs-sub { color:#8b949e; font-weight:400; font-size:11px; }
+.cs-val { font-size:22px; font-weight:700; color:#e6edf3; display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+.cs-unit { font-size:13px; color:#8b949e; font-weight:400; margin-left:1px; }
+.cs-up { font-size:13px; font-weight:700; padding:1px 8px; border-radius:8px; }
+.cs-up.pos { background:rgba(232,64,64,0.15); color:#E84040; } .cs-up.neg { background:rgba(58,159,224,0.15); color:#3A9FE0; }
+.cs-trend { font-size:11px; color:#8b949e; margin-top:3px; display:inline-block; }
+.cs-trend.up { color:#E84040; } .cs-trend.dn { color:#3A9FE0; }
+.cs-rbars { display:flex; flex-direction:column; gap:3px; max-width:340px; }
+.cs-rbar-row { display:flex; align-items:center; gap:8px; font-size:11.5px; }
+.cs-rlabel { width:56px; color:#c9d1d9; } .cs-rn { width:20px; text-align:right; color:#8b949e; }
+.cs-rbar { flex:1; height:9px; background:#21262d; border-radius:5px; overflow:hidden; }
+.cs-rbar i { display:block; height:100%; border-radius:5px; }
+.cs-rbar i.sb { background:#E84040; } .cs-rbar i.b { background:#f0883e; } .cs-rbar i.n { background:#8b949e; }
+.cs-rbar i.s { background:#58a6ff; } .cs-rbar i.ss { background:#3A9FE0; }
+.cs-scroll { overflow-x:auto; }
+.cs-table { width:100%; border-collapse:collapse; font-size:12px; min-width:420px; }
+.cs-table th { text-align:right; color:#8b949e; font-weight:600; font-size:11px; padding:4px 8px; border-bottom:1px solid #30363d; }
+.cs-table th:first-child, .cs-table td:first-child { text-align:left; }
+.cs-table td { padding:5px 8px; border-bottom:1px solid #21262d; color:#c9d1d9; }
+.cs-num { text-align:right; font-variant-numeric:tabular-nums; }
+.cs-num.pos { color:#E84040; font-weight:700; } .cs-num.neg { color:#3A9FE0; font-weight:700; } .cs-num.flat { color:#8b949e; }
+.cs-note { font-size:10.5px; color:#8b949e; text-align:left !important; white-space:nowrap; }
 .ev-cat { font-size: 11px; font-weight: 700; color: #d2a8ff; background: #bc8cff14;
   border: 1px solid #bc8cff40; border-radius: 8px; padding: 1px 8px; white-space: nowrap; }
 .s-name { font-size: 22px; font-weight: 700; color: #e6edf3; line-height: 1.3; }
@@ -6708,6 +6737,22 @@ def _build_stock_page(code: str) -> str:
     from ai_fund import _progress_note
     prog_note = _progress_note(cur, code).strip()   # 例 '進捗率:営業益54%(Q2終了・単純按分50%)'
 
+    # ─ アナリスト業績コンセンサス（analyst_consensus.py が みんかぶ から取得）─
+    consensus = None
+    try:
+        cur.execute("""
+            SELECT target_price, upside_pct, rating, rating_score,
+                   n_strong_buy, n_buy, n_neutral, n_sell, n_strong_sell, n_analysts,
+                   target_price_1w, target_price_1m, fc_period,
+                   cons_revenue, cons_op, cons_net, cons_eps,
+                   company_revenue, company_op, company_net, company_eps,
+                   cons_net_1w, cons_net_1m
+            FROM analyst_consensus WHERE code = %s AND target_price IS NOT NULL
+        """, (code,))
+        consensus = cur.fetchone()
+    except Exception:  # noqa: BLE001  テーブル未作成
+        consensus = None
+
     # ファンダメンタルズ（列名で取得してdict化 → 列順変更に強い）
     cur.execute("""
         SELECT code, shares_outstanding, eps_ttm, eps_forward, bps,
@@ -7231,6 +7276,65 @@ def _build_stock_page(code: str) -> str:
                         f'<span class="ep-days">{parts}（過去3年の決算級イベント{_imp["n"]}回の実績）</span></span>')
     earnings_preview_html = (
         f'<div class="ep-card">{"".join(ep_items)}</div>' if ep_items else "")
+
+    # ─ アナリストコンセンサスカード ─
+    import html as _hesc
+    consensus_html = ""
+    if consensus:
+        (c_tp, c_up, c_rating, c_rscore, c_sb, c_b, c_n, c_s, c_ss, c_na,
+         c_tp1w, c_tp1m, c_fcp, c_rev, c_op, c_net, c_eps,
+         cc_rev, cc_op, cc_net, cc_eps, c_net1w, c_net1m) = consensus
+        f = lambda v: float(v) if v is not None else None
+        ci = []
+        # 目標株価＋上昇余地＋直近の目標株価改定方向
+        if c_tp is not None:
+            trend = ""
+            if c_tp1m is not None and f(c_tp) != f(c_tp1m):
+                up = f(c_tp) > f(c_tp1m)
+                trend = (f'<span class="cs-trend {"up" if up else "dn"}">'
+                         f'{"↑" if up else "↓"}1ヶ月前 {f(c_tp1m):,.0f}円</span>')
+            up_html = (f'<span class="cs-up {"pos" if f(c_up) and f(c_up) > 0 else "neg"}">'
+                       f'上昇余地 {f(c_up):+.1f}%</span>' if c_up is not None else "")
+            ci.append(f'<div class="cs-item"><div class="cs-lbl">🎯 アナリスト目標株価</div>'
+                      f'<div class="cs-val">{f(c_tp):,.0f}<span class="cs-unit">円</span> {up_html}</div>{trend}</div>')
+        # レーティング内訳
+        if c_na:
+            def _bar(n, cls, label):
+                w = n / c_na * 100 if c_na else 0
+                return (f'<div class="cs-rbar-row"><span class="cs-rlabel">{label}</span>'
+                        f'<span class="cs-rbar"><i class="{cls}" style="width:{w:.0f}%"></i></span>'
+                        f'<span class="cs-rn">{n}</span></div>') if n else ""
+            bars = (_bar(c_sb or 0, "sb", "強気買い") + _bar(c_b or 0, "b", "買い")
+                    + _bar(c_n or 0, "n", "中立") + _bar(c_s or 0, "s", "売り")
+                    + _bar(c_ss or 0, "ss", "強気売り"))
+            ci.append(f'<div class="cs-item"><div class="cs-lbl">📊 レーティング '
+                      f'<b>{_hesc.escape(c_rating or "")}</b> <span class="cs-sub">アナリスト{c_na}人</span></div>'
+                      f'<div class="cs-rbars">{bars}</div></div>')
+        # 会社予想 vs コンセンサス（上方修正余地）
+        def _gap(cons, comp, label, unit="百万円", scale=1e6):
+            if cons is None or not comp:
+                return ""
+            gap = (cons / comp - 1) * 100
+            gcls = "pos" if gap > 3 else ("neg" if gap < -3 else "flat")
+            arrow = "会社予想は保守的（上振れ余地）" if gap > 3 else ("会社予想は強気" if gap < -3 else "ほぼ一致")
+            return (f'<tr><td>{label}</td>'
+                    f'<td class="cs-num">{comp/scale:,.0f}</td>'
+                    f'<td class="cs-num">{cons/scale:,.0f}</td>'
+                    f'<td class="cs-num {gcls}">{gap:+.1f}%</td>'
+                    f'<td class="cs-note">{arrow}</td></tr>')
+        gap_rows = (_gap(c_rev, cc_rev, "売上高") + _gap(c_op, cc_op, "営業利益")
+                    + _gap(c_net, cc_net, "純利益")
+                    + (_gap(f(c_eps) and float(c_eps), f(cc_eps) and float(cc_eps), "EPS", "円", 1)
+                       if c_eps and cc_eps else ""))
+        if gap_rows:
+            fcp_s = f"{c_fcp.year}年{c_fcp.month}月期" if c_fcp else "今期"
+            ci.append(f'<div class="cs-item"><div class="cs-lbl">💹 会社予想 vs アナリスト予想'
+                      f'<span class="cs-sub">（{fcp_s}）</span></div>'
+                      f'<div class="cs-scroll"><table class="cs-table">'
+                      f'<tr><th></th><th>会社予想</th><th>アナリスト</th><th>乖離</th><th></th></tr>'
+                      f'{gap_rows}</table></div></div>')
+        consensus_html = (f'<div class="cs-card"><div class="cs-head">アナリストコンセンサス '
+                          f'<span class="cs-src">出典: みんかぶ</span></div>{"".join(ci)}</div>')
 
     # ─ ローソク足チャート (Plotly.js 直接利用・期間切替・MA対応) ─
     prices_json = _json.dumps([{
@@ -7898,6 +8002,7 @@ function renderFinTable(d){
 {key_metrics_html}
 
 {earnings_preview_html}
+{consensus_html}
 
 <div class="pg-tabs">
   <button class="pg-tab active" data-tab="overview">概要</button>

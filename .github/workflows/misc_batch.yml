@@ -84,6 +84,12 @@ jobs:
         if: ${{ github.event.schedule == '30 15 * * *' || inputs.job == 'edinet_texts' }}
         run: python theme_master.py
 
+      # アナリスト業績コンセンサス取得（みんかぶ・250件/日≒全銘柄を2週間で一巡）。
+      # 目標株価/レーティング/会社予想vsコンセンサス乖離をDB化。取得失敗は既存維持。
+      - name: アナリストコンセンサス取得（みんかぶ）
+        if: ${{ github.event.schedule == '30 15 * * *' || inputs.job == 'edinet_texts' }}
+        run: python analyst_consensus.py
+
       # 会社概要・kabutanテーマタグの定期メンテ（150件/日 ≒ 月次で全銘柄一巡）。
       # 市場時間と無関係なので夕方のメイン便ではなく夜間に実行する。
       - name: 会社概要・テーマタグ取得
