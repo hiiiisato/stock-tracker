@@ -9675,6 +9675,18 @@ _PF_CSS = """
 .pf-tr-a{flex:0 0 92px;text-align:right;color:#c9d1d9}
 .pf-more{margin-top:2px}
 .pf-more summary{font-size:12px;color:#58a6ff;cursor:pointer;padding:8px 0;user-select:none}
+.pf-chart-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.pf-ch{display:block;background:#161b22;border:1px solid #30363d;border-radius:12px;padding:11px 12px 9px;text-decoration:none;transition:border-color .15s}
+.pf-ch:hover{border-color:#484f58}
+.pf-ch-top{display:flex;align-items:baseline;justify-content:space-between;gap:6px;margin-bottom:6px}
+.pf-ch-nm{color:#e6edf3;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pf-ch-code{color:#8b949e;font-size:10.5px;flex:0 0 auto}
+.pf-spark{width:100%;height:60px;display:block}
+.pf-nochart{height:60px;display:flex;align-items:center;justify-content:center;color:#6e7681;font-size:11px}
+.pf-ch-bot{display:flex;align-items:baseline;gap:8px;margin-top:7px;font-size:12px;flex-wrap:wrap}
+.pf-ch-px{color:#e6edf3;font-weight:600}
+.pf-ch-dy{color:#8b949e;font-size:11px;margin-left:auto}
+.pf-fund{display:inline-block;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:4px 10px;margin:0 6px 6px 0;font-size:12px;color:#c9d1d9}
 @media(max-width:768px){
   .pf-hero{grid-template-columns:1fr 1fr}
   .pf-hz-wrap{grid-template-columns:1fr}
@@ -9682,6 +9694,7 @@ _PF_CSS = """
   .pf-risk{grid-template-columns:repeat(2,1fr)}
   .pf-scn-nm{flex-basis:44%}.pf-scn-p{flex-basis:80px}
   .pf-tr-q{display:none}
+  .pf-chart-grid{grid-template-columns:1fr 1fr}
 }
 @media(max-width:768px){
   .pf-hero{grid-template-columns:1fr 1fr}
@@ -9729,6 +9742,39 @@ def _pf_cls(n) -> str:
     return "pos" if (n or 0) >= 0 else "neg"
 
 
+def _pf_sparkline(series: list, cost: float | None = None, w: int = 260, h: int = 66) -> str:
+    """保有チャート用のミニ折れ線SVG。点線で平均取得単価を描き、損益が一目で分かる。
+    series: [(date, close)] の直近系列（末尾120営業日を使用）。"""
+    pts = [v for _, v in series][-120:]
+    if len(pts) < 2:
+        return '<div class="pf-nochart">チャートなし</div>'
+    lo, hi = min(pts), max(pts)
+    if cost is not None:
+        lo, hi = min(lo, cost), max(hi, cost)
+    rng = (hi - lo) or 1.0
+    n = len(pts)
+
+    def X(i):
+        return i / (n - 1) * w
+
+    def Y(v):
+        return h - (v - lo) / rng * h
+
+    line = "M" + " L".join(f"{X(i):.1f} {Y(v):.1f}" for i, v in enumerate(pts))
+    area = (f"M{X(0):.1f} {h} L" + " L".join(f"{X(i):.1f} {Y(v):.1f}" for i, v in enumerate(pts))
+            + f" L{X(n - 1):.1f} {h} Z")
+    up = pts[-1] >= pts[0]
+    col = "#3fb950" if up else "#f85149"
+    cost_line = ""
+    if cost is not None and lo <= cost <= hi:
+        cy = Y(cost)
+        cost_line = (f'<line x1="0" y1="{cy:.1f}" x2="{w}" y2="{cy:.1f}" stroke="#8b949e" '
+                     f'stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>')
+    return (f'<svg class="pf-spark" viewBox="0 0 {w} {h}" preserveAspectRatio="none">'
+            f'<path d="{area}" fill="{col}" fill-opacity="0.09"/>{cost_line}'
+            f'<path d="{line}" fill="none" stroke="{col}" stroke-width="1.6"/></svg>')
+
+
 def _pf_gate(inner: str) -> str:
     return _page_html("ポートフォリオ", f'<div class="pf-wrap">{inner}</div>',
                       active="portfolio", extra_head=f"<style>{_PF_CSS}</style>")
@@ -9762,6 +9808,8 @@ def _build_portfolio_page() -> str:
         theme_primary: dict = {}
         sector_map: dict = {}
         raw_series: dict = {}
+        chart_series: dict = {}
+        div_map: dict = {}
         if stock_codes:
             ph = ",".join(["%s"] * len(stock_codes))
             cur.execute(f"""SELECT dp.code, dp.close FROM daily_prices dp
@@ -9797,11 +9845,18 @@ def _build_portfolio_page() -> str:
             cutoff = (latest_pd - timedelta(days=400)) if latest_pd else None
             series_codes = stock_codes + ["1306"]
             ph2 = ",".join(["%s"] * len(series_codes))
-            cur.execute(f"""SELECT code, date, adj_close FROM daily_prices
+            cur.execute(f"""SELECT code, date, adj_close, close FROM daily_prices
                             WHERE code IN ({ph2}) AND date >= %s AND adj_close IS NOT NULL
                             ORDER BY code, date""", series_codes + [cutoff])
-            for code, d, adj in cur.fetchall():
+            for code, d, adj, cl in cur.fetchall():
                 raw_series.setdefault(code, []).append((d, float(adj)))
+                if cl is not None and code != "1306":
+                    chart_series.setdefault(code, []).append((d, float(cl)))
+            # 配当（年間DPS・利回り）
+            cur.execute(f"""SELECT code, annual_dps, div_yield FROM stock_fundamentals
+                            WHERE code IN ({ph})""", stock_codes)
+            for code, dps, dy in cur.fetchall():
+                div_map[code] = {"dps": _f(dps), "yield": _f(dy)}
 
     if not rows:
         return _pf_gate('<div class="pf-gate"><h2>データがありません</h2>'
@@ -9882,6 +9937,29 @@ def _build_portfolio_page() -> str:
     beta = risk.get("beta") if risk else None
     stress = pa.stress_test(calendar, port_ret, beta) if calendar else []
 
+    # 配当（年間見込み・PF利回り）
+    annual_div = 0.0
+    for r in rows:
+        if r[3] == "stock" and r[4]:
+            d = div_map.get(r[0])
+            if d and d.get("dps"):
+                annual_div += d["dps"] * float(r[4])
+    annual_div = int(round(annual_div))
+    pf_yield = (annual_div / total_value * 100) if total_value else 0.0
+    yoc = (annual_div / total_cost * 100) if total_cost else 0.0   # 取得原価利回り
+
+    # 銘柄集約（保有チャート一覧用・口座横断）
+    agg: dict[str, dict] = {}
+    for r in rows:
+        if r[3] != "stock":
+            continue
+        cp, val, pl = curmap[id(r)]
+        a = agg.setdefault(r[0], {"name": r[1], "qty": 0.0, "cost_amt": 0, "value": 0, "pl": 0, "price": cp})
+        a["qty"] += float(r[4] or 0)
+        a["cost_amt"] += r[6] or 0
+        a["value"] += val
+        a["pl"] += pl
+
     # ── ヘッダ ──
     parts = [f'''<div class="pf-head">
   <div><div class="pf-title">ポートフォリオ</div>
@@ -9910,6 +9988,14 @@ def _build_portfolio_page() -> str:
         parts.append(f'<div class="pf-reval">評価額・含み損益は<b>当社の日次終値（{latest_pd}）基準で毎日自動更新</b>。'
                      f'SBI明細の取込は {as_of} 時点（その時の評価額 ¥{_pf_yen(sbi_total)}）。'
                      f'随時CSVを取り込めば取得単価・保有銘柄が最新化されます。</div>')
+
+    # ── 配当 ──
+    if annual_div > 0:
+        parts.append(f'''<div class="pf-conc">
+  <div class="pf-mini"><div class="k">年間配当見込み</div><div class="v">¥{_pf_yen(annual_div)}</div></div>
+  <div class="pf-mini"><div class="k">PF配当利回り<span class="pf-mini-s">対時価</span></div><div class="v">{pf_yield:.2f}%</div></div>
+  <div class="pf-mini"><div class="k">取得原価利回り<span class="pf-mini-s">YoC</span></div><div class="v">{yoc:.2f}%</div></div>
+</div>''')
 
     # ── ヘルスチェック（テクニカル×ファンダの2軸） ──
     _HZ = {3: ("撤退検討", "#f85149"), 2: ("注意", "#f0883e"),
@@ -10003,50 +10089,36 @@ def _build_portfolio_page() -> str:
             f'<div class="pf-note">※ 投信（¥{_pf_yen(conc["fund_value"])}）は日次基準価額データが無いため本指標の対象外。'
             'ヒストリカルは現保有比率を過去に当てはめた再現値、β連動（TOPIX−10/−20%）は仮説です。</div></div>')
 
-    # ── 口座別テーブル ──
-    for a in ordered:
-        info = accts[a]
-        col = _PF_ACCT_COLORS.get(a, "#8b949e")
-        acls = _pf_cls(info["pl"])
-        acct_pct = (info["pl"] / info["cost"] * 100) if info["cost"] else 0.0
-        body_rows = []
-        for r in sorted(info["rows"], key=lambda x: curmap[id(x)][1], reverse=True):
-            code, name, _acct, asset, qty, cost, acq, sbip, sval, spl = r
-            cp, val, pl = curmap[id(r)]
-            w = (val / total_value * 100) if total_value else 0
-            plpct = (pl / acq * 100) if acq else 0
-            plcls = _pf_cls(pl)
-            if asset == "stock":
-                since = first_buy.get(code)
-                since_html = f'<span class="pf-since">{since.strftime("%y/%m")}〜</span>' if since else ""
-                nm = (f'<a href="/stock/{code}">{esc(name or code)}</a>'
-                      f'<span class="pf-code">{code}</span>{since_html}')
-                qty_disp = f"{int(qty):,}" if qty is not None else "—"
-            else:
-                nm = f'{esc(name or "")}<span class="pf-code">投信</span>'
-                qty_disp = f"{int(qty):,}口" if qty is not None else "—"
-            body_rows.append(
-                f'<tr>'
-                f'<td class="pf-nm" data-label="銘柄">{nm}</td>'
-                f'<td data-label="数量">{qty_disp}</td>'
-                f'<td data-label="取得単価">{_pf_price(cost)}</td>'
-                f'<td data-label="現在値">{_pf_price(cp)}</td>'
-                f'<td data-label="評価額">¥{_pf_yen(val)}</td>'
-                f'<td class="pf-{plcls}" data-label="含み損益">{_pf_signed(pl)}'
-                f'<div class="pf-sub pf-{plcls}">{plpct:+.1f}%</div></td>'
-                f'<td class="pf-w" data-label="構成比">{w:.1f}%'
-                f'<span class="pf-wbar"><i style="width:{min(w * 4, 100):.0f}%"></i></span></td>'
-                f'</tr>')
-        parts.append(f'''<div class="pf-acct">
-  <div class="pf-acct-h">
-    <div class="nm"><span class="dot" style="background:{col}"></span>{a}</div>
-    <div class="sub">¥{_pf_yen(info["value"])} ・ <span class="pf-{acls}">{_pf_signed(info["pl"])} ({acct_pct:+.1f}%)</span></div>
-  </div>
-  <table class="pf-tbl">
-    <thead><tr><th>銘柄</th><th>数量</th><th>取得単価</th><th>現在値</th><th>評価額</th><th>含み損益</th><th>構成比</th></tr></thead>
-    <tbody>{"".join(body_rows)}</tbody>
-  </table>
-</div>''')
+    # ── 保有チャート一覧（銘柄集約・点線=平均取得単価） ──
+    ch_cards = []
+    for code, a in sorted(agg.items(), key=lambda x: -x[1]["value"]):
+        avg_cost = (a["cost_amt"] / a["qty"]) if a["qty"] else None
+        plpct = (a["pl"] / a["cost_amt"] * 100) if a["cost_amt"] else 0.0
+        plcls = _pf_cls(a["pl"])
+        dy = (div_map.get(code) or {}).get("yield")
+        dy_html = f'<span class="pf-ch-dy">配当{dy:.1f}%</span>' if dy else ""
+        svg = _pf_sparkline(chart_series.get(code, []), cost=avg_cost)
+        ch_cards.append(
+            f'<a class="pf-ch" href="/stock/{code}">'
+            f'<div class="pf-ch-top"><span class="pf-ch-nm">{esc(a["name"] or code)}</span>'
+            f'<span class="pf-ch-code">{code}</span></div>{svg}'
+            f'<div class="pf-ch-bot"><span class="pf-ch-px">¥{_pf_yen(a["value"])}</span>'
+            f'<span class="pf-{plcls}">{_pf_signed(a["pl"])}・{plpct:+.1f}%</span>{dy_html}</div></a>')
+    if ch_cards:
+        parts.append(
+            '<div class="pf-sec"><h3 class="pf-h3">📈 保有チャート一覧'
+            f'<span class="pf-h3sub">点線=平均取得単価・直近120営業日・{len(ch_cards)}銘柄</span></h3>'
+            f'<div class="pf-chart-grid">{"".join(ch_cards)}</div></div>')
+
+    # 投信（チャート対象外なので金額だけ併記）
+    fund_rows = [r for r in rows if r[3] == "fund"]
+    if fund_rows:
+        fchips = []
+        for r in fund_rows:
+            _cp, val, pl = curmap[id(r)]
+            fchips.append(f'<span class="pf-fund">{esc((r[1] or "")[:18])} ¥{_pf_yen(val)} '
+                          f'<span class="pf-{_pf_cls(pl)}">{_pf_signed(pl)}</span></span>')
+        parts.append(f'<div class="pf-sec"><div class="pf-note">投信 {" ".join(fchips)}</div></div>')
 
     # ── 取引履歴＆実現損益 ──
     if trades:
