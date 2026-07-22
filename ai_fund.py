@@ -1526,7 +1526,7 @@ def decide() -> int:
                                "strategy": _strategy_from_tags(c["tags"]),
                                "reason": f"[定量補完] {reasons}の条件に合致（25日騰落{_fnum(c['chg25d'])}%・RSI{_fnum(c['rsi14'],0)}）。AI出力不足分を規律的に補充。",
                                "catalyst": f"{reasons}の統計的エッジ（強いトレンド・出来高を伴う銘柄は追随買いを集めやすい）。",
-                               "thesis": f"購入根拠のトレンドが崩れたら（-12%損切り）撤退。+{PROFIT_ARM_PCT:.0f}%到達後は高値-{PROFIT_TRAIL_PCT:.0f}%トレールで利を伸ばす。"})
+                               "thesis": f"購入根拠のトレンドが崩れたら（-12%損切り）撤退。+{PROFIT_ARM_PCT:.0f}%到達後は段階的トレール（勝ち幅に応じ高値-15〜25%）で利を伸ばす。"})
             budget_sum += budget
             seen.add(c["code"])
 

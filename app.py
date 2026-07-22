@@ -3305,7 +3305,7 @@ def _compute_theme_scores() -> list[dict]:
     観点: ①モメンタム（テーマ指数の5日/20日変化） ②広がり（上昇銘柄比率＝
     1銘柄の暴騰でなくテーマ全体が動いているか） ③資金流入（売買代金サージ）
     ④材料の裏付け（テーマ内の上方修正・増配、値上がりイベント数） ⑤過熱度。
-    判定: 初動 / 上昇継続 / 過熱注意 / 冷却 / 中立
+    判定（大局×短期の四象限）: 主力トレンド / 押し目 / 大局良好 / 一過性疑い / 冷却 / 中立
     """
     cached = _get("theme_scores")
     if cached is not None:
@@ -4022,7 +4022,7 @@ def _build_flows_page(week_str: str | None = None) -> str:
     <div class="fl-section-title" style="margin-bottom:8px">🔥 本物の資金流入 TOP10（買われて上昇中）</div>
     <div class="fl-hero">{hero_cards}</div>
   </div>
-  {_section("資金流入テーマ（買い優勢）", "kabutanテーマ・売買代金100億+かつ8銘柄+。勢い(Z)＝過去13週の変動幅の何σ分か。母数の小さいノイズを排除し、上昇を伴うものだけ", theme_inflow)}
+  {_section("資金流入テーマ（買い優勢）", "みんかぶ統一テーマ（関連度60%+の銘柄で構成）・売買代金100億+かつ8銘柄+。勢い(Z)＝過去13週の変動幅の何σ分か。母数の小さいノイズを排除し、上昇を伴うものだけ", theme_inflow)}
   {dump_section}
   {_section("業種別（東証33業種）", "勢い(Z)順。色: 赤=買い流入 / 青=売り優勢", sector_rows)}
   {_section("規模別（時価総額帯）", "大型に集まる=指数相場 / 小型に広がる=物色相場", size_rows)}
@@ -4914,7 +4914,7 @@ Plotly.newPlot('afChart', [
   {''.join(rows_s)}
   </table></div>
   <div style="font-size:11px;color:#8b949e;margin-top:6px;line-height:1.7">{_html.escape(_af_forbidden)}<br>
-  共通エグジット: -12%損切り → +25%到達後は高値-15%トレール（システムが機械執行）／保有は最長9ヶ月。
+  共通エグジット: -12%損切り → +25%到達後は段階的トレール（+25%〜:高値-15% / +50%〜:-20% / +100%〜:-25%。大勝ち銘柄ほど余地を広げ長く保有）。システムが機械執行／保有は最長9ヶ月。
   「検証エッジ」は過去2.5年・全シグナル機械検証の1トレードあたり成績、「ファンド実績」は実運用の決済ベース。</div>
 </details>"""
 
@@ -5136,7 +5136,7 @@ def _build_screen_page() -> str:
       <button class="sc-bar-clear-btn" id="sc-grp-close">閉じる</button>
     </div>
     <div style="font-size:11px;color:#484f58;margin-top:6px">
-      テーマは資金フロー分析と同じ kabutanテーマタグ（銘柄5つ以上・約700テーマ）。他の条件と組み合わせて絞り込めます。
+      テーマは資金フロー分析と同じ みんかぶ統一テーマ（関連度60%+で構成・銘柄5つ以上）。他の条件と組み合わせて絞り込めます。
     </div>
   </div>
 
