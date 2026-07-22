@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import random
 import re
 import sys
 import time
@@ -46,20 +47,40 @@ from bs4 import BeautifulSoup
 from config import get_conn, bulk_upsert
 
 BASE = "https://minkabu.jp"
+# BOT対策: 実ブラウザ(Safari)を忠実に模したフルヘッダ。最小ヘッダより遮断されにくい。
 MINKABU_HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"),
-    "Accept": "text/html,application/xhtml+xml",
-    "Accept-Language": "ja-JP,ja;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "Connection": "keep-alive",
     "Referer": "https://minkabu.jp/",
 }
 
-DAILY_LIMIT  = 140   # 1回の巡回件数（みんかぶ負荷/403回避。テーマ同期と合わせ穏やかに）
-DELAY        = 1.1   # リクエスト間隔(秒)。速すぎると403(アクセス制限)を受けるため長め
-REFRESH_DAYS = 12    # 取得済みをこの日数は再取得しない
-MAX_403      = 5     # 直接取得で連続403がこの数に達したらプロキシへ切替（ダメなら打ち切り）
+# BOT対策の要点:
+# ① 件数を抑える(80/日) ② 間隔をランダム化(人間らしく) ③ セッションでCookieを引き継ぐ
+# ④ 実ブラウザ相当のフルヘッダ ⑤ 遮断されたらRenderの別IP経由(プロキシ)へ自動切替
+DAILY_LIMIT   = 80    # 1回の巡回件数（カバレッジ~700銘柄を約9日で一巡。量で弾かれない水準）
+DELAY_MIN     = 2.0   # リクエスト間隔の下限(秒)
+DELAY_MAX     = 4.5   # 上限。この範囲でランダム化して機械的アクセスに見せない
+REFRESH_DAYS  = 12    # 取得済みをこの日数は再取得しない
+MAX_403       = 3     # 直接取得で連続403がこの数に達したらプロキシへ切替
 # GHA/ローカルのIPがみんかぶに遮断された時のフォールバック（Renderの別IP経由・kabutanと同方式）
 PROXY_BASE = os.environ.get("MINKABU_PROXY_BASE", "https://stock-tracker-rfqn.onrender.com")
+
+
+def _sleep():
+    """人間らしいランダム間隔。時々長めの休止も入れて機械的パターンを避ける。"""
+    d = random.uniform(DELAY_MIN, DELAY_MAX)
+    if random.random() < 0.1:      # 10%の確率で長め(考えている風)
+        d += random.uniform(3, 7)
+    time.sleep(d)
 RATING_MAP = {"強気買い": 5, "買い": 4, "中立": 3, "売り": 2, "強気売り": 1}
 
 
@@ -284,6 +305,12 @@ def run(limit: int = DAILY_LIMIT, only_codes: list[str] | None = None, verbose: 
     now = datetime.now().replace(microsecond=0)
     consec_403 = 0
     via_proxy = False   # 直接取得で連続ブロックされたらプロキシ(Render別IP)へ切替
+    # セッションウォームアップ: 先にトップページを踏んでCookieを得る（実ブラウザ相当）
+    try:
+        session.get(f"{BASE}/", headers=MINKABU_HEADERS, timeout=15)
+        _sleep()
+    except Exception:  # noqa: BLE001
+        pass
 
     for code in _targets(cur, limit, only_codes):
         try:
@@ -298,19 +325,19 @@ def run(limit: int = DAILY_LIMIT, only_codes: list[str] | None = None, verbose: 
                     stats["via_proxy"] = True
                     if verbose:
                         print(f"  直接取得が連続ブロック({e})→Renderプロキシ経由に切替")
-                    time.sleep(DELAY)
+                    _sleep()
                     continue
                 stats["blocked"] = True
                 if verbose:
                     print(f"  プロキシでもブロック({e})→本日は打ち切り（翌日再開）")
                 break
-            time.sleep(DELAY * 6)   # ブロック時はさらに間隔を空けて様子見
+            time.sleep(random.uniform(15, 30))   # ブロック時は大きく間隔を空けて様子見
             continue
         except Exception as e:  # noqa: BLE001
             stats["failed"] += 1
             if verbose:
                 print(f"  [{code}] 取得失敗（既存維持）: {str(e)[:50]}")
-            time.sleep(DELAY * 3)
+            _sleep()
             continue
         stats["fetched"] += 1
         if not d:
@@ -321,7 +348,7 @@ def run(limit: int = DAILY_LIMIT, only_codes: list[str] | None = None, verbose: 
                 ON DUPLICATE KEY UPDATE fetched_at=VALUES(fetched_at)
             """, (code, now, now))
             conn.commit()
-            time.sleep(DELAY)
+            _sleep()
             continue
         row = [code] + [d.get(c) for c in _COLS] + [now, now]
         bulk_upsert(cur, "analyst_consensus", ["code"] + _COLS + ["fetched_at", "updated_at"],
@@ -332,7 +359,7 @@ def run(limit: int = DAILY_LIMIT, only_codes: list[str] | None = None, verbose: 
             tp = d.get("target_price")
             print(f"  [{code}] 目標{tp}円 {d.get('rating') or '-'} "
                   f"上昇余地{d.get('upside_pct')}% (アナリスト{d.get('n_analysts') or 0}人)")
-        time.sleep(DELAY)
+        _sleep()
 
     cur.close()
     conn.close()

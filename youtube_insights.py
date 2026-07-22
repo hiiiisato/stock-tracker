@@ -46,6 +46,7 @@ CHANNELS: list[dict] = [
     {"handle": "NikkeiCNBC",       "name": "日経CNBC"},
     {"handle": "mabuchi-mariko",   "name": "馬渕磨理子・経済チャンネル"},
     {"handle": "diamond.officialch", "name": "ダイヤモンドZai"},
+    {"handle": "ToshiruRsec",      "name": "トウシル（楽天証券）"},
 ]
 
 LOOKBACK_DAYS   = 8      # 何日前までの動画を対象にするか（週次+バッファ）

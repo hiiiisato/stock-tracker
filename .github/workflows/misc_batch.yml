@@ -9,7 +9,7 @@ on:
     - cron: '0 20 * * *'        # 05:00 JST 毎日: アナリストコンセンサス取得(みんかぶ)。
                                 #   テーマ同期と時間帯を分け、みんかぶへの同時多発アクセス(403)を回避
     - cron: '0 21 4,14,24 * *'  # 5,15,25日 6:00 JST: ファンド月次レポート取込
-    - cron: '0 14 * * 0'        # 日曜 23:00 JST: YouTube株動画の週次巡回(youtube_insights)
+    - cron: '0 13 * * 0'        # 日曜 22:00 JST: YouTube株動画の週次巡回(youtube_insights)
   workflow_dispatch:
     inputs:
       job:
@@ -102,5 +102,5 @@ jobs:
       # YouTube株動画の週次巡回（日曜23時JST）。Gemini動画理解で各動画を構造化し、
       # 全チャンネルを集約した1本の週次レポートを生成 → /youtube で表示・LINE通知
       - name: YouTube株動画 週次巡回
-        if: ${{ github.event.schedule == '0 14 * * 0' || inputs.job == 'youtube' }}
+        if: ${{ github.event.schedule == '0 13 * * 0' || inputs.job == 'youtube' }}
         run: python youtube_insights.py
