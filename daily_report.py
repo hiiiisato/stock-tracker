@@ -347,17 +347,28 @@ def _fetch_disclosures(cur, target: date) -> dict:
         GROUP BY category ORDER BY COUNT(*) DESC
     """, (disc_date,))
     counts = cur.fetchall()
+    # 選定: 当日の好材料(sentiment=1)を「AI要約あり→時価総額(=影響度の代理)が大きい順」で上位5件。
+    # 旧仕様は「新しい順3件」で、大型の重要な上方修正が新着に押し出される問題があったため見直し。
     cur.execute("""
-        SELECT d.code, s.name, d.category, LEFT(COALESCE(d.ai_summary, d.title), 90),
+        SELECT d.code, s.name, d.category, COALESCE(d.ai_summary, d.title),
                (TIME(d.disclosed_at) >= '15:00') AS after_close
         FROM disclosures d
         JOIN stocks s ON s.code = d.code
+        LEFT JOIN stock_fundamentals f ON f.code = d.code
         WHERE DATE(d.disclosed_at) = %s AND d.sentiment = 1
-        ORDER BY (d.ai_summary IS NULL), d.disclosed_at DESC LIMIT 3
+        ORDER BY (d.ai_summary IS NULL), COALESCE(f.market_cap, 0) DESC, d.disclosed_at DESC
+        LIMIT 12
     """, (disc_date,))
-    picks = [{"code": str(r[0]), "name": r[1], "cat": r[2], "summary": r[3],
-              "after_close": bool(r[4])}
-             for r in cur.fetchall()]
+    picks, seen = [], set()          # 同一銘柄の重複開示（修正の再修正等）は最新1件に集約
+    for r in cur.fetchall():
+        code = str(r[0])
+        if code in seen:
+            continue
+        seen.add(code)
+        picks.append({"code": code, "name": r[1], "cat": r[2], "summary": (r[3] or "")[:300],
+                      "after_close": bool(r[4])})
+        if len(picks) >= 5:
+            break
     return {"counts": counts, "picks": picks, "date": disc_date}
 
 

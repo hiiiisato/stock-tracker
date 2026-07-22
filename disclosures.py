@@ -255,6 +255,10 @@ def enrich_highlights(days_back: int = 2, max_items: int = ENRICH_MAX_PER_DAY) -
         docs.append({"id": did, "code": code, "name": name or code,
                      "title": title, "category": cat, "text": text})
 
+    cat_by_id = {d["id"]: d["category"] for d in docs}
+    # 上方修正時にcategoryを好材料側へ昇格するマップ（タイトルが中立でもAI判定で好材料化）
+    _UP_CAT = {"earnings_rev": "earnings_up", "dividend_rev": "div_up"}
+
     done = 0
     for i in range(0, len(docs), ENRICH_BATCH_SIZE):
         batch = docs[i:i + ENRICH_BATCH_SIZE]
@@ -271,8 +275,11 @@ def enrich_highlights(days_back: int = 2, max_items: int = ENRICH_MAX_PER_DAY) -
 
 ## 出力ルール
 - 各開示につき1行のJSONを出力。先頭に「DISC:番号」を付けること。
-- summary: 開示の要点を具体的な数値込みで2文以内に要約（例: 営業利益予想を50億円→70億円に40%上方修正。半導体製造装置向け部品の受注増が要因）
-- direction: 業績・配当への影響が「上方」「下方」「中立」のどれか
+- summary: kabutanの開示ニュース風に、**従来予想→修正後の具体額を必ず含めて**要約（3文以内）。
+  * 業績修正: 「[決算期]の[利益項目]を従来予想の[旧額]→[新額]に[X]%上方/下方修正」の形。可能なら対前期の増益率も従来→修正後で示す（例: 増益率が5.7%増→28.1%増に拡大）。続けて修正理由（新規連結・受注・新製品・売却益等）を具体的に。
+  * 増配/減配を伴う場合: 「年間配当を従来[旧]円→[新]円に増額/減額。配当利回りは[Y]%に上昇/低下」を必ず添える。
+  * 例: 27年3月期の連結最終利益を従来予想の71億円→86億円に21.1%上方修正（増益率5.7%増→28.1%増に拡大）。綿棒メーカー山洋の新規連結化や子会社の上場株式売却益が寄与。年間配当も従来74円→130円に大幅増額、配当利回りは8.4%に上昇。
+- direction: 業績・配当への影響が「上方」「下方」「中立」のどれか（数字が改善なら上方・悪化なら下方）
 - themes: この開示の背景にある事業テーマを以下のリストから0〜3個選ぶ（リストにないものは選ばない）:
   {"、".join(theme_names)}
 - ripple: この開示理由が他のどんな銘柄群に波及しうるかの考え方を1文（例: データセンター向け電力機器の需要増が理由のため、電線・冷却・電源装置関連にも追い風）。波及が考えにくければ空文字列。
@@ -306,17 +313,38 @@ DISC:番号 {{"summary": "...", "direction": "上方", "themes": ["半導体"], 
             except Exception:
                 continue
             summary = (data.get("summary") or "")[:1000]
+            direction = data.get("direction", "中立")
             related = json.dumps({
-                "direction": data.get("direction", "中立"),
+                "direction": direction,
                 "themes": data.get("themes", [])[:3],
                 "ripple": (data.get("ripple") or "")[:300],
             }, ensure_ascii=False)
-            cur.execute("UPDATE disclosures SET ai_summary=%s, ai_related=%s WHERE id=%s",
-                        (summary, related, did))
+            # AIが方向を判定したらsentimentも更新（中立タイトルの上方修正を好材料に昇格）。
+            if direction == "上方":
+                new_cat = _UP_CAT.get(cat_by_id.get(did), cat_by_id.get(did))
+                cur.execute("UPDATE disclosures SET ai_summary=%s, ai_related=%s, sentiment=1, category=%s WHERE id=%s",
+                            (summary, related, new_cat, did))
+            elif direction == "下方":
+                cur.execute("UPDATE disclosures SET ai_summary=%s, ai_related=%s, sentiment=-1 WHERE id=%s",
+                            (summary, related, did))
+            else:
+                cur.execute("UPDATE disclosures SET ai_summary=%s, ai_related=%s WHERE id=%s",
+                            (summary, related, did))
             done += 1
         conn.commit()
         cur.close(); conn.close()
         print(f"    [enrich] バッチ {i//ENRICH_BATCH_SIZE + 1}: 累計{done}件付加")
+
+    # 既存分の自己修復: AIが方向を判定済みなのにsentimentへ未反映のものを補正
+    # （enrichロジック追加より前に付加された開示、例: 中立タイトルの上方修正を遡って好材料化）
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""UPDATE disclosures
+        SET sentiment=1, category=CASE WHEN category='earnings_rev' THEN 'earnings_up'
+                                       WHEN category='dividend_rev' THEN 'div_up' ELSE category END
+        WHERE ai_related LIKE %s AND sentiment <> 1""", ('%"direction": "上方"%',))
+    cur.execute("""UPDATE disclosures SET sentiment=-1
+        WHERE ai_related LIKE %s AND sentiment <> -1""", ('%"direction": "下方"%',))
+    conn.commit(); cur.close(); conn.close()
 
     return done
 
