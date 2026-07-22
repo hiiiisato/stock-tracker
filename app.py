@@ -8652,6 +8652,38 @@ def internal_kabutan_proxy():
         return f"proxy_error: {e}", 502, {"Content-Type": "text/plain; charset=utf-8"}
 
 
+@app.route("/internal/minkabu")
+def internal_minkabu_proxy():
+    """みんかぶ取得の内部プロキシ（Render経由）。
+    アナリストコンセンサス(analyst_consensus.py)がGHA/ローカルのIP遮断(403)に遭った時、
+    ここ(Renderの別IP)経由で取得する。認証はkabutanプロキシと同じ共有トークン方式。
+    """
+    import hashlib
+    import os as _os
+    pw = _os.environ.get("TIDB_PASSWORD", "")
+    expected = hashlib.sha256(pw.encode()).hexdigest()[:32] if pw else None
+    if not expected or request.args.get("token", "") != expected:
+        abort(403)
+    path = request.args.get("path", "")
+    # SSRF防止: minkabu.jp の /stock/... 配下のみ許可
+    if not re.match(r"^stock/[0-9A-Za-z/_?=&.\-]*$", path):
+        abort(400)
+    try:
+        r = _requests.get(
+            f"https://minkabu.jp/{path}",
+            headers={
+                "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                               "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"),
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "ja-JP,ja;q=0.9",
+                "Referer": "https://minkabu.jp/",
+            },
+            timeout=15)
+        return r.text, r.status_code, {"Content-Type": "text/plain; charset=utf-8"}
+    except Exception as e:
+        return f"proxy_error: {e}", 502, {"Content-Type": "text/plain; charset=utf-8"}
+
+
 @app.route("/health")
 def health():
     try:
