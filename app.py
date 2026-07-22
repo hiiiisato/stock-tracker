@@ -2369,7 +2369,9 @@ _STOCK_CSS = """
 .fin-table td {
   padding: 9px 14px; border-bottom: 1px solid #1c2128;
   text-align: right; color: #c9d1d9; white-space: nowrap;
+  font-variant-numeric: tabular-nums;   /* 数字を等幅にして桁を揃える */
 }
+.fin-table th { font-variant-numeric: tabular-nums; }
 .fin-table td:first-child { text-align: left; color: #8b949e; font-size: 12px; }
 .fin-table tr:last-child td { border-bottom: none; }
 .fin-table tr:hover td { background: #1c2128; }
@@ -7967,12 +7969,20 @@ function renderFinTable(d){
     {k:'eps',      l:'EPS',       s:'円'},
   ];
   var thead='<thead><tr><th>決算期</th>'+cols.map(function(c){return'<th>'+c.l+'（'+c.s+'）</th>';}).join('')+'</tr></thead>';
+  // 列ごとに小数桁を統一して経年で桁を揃える。%列は常に1桁、金額(億)・円は列の最大値で
+  // 0桁/1桁を決める（例: 売上が千億規模の列は全年0桁、数十億規模の列は全年1桁）。
+  var decs={};
+  cols.forEach(function(c){
+    var mx=0;
+    d.forEach(function(r){var v=r[c.k]; if(v!=null) mx=Math.max(mx,Math.abs(v));});
+    decs[c.k]=(c.s==='%')?1:(mx>=100?0:1);
+  });
   var tbody='<tbody>'+d.map(function(r){
     var cls=r.is_forecast?' class="fin-forecast-row"':'';
     var cells=cols.map(function(c){
       var v=r[c.k];
       if(v==null)return'<td><span style="color:#484f58">—</span></td>';
-      return'<td>'+parseFloat(v.toFixed(1)).toLocaleString('ja-JP')+'</td>';
+      return'<td>'+Number(v).toLocaleString('ja-JP',{minimumFractionDigits:decs[c.k],maximumFractionDigits:decs[c.k]})+'</td>';
     }).join('');
     return'<tr'+cls+'><td>'+r.label+'</td>'+cells+'</tr>';
   }).join('')+'</tbody>';
