@@ -22,7 +22,7 @@ from datetime import date, timedelta, datetime
 
 import requests as _requests
 from bs4 import BeautifulSoup as _BS
-from flask import Flask, abort, redirect, request, jsonify
+from flask import Flask, abort, redirect, request, jsonify, make_response
 
 from config import get_conn, db
 
@@ -456,6 +456,7 @@ def _nav(active: str = "") -> str:
         ("aifund",    "/aifund",     "AIファンド"),
         ("swing",     "/swing",      "スイング"),
         ("watchlist", "/watchlist",  "ウォッチリスト"),
+        ("portfolio", "/portfolio",  "ポートフォリオ"),
     ]
     items = []
     for key, href, label in links:
@@ -9557,6 +9558,582 @@ def watchlist_remove():
         except Exception as e:
             print(f"[watchlist_remove] error: {e}")
     return redirect("/watchlist")
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  ポートフォリオ（SBI証券・保有/約定）
+#  データ投入は import_sbi.py（ローカル手動）。個人の金融情報のため簡易認証で保護。
+#  評価額・含み損益は SBI明細を正として表示（合計はSBI表示と完全一致）。
+#  現在値は当社の日次終値でも併記（保有後の値動きを把握するため）。
+# ════════════════════════════════════════════════════════════════════════
+
+_PF_ACCT_ORDER = ["特定", "NISA成長", "旧NISA", "一般", "投信特定", "投信つみたて", "投信旧NISA", "投信NISA"]
+_PF_ACCT_COLORS = {
+    "特定": "#3b82f6", "NISA成長": "#10b981", "旧NISA": "#a78bfa", "一般": "#64748b",
+    "投信特定": "#f59e0b", "投信つみたて": "#ec4899", "投信旧NISA": "#f472b6", "投信NISA": "#fb923c",
+}
+
+_PF_CSS = """
+.pf-wrap{max-width:1080px;margin:0 auto}
+.pf-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:2px}
+.pf-title{font-size:20px;font-weight:700;color:#e6edf3}
+.pf-asof{font-size:12px;color:#8b949e;margin-top:3px}
+.pf-hero{display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:12px;margin:16px 0 10px}
+.pf-stat{background:linear-gradient(180deg,#171d26,#12161c);border:1px solid #30363d;border-radius:14px;padding:16px 18px}
+.pf-stat .k{font-size:11px;color:#8b949e;letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px}
+.pf-stat .v{font-size:27px;font-weight:800;color:#e6edf3;line-height:1.05;letter-spacing:-.3px}
+.pf-stat.big .v{font-size:32px}
+.pf-stat .s{font-size:12px;color:#8b949e;margin-top:5px}
+.pf-pos{color:#3fb950}.pf-neg{color:#f85149}
+.pf-reval{font-size:12px;color:#8b949e;margin:0 0 18px 2px}
+.pf-alloc{background:#161b22;border:1px solid #30363d;border-radius:14px;padding:15px 18px;margin-bottom:14px}
+.pf-alloc h3{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin:0 0 11px;font-weight:600}
+.pf-bar{display:flex;height:22px;border-radius:7px;overflow:hidden;background:#0d1117}
+.pf-seg{height:100%;transition:opacity .15s}.pf-seg:hover{opacity:.82}
+.pf-legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:11px;font-size:12px;color:#c9d1d9}
+.pf-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:middle}
+.pf-legend b{color:#e6edf3;font-weight:600}
+.pf-conc{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:22px}
+.pf-mini{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:13px 14px;text-align:center}
+.pf-mini .k{font-size:11px;color:#8b949e;margin-bottom:5px}
+.pf-mini .v{font-size:19px;font-weight:700;color:#e6edf3}
+.pf-acct{margin-bottom:24px}
+.pf-acct-h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;padding:0 2px 7px;border-bottom:1px solid #21262d}
+.pf-acct-h .nm{font-size:14px;font-weight:700;color:#e6edf3;display:flex;align-items:center;gap:8px}
+.pf-acct-h .dot{width:9px;height:9px;border-radius:3px;display:inline-block}
+.pf-acct-h .sub{font-size:12px;color:#8b949e}
+.pf-tbl{width:100%;border-collapse:collapse;font-size:13px}
+.pf-tbl th{font-size:11px;color:#8b949e;font-weight:600;text-align:right;padding:7px 10px;white-space:nowrap}
+.pf-tbl th:first-child{text-align:left}
+.pf-tbl td{padding:10px;text-align:right;border-top:1px solid #171c22;color:#c9d1d9;white-space:nowrap;vertical-align:middle}
+.pf-tbl td:first-child{text-align:left}
+.pf-tbl tbody tr:hover td{background:#1a2029}
+.pf-nm{font-weight:600}
+.pf-nm a{color:#e6edf3;text-decoration:none}.pf-nm a:hover{color:#58a6ff}
+.pf-code{color:#8b949e;font-size:11px;margin-left:7px;font-weight:400}
+.pf-sub{color:#6e7681;font-size:11px;margin-top:2px}
+.pf-w{color:#8b949e}
+.pf-wbar{display:inline-block;width:42px;height:6px;background:#21262d;border-radius:3px;overflow:hidden;margin-left:7px;vertical-align:middle}
+.pf-wbar i{display:block;height:100%;background:#3b82f6;border-radius:3px}
+.pf-gate{max-width:380px;margin:64px auto;background:#161b22;border:1px solid #30363d;border-radius:14px;padding:30px 28px;text-align:center}
+.pf-gate h2{font-size:19px;color:#e6edf3;margin:0 0 8px}
+.pf-gate p{font-size:12.5px;color:#8b949e;margin:0 0 18px;line-height:1.6}
+.pf-gate code{background:#0d1117;border:1px solid #30363d;border-radius:5px;padding:1px 6px;color:#79c0ff;font-size:12px}
+.pf-gate input{width:100%;box-sizing:border-box;padding:11px 12px;font-size:15px;background:#0d1117;border:1px solid #30363d;border-radius:9px;color:#e6edf3;margin-bottom:12px}
+.pf-gate button{width:100%;padding:11px;font-size:14px;font-weight:700;background:#238636;border:none;border-radius:9px;color:#fff;cursor:pointer}
+.pf-gate button:hover{background:#2ea043}
+.pf-logout{font-size:11px;color:#8b949e;background:none;border:1px solid #30363d;border-radius:7px;padding:5px 11px;cursor:pointer}
+.pf-logout:hover{color:#c9d1d9;border-color:#484f58}
+.pf-mini-s{font-size:11px;color:#8b949e;font-weight:600;margin-left:6px}
+.pf-sec{margin:0 0 18px}
+.pf-h3{font-size:13px;font-weight:700;color:#e6edf3;margin:0 0 11px;display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.pf-h3sub{font-size:11px;color:#8b949e;font-weight:400}
+.pf-note{font-size:11.5px;color:#8b949e;margin-top:9px;line-height:1.5}
+.pf-hz-wrap{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pf-hz{background:#161b22;border:1px solid #30363d;border-left:3px solid #8b949e;border-radius:10px;padding:11px 13px}
+.pf-hz-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.pf-hz-nm{color:#e6edf3;font-weight:600;font-size:13px;text-decoration:none}
+.pf-hz-nm:hover{color:#58a6ff}
+.pf-badge{font-size:10.5px;font-weight:700;color:#fff;padding:2px 9px;border-radius:20px;white-space:nowrap}
+.pf-hz-rs{margin-top:8px;display:flex;flex-wrap:wrap;gap:5px}
+.pf-chip{font-size:10.5px;color:#c9d1d9;background:#21262d;border:1px solid #30363d;border-radius:5px;padding:2px 7px}
+.pf-2col{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px}
+.pf-exp{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:13px 15px}
+.pf-exp h4{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:.4px;margin:0 0 10px;font-weight:600}
+.pf-exp-row{display:flex;align-items:center;gap:9px;margin-bottom:7px;font-size:12px}
+.pf-exp-nm{flex:0 0 34%;color:#c9d1d9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pf-exp-track{flex:1;height:8px;background:#21262d;border-radius:4px;overflow:hidden}
+.pf-exp-track i{display:block;height:100%;background:linear-gradient(90deg,#2f81f7,#3fb0ff);border-radius:4px}
+.pf-exp-p{flex:0 0 34px;text-align:right;color:#8b949e}
+.pf-risk{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px}
+.pf-rk{background:#161b22;border:1px solid #30363d;border-radius:11px;padding:12px 10px;text-align:center}
+.pf-rk .k{font-size:10.5px;color:#8b949e;margin-bottom:6px;line-height:1.3}
+.pf-rk .v{font-size:19px;font-weight:700;color:#e6edf3}
+.pf-scn{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:13px 15px}
+.pf-scn-h{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:.4px;margin-bottom:11px;font-weight:600}
+.pf-scn-row{display:flex;align-items:center;gap:11px;margin-bottom:9px;font-size:12.5px}
+.pf-scn-nm{flex:0 0 42%;color:#e6edf3;display:flex;flex-direction:column;line-height:1.35}
+.pf-scn-dt{font-size:10.5px;color:#6e7681;font-weight:400}
+.pf-scn-track{flex:1;height:9px;background:#21262d;border-radius:5px;overflow:hidden}
+.pf-scn-track i{display:block;height:100%;background:linear-gradient(90deg,#b0402f,#f85149);border-radius:5px}
+.pf-scn-p{flex:0 0 96px;text-align:right;font-weight:700;display:flex;flex-direction:column;line-height:1.3}
+.pf-scn-y{font-size:10.5px;color:#8b949e;font-weight:400}
+.pf-since{color:#6e7681;font-size:10.5px;margin-left:7px}
+.pf-rb-wrap{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.pf-rb{font-size:11px;font-weight:600;text-decoration:none;background:#21262d;border:1px solid #30363d;border-radius:6px;padding:3px 8px}
+.pf-rb:hover{border-color:#484f58}
+.pf-trades{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:6px 14px}
+.pf-tr{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #171c22;font-size:12.5px}
+.pf-tr:last-child{border-bottom:none}
+.pf-tr-d{flex:0 0 76px;color:#8b949e;font-size:11.5px}
+.pf-tr-s{flex:0 0 24px;text-align:center;font-weight:700;font-size:11px;border-radius:5px;padding:1px 0}
+.pf-tr-s.buy{background:rgba(63,185,80,.16);color:#3fb950}
+.pf-tr-s.sell{background:rgba(248,81,73,.16);color:#f85149}
+.pf-tr-nm{flex:1;color:#e6edf3;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pf-tr-nm a{color:#e6edf3;text-decoration:none}.pf-tr-nm a:hover{color:#58a6ff}
+.pf-tr-q{flex:0 0 auto;color:#8b949e;font-size:11.5px}
+.pf-tr-a{flex:0 0 92px;text-align:right;color:#c9d1d9}
+.pf-more{margin-top:2px}
+.pf-more summary{font-size:12px;color:#58a6ff;cursor:pointer;padding:8px 0;user-select:none}
+@media(max-width:768px){
+  .pf-hero{grid-template-columns:1fr 1fr}
+  .pf-hz-wrap{grid-template-columns:1fr}
+  .pf-2col{grid-template-columns:1fr}
+  .pf-risk{grid-template-columns:repeat(2,1fr)}
+  .pf-scn-nm{flex-basis:44%}.pf-scn-p{flex-basis:80px}
+  .pf-tr-q{display:none}
+}
+@media(max-width:768px){
+  .pf-hero{grid-template-columns:1fr 1fr}
+  .pf-stat.big{grid-column:1/-1}
+  .pf-tbl thead{display:none}
+  .pf-tbl,.pf-tbl tbody,.pf-tbl tr,.pf-tbl td{display:block;width:100%;box-sizing:border-box}
+  .pf-tbl tr{border:1px solid #21262d;border-radius:11px;margin-bottom:10px;background:#161b22;padding:4px 2px}
+  .pf-tbl td{text-align:right;border:none;padding:6px 13px;display:flex;justify-content:space-between;align-items:center}
+  .pf-tbl td.pf-nm{display:block;text-align:left;padding:9px 13px 7px;border-bottom:1px solid #21262d;margin-bottom:3px}
+  .pf-tbl td::before{content:attr(data-label);color:#8b949e;font-size:11px;font-weight:600}
+  .pf-tbl td.pf-nm::before{content:''}
+  .pf-tbl .pf-sub{display:inline;margin-left:6px}
+}
+"""
+
+
+def _pf_token():
+    import os, hashlib
+    pw = os.environ.get("PORTFOLIO_PASSCODE", "")
+    return hashlib.sha256(("pf:" + pw).encode()).hexdigest()[:32] if pw else None
+
+
+def _pf_authed() -> bool:
+    tok = _pf_token()
+    return bool(tok) and request.cookies.get("pf_auth") == tok
+
+
+def _pf_yen(n) -> str:
+    return f"{int(n):,}" if n is not None else "—"
+
+
+def _pf_signed(n) -> str:
+    n = int(n or 0)
+    return f"+{n:,}" if n > 0 else f"{n:,}"
+
+
+def _pf_price(n) -> str:
+    if n is None:
+        return "—"
+    n = float(n)
+    return f"{n:,.0f}" if abs(n - round(n)) < 1e-9 else f"{n:,.1f}"
+
+
+def _pf_cls(n) -> str:
+    return "pos" if (n or 0) >= 0 else "neg"
+
+
+def _pf_gate(inner: str) -> str:
+    return _page_html("ポートフォリオ", f'<div class="pf-wrap">{inner}</div>',
+                      active="portfolio", extra_head=f"<style>{_PF_CSS}</style>")
+
+
+def _build_portfolio_page() -> str:
+    import html as _h
+    import portfolio_analytics as pa
+    from datetime import timedelta
+    esc = _h.escape
+    _f = lambda x: float(x) if x is not None else None
+    with db() as cur:
+        cur.execute("SELECT MAX(as_of) FROM my_holdings")
+        row = cur.fetchone()
+        as_of = row[0] if row else None
+        cur.execute("""SELECT code,name,account_type,asset_class,qty,avg_cost,
+                              acquired_amount,sbi_price,sbi_value,sbi_pl
+                       FROM my_holdings""")
+        rows = [list(r) for r in cur.fetchall()]
+        cur.execute("""SELECT id,trade_date,code,name,side,account_type,asset_class,
+                              qty,price,settle_amount,raw_action,market
+                       FROM my_trades ORDER BY trade_date DESC, id DESC""")
+        trades = [{"id": t[0], "trade_date": t[1], "code": t[2], "name": t[3],
+                   "side": t[4], "account_type": t[5], "asset_class": t[6],
+                   "qty": _f(t[7]), "price": _f(t[8]), "settle_amount": t[9],
+                   "raw_action": t[10], "market": t[11]} for t in cur.fetchall()]
+        stock_codes = [r[0] for r in rows if r[3] == "stock"]
+        live: dict[str, float] = {}
+        latest_pd = None
+        stats_map: dict = {}
+        theme_primary: dict = {}
+        sector_map: dict = {}
+        raw_series: dict = {}
+        if stock_codes:
+            ph = ",".join(["%s"] * len(stock_codes))
+            cur.execute(f"""SELECT dp.code, dp.close FROM daily_prices dp
+                JOIN (SELECT code, MAX(date) md FROM daily_prices
+                      WHERE code IN ({ph}) AND close IS NOT NULL GROUP BY code) m
+                  ON dp.code = m.code AND dp.date = m.md""", stock_codes)
+            live = {r[0]: float(r[1]) for r in cur.fetchall()}
+            cur.execute("SELECT MAX(date) FROM daily_prices WHERE close IS NOT NULL")
+            latest_pd = cur.fetchone()[0]
+
+            # ヘルスチェック用のテクニカル＋F-score（現在値は live を使う）
+            cur.execute(f"""SELECT code, ma50, ma200_slope, rsi14, gc_75_200, dev_ma25, fscore
+                            FROM price_stats WHERE code IN ({ph})""", stock_codes)
+            for r in cur.fetchall():
+                stats_map[r[0]] = {"ma50": _f(r[1]), "ma200_slope": _f(r[2]),
+                                   "rsi14": _f(r[3]), "gc_75_200": r[4],
+                                   "dev_ma25": _f(r[5]), "fscore": _f(r[6]),
+                                   "close": live.get(r[0])}
+            # 主テーマ（tier3・汎用ラベル除外・relevance最大を各銘柄の主テーマに）
+            cur.execute(f"""SELECT tm.code, t.name, tm.relevance
+                            FROM theme_members tm JOIN themes t ON tm.theme_id = t.id
+                            WHERE tm.code IN ({ph}) AND tm.tier >= 3
+                            ORDER BY tm.code, tm.relevance DESC""", stock_codes)
+            for code, tname, _rel in cur.fetchall():
+                if code not in theme_primary and tname not in pa.GENERIC_THEMES:
+                    theme_primary[code] = tname
+            # 業種
+            cur.execute(f"""SELECT s.code, sec.name FROM stocks s
+                            LEFT JOIN sectors sec ON s.sector_id = sec.id
+                            WHERE s.code IN ({ph})""", stock_codes)
+            sector_map = {r[0]: r[1] for r in cur.fetchall()}
+            # リターン系列（VaR/β/ストレス用・約400日）＋TOPIX(1306)
+            cutoff = (latest_pd - timedelta(days=400)) if latest_pd else None
+            series_codes = stock_codes + ["1306"]
+            ph2 = ",".join(["%s"] * len(series_codes))
+            cur.execute(f"""SELECT code, date, adj_close FROM daily_prices
+                            WHERE code IN ({ph2}) AND date >= %s AND adj_close IS NOT NULL
+                            ORDER BY code, date""", series_codes + [cutoff])
+            for code, d, adj in cur.fetchall():
+                raw_series.setdefault(code, []).append((d, float(adj)))
+
+    if not rows:
+        return _pf_gate('<div class="pf-gate"><h2>データがありません</h2>'
+                        '<p>ローカルで <code>python import_sbi.py SBI明細/</code> を実行してください。</p></div>')
+
+    # 取引履歴の活用（実現損益・投資活動・初回購入日）
+    tsum = pa.trade_summary(trades)
+    realized = tsum["realized_total"]
+    first_buy = tsum["first_buy"]
+
+    # 各保有の現在値・評価額・含み損益は「当社日次終値」を主基準に（毎日自動で最新化）。
+    # 投信は日次基準価額が無いためSBI明細値を使う。SBI明細合計は照合・参照用に別途保持。
+    def _cur(r):
+        code, name, acct, asset, qty, cost, acq, sbip, sval, spl = r
+        if asset == "stock":
+            cp = live.get(code)
+            if cp is None:
+                cp = float(sbip) if sbip is not None else None
+            if cp is not None and qty is not None:
+                val = int(round(float(qty) * cp))
+                pl = int(round((cp - float(cost)) * float(qty))) if cost is not None else (spl or 0)
+                return cp, val, pl
+        return (float(sbip) if sbip is not None else None), (sval or 0), (spl or 0)
+
+    curmap = {id(r): _cur(r) for r in rows}
+
+    total_value = sum(curmap[id(r)][1] for r in rows)
+    total_cost = sum(r[6] or 0 for r in rows)
+    total_pl = sum(curmap[id(r)][2] for r in rows)
+    pl_pct = (total_pl / total_cost * 100) if total_cost else 0.0
+    stock_val = sum(curmap[id(r)][1] for r in rows if r[3] == "stock")
+    stock_pct = (stock_val / total_value * 100) if total_value else 0.0
+    sbi_total = sum(r[8] or 0 for r in rows)          # SBI明細スナップショット合計（参照）
+
+    # 口座別集計（現在値ベース）
+    accts: dict[str, dict] = {}
+    for r in rows:
+        _cp, val, pl = curmap[id(r)]
+        a = accts.setdefault(r[2], {"value": 0, "cost": 0, "pl": 0, "rows": []})
+        a["value"] += val
+        a["cost"] += r[6] or 0
+        a["pl"] += pl
+        a["rows"].append(r)
+    ordered = [a for a in _PF_ACCT_ORDER if a in accts] + [a for a in accts if a not in _PF_ACCT_ORDER]
+
+    # 集中度（銘柄コード単位・現在値で口座横断集計）
+    bycode: dict[str, int] = {}
+    for r in rows:
+        bycode[r[0]] = bycode.get(r[0], 0) + curmap[id(r)][1]
+    weights = sorted(bycode.values(), reverse=True)
+    top5 = (sum(weights[:5]) / total_value * 100) if total_value else 0.0
+
+    # ── Phase2 分析（集中度・ヘルスチェック・リスク） ──
+    hlist = [{"code": r[0], "name": r[1], "account_type": r[2],
+              "asset_class": r[3], "sbi_value": curmap[id(r)][1]} for r in rows]
+    conc = pa.concentration(hlist, theme_primary, sector_map)
+    health = pa.health_check(hlist, stats_map)
+    ret_series: dict[str, dict] = {}
+    for _code, pts in raw_series.items():
+        pts.sort()
+        rr = {}
+        for i in range(1, len(pts)):
+            prev = pts[i - 1][1]
+            if prev:
+                rr[pts[i][0]] = pts[i][1] / prev - 1
+        ret_series[_code] = rr
+    topix_ret = ret_series.get("1306", {})
+    calendar = sorted(topix_ret.keys())[-252:]
+    sleeve_by_code: dict[str, int] = {}
+    for h in hlist:
+        if h["asset_class"] == "stock":
+            sleeve_by_code[h["code"]] = sleeve_by_code.get(h["code"], 0) + h["sbi_value"]
+    sleeve = sum(sleeve_by_code.values()) or 1
+    weights_r = {c: v / sleeve for c, v in sleeve_by_code.items()}
+    port_ret = pa.build_port_returns(ret_series, calendar, weights_r) if calendar else []
+    topix_list = [topix_ret[d] for d in calendar]
+    risk = pa.risk_metrics(port_ret, topix_list) if calendar else None
+    beta = risk.get("beta") if risk else None
+    stress = pa.stress_test(calendar, port_ret, beta) if calendar else []
+
+    # ── ヘッダ ──
+    parts = [f'''<div class="pf-head">
+  <div><div class="pf-title">ポートフォリオ</div>
+    <div class="pf-asof">SBI明細 {as_of} 時点 ・ 保有 {len(rows)} 件 ・ {len(bycode)} 銘柄</div></div>
+  <form method="post" action="/portfolio/logout"><button class="pf-logout">ログアウト</button></form>
+</div>''']
+
+    # ── ヒーロー（サマリ） ──
+    cls = _pf_cls(total_pl)
+    rcls = _pf_cls(realized)
+    tot_ret = total_pl + realized
+    parts.append(f'''<div class="pf-hero">
+  <div class="pf-stat big"><div class="k">総資産</div><div class="v">¥{_pf_yen(total_value)}</div>
+    <div class="s">取得原価 ¥{_pf_yen(total_cost)}</div></div>
+  <div class="pf-stat"><div class="k">含み損益</div>
+    <div class="v pf-{cls}">{_pf_signed(total_pl)}</div>
+    <div class="s pf-{cls}">{pl_pct:+.1f}%</div></div>
+  <div class="pf-stat"><div class="k">実現損益（累計）</div>
+    <div class="v pf-{rcls}">{_pf_signed(realized)}</div>
+    <div class="s">含み+実現 <span class="pf-{_pf_cls(tot_ret)}">{_pf_signed(tot_ret)}</span></div></div>
+  <div class="pf-stat"><div class="k">株式 / 投信</div><div class="v">{stock_pct:.0f}<span style="font-size:16px">%</span> / {100 - stock_pct:.0f}<span style="font-size:16px">%</span></div>
+    <div class="s">株式 ¥{_pf_yen(stock_val)}</div></div>
+</div>''')
+
+    if latest_pd:
+        parts.append(f'<div class="pf-reval">評価額・含み損益は<b>当社の日次終値（{latest_pd}）基準で毎日自動更新</b>。'
+                     f'SBI明細の取込は {as_of} 時点（その時の評価額 ¥{_pf_yen(sbi_total)}）。'
+                     f'随時CSVを取り込めば取得単価・保有銘柄が最新化されます。</div>')
+
+    # ── ヘルスチェック（テクニカル×ファンダの2軸） ──
+    _HZ = {3: ("撤退検討", "#f85149"), 2: ("注意", "#f0883e"),
+           1: ("早期警告", "#d29922"), 0: ("良好", "#3fb950")}
+    alerts = [h for h in health if h["severity"] >= 1]
+    if alerts:
+        cards = []
+        for h in alerts:
+            lbl, col = _HZ[h["severity"]]
+            chips = "".join(f'<span class="pf-chip">{esc(x)}</span>' for x in h["reasons"])
+            cards.append(
+                f'<div class="pf-hz" style="border-left-color:{col}">'
+                f'<div class="pf-hz-top"><a href="/stock/{h["code"]}" class="pf-hz-nm">{esc(h["name"])}'
+                f'<span class="pf-code">{h["code"]}</span></a>'
+                f'<span class="pf-badge" style="background:{col}">{lbl}</span></div>'
+                f'<div class="pf-hz-rs">{chips}</div></div>')
+        parts.append(
+            '<div class="pf-sec"><h3 class="pf-h3">🩺 ヘルスチェック'
+            '<span class="pf-h3sub">テクニカル×ファンダの2軸。撤退は両方が崩れた時のみ</span></h3>'
+            f'<div class="pf-hz-wrap">{"".join(cards)}</div>'
+            f'<div class="pf-note">良好 {len(health) - len(alerts)} 銘柄 ／ 要確認 {len(alerts)} 銘柄</div></div>')
+    elif health:
+        parts.append(
+            '<div class="pf-sec"><h3 class="pf-h3">🩺 ヘルスチェック</h3>'
+            f'<div class="pf-note pf-pos">保有株 {len(health)} 銘柄すべて良好（テクニカル・F-scoreとも問題なし）。</div></div>')
+
+    # ── 口座別 資産配分バー ──
+    segs, legend = [], []
+    for a in ordered:
+        v = accts[a]["value"]
+        pct = (v / total_value * 100) if total_value else 0
+        col = _PF_ACCT_COLORS.get(a, "#8b949e")
+        segs.append(f'<div class="pf-seg" style="width:{pct:.3f}%;background:{col}" title="{a} {pct:.1f}%"></div>')
+        legend.append(f'<span><i style="background:{col}"></i>{a} <b>{pct:.0f}%</b> ¥{_pf_yen(v)}</span>')
+    parts.append(f'<div class="pf-alloc"><h3>口座別 資産配分</h3>'
+                 f'<div class="pf-bar">{"".join(segs)}</div>'
+                 f'<div class="pf-legend">{"".join(legend)}</div></div>')
+
+    # ── 集中度＆エクスポージャー ──
+    def _expbar(items, denom, limit=6):
+        denom = denom or 1
+        out = []
+        for nm, v in items[:limit]:
+            p = v / denom * 100
+            out.append(
+                f'<div class="pf-exp-row"><span class="pf-exp-nm">{esc(str(nm))}</span>'
+                f'<span class="pf-exp-track"><i style="width:{min(p, 100):.1f}%"></i></span>'
+                f'<span class="pf-exp-p">{p:.0f}%</span></div>')
+        return "".join(out) or '<div class="pf-note">データなし</div>'
+
+    conc_top1 = (conc["top"][0]["value"] / conc["total"] * 100) if conc["top"] else 0
+    parts.append(f'''<div class="pf-conc">
+  <div class="pf-mini"><div class="k">集中度 HHI</div><div class="v">{conc["hhi"]:.0f}<span class="pf-mini-s">{conc["hhi_label"]}</span></div></div>
+  <div class="pf-mini"><div class="k">最大銘柄</div><div class="v">{conc_top1:.1f}%</div></div>
+  <div class="pf-mini"><div class="k">上位5銘柄</div><div class="v">{top5:.1f}%</div></div>
+</div>''')
+    parts.append(
+        '<div class="pf-2col">'
+        '<div class="pf-exp"><h4>テーマ別（株式スリーブ）</h4>'
+        + _expbar(conc["theme_alloc"], conc["stock_value"]) + '</div>'
+        '<div class="pf-exp"><h4>業種別（株式スリーブ）</h4>'
+        + _expbar(conc["sector_alloc"], conc["stock_value"]) + '</div></div>')
+
+    # ── リスク指標＆ストレステスト（株式スリーブ） ──
+    if risk:
+        sleeve_pct = (conc["stock_value"] / conc["total"] * 100) if conc["total"] else 0
+        beta_disp = f'{beta:.2f}' if beta is not None else '—'
+        grid = f'''<div class="pf-risk">
+  <div class="pf-rk"><div class="k">年率ボラティリティ</div><div class="v">{risk["vol_annual"]:.1f}%</div></div>
+  <div class="pf-rk"><div class="k">VaR 95%（1日）</div><div class="v pf-neg">-{risk["var95"]:.1f}%</div></div>
+  <div class="pf-rk"><div class="k">VaR 99%（1日）</div><div class="v pf-neg">-{risk["var99"]:.1f}%</div></div>
+  <div class="pf-rk"><div class="k">最大DD（1年）</div><div class="v pf-neg">{risk["max_dd"]:.1f}%</div></div>
+  <div class="pf-rk"><div class="k">β（vs TOPIX）</div><div class="v">{beta_disp}</div></div>
+</div>'''
+        maxmag = max((abs(s["pct"]) for s in stress), default=1) or 1
+        scn = []
+        for s in stress:
+            w = abs(s["pct"]) / maxmag * 100
+            loss = int(conc["stock_value"] * s["pct"] / 100)
+            scn.append(
+                f'<div class="pf-scn-row"><span class="pf-scn-nm">{esc(s["name"])}'
+                f'<span class="pf-scn-dt">{esc(s["detail"])}</span></span>'
+                f'<span class="pf-scn-track"><i style="width:{w:.0f}%"></i></span>'
+                f'<span class="pf-scn-p pf-neg">{s["pct"]:.1f}%<span class="pf-scn-y">{_pf_signed(loss)}円</span></span>'
+                f'</div>')
+        parts.append(
+            '<div class="pf-sec"><h3 class="pf-h3">⚠️ リスク指標＆ストレステスト'
+            f'<span class="pf-h3sub">株式スリーブ ¥{_pf_yen(conc["stock_value"])}（全体の{sleeve_pct:.0f}%）・直近{risk["n"]}営業日</span></h3>'
+            f'{grid}'
+            f'<div class="pf-scn"><div class="pf-scn-h">現在の保有構成を当てはめた下落シナリオ</div>{"".join(scn)}</div>'
+            f'<div class="pf-note">※ 投信（¥{_pf_yen(conc["fund_value"])}）は日次基準価額データが無いため本指標の対象外。'
+            'ヒストリカルは現保有比率を過去に当てはめた再現値、β連動（TOPIX−10/−20%）は仮説です。</div></div>')
+
+    # ── 口座別テーブル ──
+    for a in ordered:
+        info = accts[a]
+        col = _PF_ACCT_COLORS.get(a, "#8b949e")
+        acls = _pf_cls(info["pl"])
+        acct_pct = (info["pl"] / info["cost"] * 100) if info["cost"] else 0.0
+        body_rows = []
+        for r in sorted(info["rows"], key=lambda x: curmap[id(x)][1], reverse=True):
+            code, name, _acct, asset, qty, cost, acq, sbip, sval, spl = r
+            cp, val, pl = curmap[id(r)]
+            w = (val / total_value * 100) if total_value else 0
+            plpct = (pl / acq * 100) if acq else 0
+            plcls = _pf_cls(pl)
+            if asset == "stock":
+                since = first_buy.get(code)
+                since_html = f'<span class="pf-since">{since.strftime("%y/%m")}〜</span>' if since else ""
+                nm = (f'<a href="/stock/{code}">{esc(name or code)}</a>'
+                      f'<span class="pf-code">{code}</span>{since_html}')
+                qty_disp = f"{int(qty):,}" if qty is not None else "—"
+            else:
+                nm = f'{esc(name or "")}<span class="pf-code">投信</span>'
+                qty_disp = f"{int(qty):,}口" if qty is not None else "—"
+            body_rows.append(
+                f'<tr>'
+                f'<td class="pf-nm" data-label="銘柄">{nm}</td>'
+                f'<td data-label="数量">{qty_disp}</td>'
+                f'<td data-label="取得単価">{_pf_price(cost)}</td>'
+                f'<td data-label="現在値">{_pf_price(cp)}</td>'
+                f'<td data-label="評価額">¥{_pf_yen(val)}</td>'
+                f'<td class="pf-{plcls}" data-label="含み損益">{_pf_signed(pl)}'
+                f'<div class="pf-sub pf-{plcls}">{plpct:+.1f}%</div></td>'
+                f'<td class="pf-w" data-label="構成比">{w:.1f}%'
+                f'<span class="pf-wbar"><i style="width:{min(w * 4, 100):.0f}%"></i></span></td>'
+                f'</tr>')
+        parts.append(f'''<div class="pf-acct">
+  <div class="pf-acct-h">
+    <div class="nm"><span class="dot" style="background:{col}"></span>{a}</div>
+    <div class="sub">¥{_pf_yen(info["value"])} ・ <span class="pf-{acls}">{_pf_signed(info["pl"])} ({acct_pct:+.1f}%)</span></div>
+  </div>
+  <table class="pf-tbl">
+    <thead><tr><th>銘柄</th><th>数量</th><th>取得単価</th><th>現在値</th><th>評価額</th><th>含み損益</th><th>構成比</th></tr></thead>
+    <tbody>{"".join(body_rows)}</tbody>
+  </table>
+</div>''')
+
+    # ── 取引履歴＆実現損益 ──
+    if trades:
+        def _trade_row(t):
+            buy = t["side"] == "buy"
+            sd = "買" if buy else "売"
+            scls = "buy" if buy else "sell"
+            code = t["code"]
+            if code:
+                nm = f'<a href="/stock/{code}">{esc(t["name"] or code)}</a><span class="pf-code">{code}</span>'
+                q = f'{int(t["qty"]):,}株' if t["qty"] is not None else ""
+            else:
+                nm = f'{esc((t["name"] or "")[:22])}<span class="pf-code">投信</span>'
+                q = f'{int(t["qty"]):,}口' if t["qty"] is not None else ""
+            price = f'@{_pf_price(t["price"])}' if t["price"] else ""
+            amt = f'¥{_pf_yen(t["settle_amount"])}' if t["settle_amount"] is not None else ""
+            return (f'<div class="pf-tr"><span class="pf-tr-d">{t["trade_date"]:%Y/%m/%d}</span>'
+                    f'<span class="pf-tr-s {scls}">{sd}</span>'
+                    f'<span class="pf-tr-nm">{nm}</span>'
+                    f'<span class="pf-tr-q">{q} {price}</span>'
+                    f'<span class="pf-tr-a">{amt}</span></div>')
+
+        recent = "".join(_trade_row(t) for t in trades[:15])
+        rest = trades[15:]
+        rest_html = ""
+        if rest:
+            rest_html = (f'<details class="pf-more"><summary>残り {len(rest)} 件を表示</summary>'
+                         f'{"".join(_trade_row(t) for t in rest)}</details>')
+        # 実現損益の出た銘柄（上位）
+        rb = tsum["realized_by_code"]
+        rb_html = ""
+        if rb:
+            chips = []
+            for code, v in rb[:8]:
+                chips.append(f'<a href="/stock/{code}" class="pf-rb pf-{_pf_cls(v)}">'
+                             f'{code} {_pf_signed(v)}</a>')
+            rb_html = f'<div class="pf-rb-wrap">{"".join(chips)}</div>'
+        inc_note = ""
+        if tsum["incomplete"]:
+            inc_note = ('　※ 一部銘柄（旧NISA等・取込期間より前に取得した玉を売却）は'
+                        '取得原価が不明のため実現損益の集計から除外しています。')
+        parts.append(
+            '<div class="pf-sec"><h3 class="pf-h3">💴 取引履歴＆実現損益'
+            f'<span class="pf-h3sub">買 {tsum["n_buys"]} 回 / 売 {tsum["n_sells"]} 回 ・ '
+            f'実現損益（累計）<span class="pf-{_pf_cls(realized)}">{_pf_signed(realized)}</span>円</span></h3>'
+            f'{rb_html}'
+            f'<div class="pf-trades">{recent}{rest_html}</div>'
+            f'<div class="pf-note">実現損益は移動平均取得原価法での概算。{inc_note}</div></div>')
+
+    return _page_html("ポートフォリオ", f'<div class="pf-wrap">{"".join(parts)}</div>',
+                      active="portfolio", extra_head=f"<style>{_PF_CSS}</style>")
+
+
+@app.route("/portfolio")
+def portfolio_page():
+    import os
+    if not os.environ.get("PORTFOLIO_PASSCODE", ""):
+        return _pf_gate('<div class="pf-gate"><h2>ポートフォリオ（未設定）</h2>'
+                        '<p>個人の保有情報を扱うため、環境変数 <code>PORTFOLIO_PASSCODE</code> '
+                        'を設定すると有効になります（Render の環境変数、またはローカル実行時の env）。'
+                        '設定後、そのパスコードでログインできます。</p></div>')
+    if not _pf_authed():
+        return _pf_gate('<div class="pf-gate"><h2>🔒 ポートフォリオ</h2>'
+                        '<p>個人の保有情報のため保護されています。パスコードを入力してください。</p>'
+                        '<form method="post" action="/portfolio/login">'
+                        '<input type="password" name="passcode" placeholder="パスコード" autofocus>'
+                        '<button type="submit">開く</button></form></div>')
+    return _build_portfolio_page()
+
+
+@app.route("/portfolio/login", methods=["POST"])
+def portfolio_login():
+    import os
+    pw = os.environ.get("PORTFOLIO_PASSCODE", "")
+    if pw and request.form.get("passcode", "") == pw:
+        resp = make_response(redirect("/portfolio"))
+        resp.set_cookie("pf_auth", _pf_token(), max_age=60 * 60 * 24 * 30,
+                        httponly=True, samesite="Lax", secure=request.is_secure)
+        return resp
+    return redirect("/portfolio")
+
+
+@app.route("/portfolio/logout", methods=["POST"])
+def portfolio_logout():
+    resp = make_response(redirect("/portfolio"))
+    resp.delete_cookie("pf_auth")
+    return resp
 
 
 @app.route("/memo/add", methods=["POST"])

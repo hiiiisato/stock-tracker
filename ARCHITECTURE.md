@@ -12,7 +12,7 @@ J-Quants 無料枠・EDINET）のみで構成。
 [Yahoo/kabutan/J-Quants/EDINET/ファンド各社PDF]
         │  (cronバッチが毎日/毎週/毎月取得)
         ▼
-   TiDB Cloud (stock_tracker DB, 27テーブル)
+   TiDB Cloud (stock_tracker DB, 29テーブル)
         │
         ▼
    app.py (Flask・単一ファイル) ── Render.com Web Service
@@ -193,6 +193,15 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   さらに毎晩: **投資基準を明文化して`ai_fund_policy`に日次蓄積**（前回基準+成績フィードバック+
   資金流入テーマを見て更新→次回プロンプトに注入する学習ループ）、**控え8銘柄を`ai_fund_bench`で別管理**
   （選定日終値からの騰落を計測・候補プールに合流して昇格可能）。NAVは終値評価で日次記録（ベンチ=1306）
+- `import_sbi.py` — **SBI証券CSV明細の取込（2026-07新設・ローカル手動）**。保有証券一覧・約定履歴（cp932・多セクション・
+  株/投信で列意味が異なる・新JPX英数字コード混在）を専用パーサで `my_holdings`（全置換）/`my_trades`（row_hashで冪等）へ。
+  取込時にSBI表示合計との照合＋stocks未照合コード警告を出力。使い方: `python import_sbi.py SBI明細/<日付>/`。
+  ※明細は個人の金融情報のため `SBI明細/` を .gitignore で除外
+- `portfolio_analytics.py` — **ポートフォリオ分析の純ロジック層（2026-07新設）**。集中度(HHI)・テーマ/業種
+  エクスポージャー・2軸ヘルスチェック（テクニカル×F-score／撤退は両方崩壊時のみ）・リスク指標（年率ボラ・
+  ヒストリカルVaR95/99・最大DD・β vs TOPIX）・ストレステスト（現保有構成での過去最悪局面の再現＋β連動ショック）・
+  `trade_summary`（約定履歴→移動平均取得原価法の実現損益・投資活動・初回購入日。窓外取得の売りは除外）。
+  DB/HTMLに非依存（app.py が呼び出し `/portfolio` で描画）。numpy不使用（statistics/math のみ）
 
 ### Web (app.py — 単一ファイル約6200行)
 セクション見出し（`# ═══` コメント）で区切られている。構成:
@@ -222,6 +231,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | `/themes` | テーマ株一覧（みんかぶ全~1,150テーマ＋手動テーマ）。上部に3枠: **ロングランテーマ**（`LONGRUN_THEMES`=手動15件・構造テーマ・featured='long'）、**気になるテーマ**（`WATCH_THEMES`=オーナー興味の手動・featured='watch'。空なら非表示）、**好調テーマ10**（自動: 6銘柄+&時価総額1兆+足切り→大局スコア順。pin/banで上書き可）。どちらも1年指数ミニチャート付きカード。みんかぶに無い「宇宙開発」「SaaS」は`theme_master.MANUAL_THEMES`の手動キュレーション（origin='manual'・同期対象外）。一覧は**大局×短期の2軸スコア＋四象限判定**（主力トレンド/押し目/大局良好/一過性疑い/冷却）でデフォルト大局順。大局=1年・6ヶ月の対TOPIX超過×資金流入持続週数(26週)×高値圏×増益率中央値 |
 | `/theme/<id>` | テーマ詳細（みんかぶ風・2026-07刷新。説明文＋前日/前月/前年比＋テーマ指数vsTOPIXチャート(期間切替)＋関連度バー・3ヶ月ミニチャート付き構成銘柄表＋周辺銘柄折りたたみ） |
 | `/rankings` `/events` `/swing` `/watchlist` | 各分析ページ（/report/<date>は/themesへリダイレクト） |
+| `/portfolio` (+ `/portfolio/login` `/portfolio/logout`) | ポートフォリオ（SBI証券の保有/約定を取込表示）。総資産・含み損益・**実現損益（取引履歴から）**・口座別配分・集中度HHI・テーマ/業種エクスポージャー・2軸ヘルスチェック・リスク指標/ストレステスト・**取引履歴＆実現損益**。**評価額は当社の日次終値ベースで毎日自動更新**（SBI明細は取得単価・保有構成の取込元＝随時でOK。投信のみSBI値）。**個人情報のため `PORTFOLIO_PASSCODE`(env) の簡易Cookie認証で保護**、未設定時OFF。データ投入は `import_sbi.py`（ローカル手動）、分析は `portfolio_analytics.py` |
 | `/api/chart_grid` `/api/search` `/health` | 補助API |
 
 ## DBテーブル（stock_tracker・27テーブル）
@@ -255,6 +265,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | YouTube | `youtube_channels` `youtube_videos` `youtube_weekly` | youtube_insights.py（週次AI巡回・動画分析・横断サマリー） |
 | コンセンサス | `analyst_consensus` | analyst_consensus.py（みんかぶ・目標株価/レーティング/会社予想vsコンセンサス） |
 | アプリ | `watchlist` `stock_memos` `fetch_logs` | app.py / daily_run.py |
+| ポートフォリオ | `my_holdings` `my_trades` | import_sbi.py（SBI証券CSVをローカル手動取込・保有は全置換／約定はrow_hashで冪等）。/portfolio で表示 |
 | AIファンド | `ai_fund_state` `ai_fund_positions` `ai_fund_orders` `ai_fund_trades` `ai_fund_nav` `ai_fund_policy` `ai_fund_bench` | ai_fund.py（模擬運用・全売買に理由を記録・投資基準と控え銘柄を日次蓄積） |
 | 決算予定 | `earnings_schedule` | earnings_calendar_jpx.py（JPX公式の決算発表予定日Excel・日次更新）。ai_fund.py `_earnings_dates` が読み取り。kabutan/ J-Quants無料枠(12週遅延)は使用不可のため公式JPXに置換 |
 

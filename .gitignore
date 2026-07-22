@@ -7,3 +7,7 @@ __pycache__/
 *.html
 # 参考資料（第三者著作物のExcel等はコミットしない）
 素材/
+# 個人の金融情報（SBI証券の保有・約定明細）は絶対にコミットしない
+SBI明細/
+*_sbi_*.csv
+my_portfolio*.csv
