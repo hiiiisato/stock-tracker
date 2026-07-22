@@ -7,13 +7,14 @@ on:
   schedule:
     - cron: '0 7 * * 1-5'    # 16:00 JST メイン
     - cron: '0 8 * * 1-5'    # 17:00 JST リトライ（完了済みならスキップ）
+    - cron: '0 10 * * 1-5'   # 19:00 JST YouTube日次巡回→日次レポート再生成（本編は遅らせない）
     - cron: '30 11 * * 1-5'  # 20:30 JST イブニング便（開示完全版+レポート確定）
   workflow_dispatch:
     inputs:
       mode:
-        description: '実行モード（notify_test = 休場日でも保存済み最新レポートのLINE通知だけ再送信するテスト用）'
+        description: '実行モード（notify_test = 休場日でも保存済み最新レポートのLINE通知だけ再送信するテスト用 / youtube_daily = YouTube日次巡回のみ）'
         type: choice
-        options: [main, evening, notify_test]
+        options: [main, evening, notify_test, youtube_daily]
         default: main
 
 jobs:
@@ -57,6 +58,10 @@ jobs:
         run: |
           if [ "${{ inputs.mode }}" = "notify_test" ]; then
             python daily_report.py --notify
+          elif [ "${{ github.event.schedule }}" = "0 10 * * 1-5" ] || [ "${{ inputs.mode }}" = "youtube_daily" ]; then
+            # YouTube日次巡回 → 日次レポートを再生成して要約を反映（本編バッチは遅らせない）
+            python youtube_insights.py --daily
+            python -c "import daily_report; daily_report.save_report()"
           elif [ "${{ github.event.schedule }}" = "30 11 * * 1-5" ] || [ "${{ inputs.mode }}" = "evening" ]; then
             python daily_run.py --evening
           else

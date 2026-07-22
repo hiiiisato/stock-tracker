@@ -2,8 +2,8 @@
 日次相場レポート — 「サイトを見なくても数分で今日の相場がわかる」1枚のHTMLを生成する。
 
 構成（逆ピラミッド: 上から重要順、途中離脱しても概要が掴める）:
-  1. 今日の結論   — 指数バッジ + 市場ムード機械判定 + AI市況考察（market_summary）
-  2. 相場の数字   — 指数グリッド / 騰落レシオバー / 売買代金
+  1. 相場の数字   — 指数グリッド / 騰落レシオバー / 売買代金（一番上）
+  2. 今日の結論   — 市場ムード機械判定 + AI市況考察（market_summary）
   3. 資金フロー   — 今週 vs 前週で流入が「加速」したテーマ / 「減速」したテーマ（money_flow_weekly）
   4. 値上がり・値下がりTOP5 — 理由（price_events AI調査）+ 30日スパークライン。マイクロ株はフィルタ
   5. トリガー銘柄 — v1基準（新高値×出来高 / 20日ブレイク初動 / 好材料開示×株価反応）※基準は調整前提
@@ -154,6 +154,24 @@ def _fetch_flow_changes(cur, target: date) -> dict:
     elif big < 0.97 and small < 0.97:
         size_note = "大型・小型とも売買代金シェア低下（方向感の乏しい相場）"
     return {"inflow": inflow, "dump": dump, "size_note": size_note, "week": w_now}
+
+
+def _fetch_youtube_daily(cur, target: date) -> dict | None:
+    """当日（無ければ直近）のYouTube日次要約を取得（youtube_insights.py --daily が生成）。"""
+    try:
+        cur.execute("""
+            SELECT report_date, n_videos, summary, consensus, themes_json, stocks_json
+            FROM youtube_daily WHERE report_date <= %s
+            ORDER BY report_date DESC LIMIT 1
+        """, (target,))
+    except Exception:  # noqa: BLE001  テーブル未作成（未実行）でもレポートは壊さない
+        return None
+    row = cur.fetchone()
+    if not row:
+        return None
+    rd, n, summary, consensus, tj, sj = row
+    return {"date": rd, "n": n or 0, "summary": summary or "", "consensus": consensus or "",
+            "themes": json.loads(tj or "[]"), "stocks": json.loads(sj or "[]")}
 
 
 def _extract_reason(ai_summary: str | None) -> str | None:
@@ -381,6 +399,10 @@ body { background: #0d1117; color: #c9d1d9;
   padding: 3px 10px; margin-bottom: 8px; }
 .rp-commentary { font-size: 13px; color: #9da7b3; }
 .rp-commentary summary { cursor: pointer; color: #58a6ff; font-size: 12px; margin-top: 6px; }
+.yt-row { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 5px 6px; align-items: center; font-size: 12px; }
+.yt-chip { background: #21262d; border: 1px solid #30363d; border-radius: 5px; padding: 2px 8px; color: #c9d1d9; }
+.yt-stk { background: #1b2b34; border: 1px solid #294049; border-radius: 5px; padding: 2px 8px; color: #79c0ff; text-decoration: none; }
+.yt-stk:hover { border-color: #58a6ff; }
 .pos { color: #f85149; } .neg { color: #58a6ff; } .mut { color: #8b949e; }
 .idx-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .idx-cell { background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 8px 10px; }
@@ -538,6 +560,7 @@ def build_report_html(target_date: date | None = None) -> str:
     ai_res    = _fetch_ai_commentary(cur, target)
     ai_text, ai_date = (ai_res if ai_res else (None, None))
     flows     = _fetch_flow_changes(cur, target)
+    ytd       = _fetch_youtube_daily(cur, target)
     movers    = _fetch_movers(cur, target)
     triggers  = _fetch_triggers(cur, target)
     discs     = _fetch_disclosures(cur, target)
@@ -595,6 +618,28 @@ def build_report_html(target_date: date | None = None) -> str:
     値上がり <b class="pos">{breadth["up"]:,}</b> / 値下がり <b class="neg">{breadth["down"]:,}</b> 銘柄
     ・売買代金 {breadth["turnover_t"]:.1f}兆円（前日比 {_chg_html(tv_chg, 0)}）
   </div>
+</div>"""
+
+    # ── 2.5 今日のYouTube要約（資金フローの前） ──
+    sec_youtube = ""
+    if ytd and (ytd["summary"] or ytd["themes"] or ytd["stocks"]):
+        theme_html = "".join(
+            f'<span class="yt-chip">{esc(t.get("theme", ""))}</span>'
+            for t in ytd["themes"][:5] if t.get("theme"))
+        stock_html = "".join(
+            (f'<a href="/stock/{s["code"]}" class="yt-stk">{esc(s.get("name", ""))}</a>'
+             if s.get("code") else f'<span class="yt-stk">{esc(s.get("name", ""))}</span>')
+            for s in ytd["stocks"][:6] if s.get("name"))
+        stale = ("" if ytd["date"] == target
+                 else f'<span class="mut" style="font-size:11px">（{ytd["date"].month}/{ytd["date"].day}分）</span>')
+        cons = (f'<div class="mut" style="font-size:12px;margin-top:5px">🧭 {esc(ytd["consensus"])}</div>'
+                if ytd["consensus"] else "")
+        sec_youtube = f"""<div class="rp-card">
+  <div class="rp-h">📺 今日のYouTube要約 <small>岩井コスモ証券・日本株速報・日経CNBCを巡回（{ytd["n"]}本）{stale}・<a href="/youtube">詳細</a></small></div>
+  <div style="font-size:13px;line-height:1.65">{esc(ytd["summary"])}</div>
+  {cons}
+  {f'<div class="yt-row">🔥 {theme_html}</div>' if theme_html else ""}
+  {f'<div class="yt-row">👀 {stock_html}</div>' if stock_html else ""}
 </div>"""
 
     # ── 3. 資金フロー ──
@@ -794,8 +839,9 @@ def build_report_html(target_date: date | None = None) -> str:
   <div class="rp-date">{target} ({wd}) 大引け後</div>
   <div class="rp-title">📰 日次相場レポート</div>
   <!--DATENAV-->
-  {sec_summary}
   {sec_numbers}
+  {sec_summary}
+  {sec_youtube}
   {sec_flows}
   {sec_movers}
   {sec_revisions}
