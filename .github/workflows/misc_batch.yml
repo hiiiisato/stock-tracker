@@ -6,6 +6,8 @@ on:
     # edinetdb.jp の日次枠は 00:00 JST(=15:00 UTC)にリセットされるため、その直後に走らせて
     # フレッシュな100枠を使い切る。旧設定(23:45 JST)はリセット15分前で使いかけの窓を掴んでいた。
     - cron: '30 15 * * *'       # 00:30 JST 毎日: EDINET財務取得＋テーママスタ同期(みんかぶ)＋会社概要
+    - cron: '0 20 * * *'        # 05:00 JST 毎日: アナリストコンセンサス取得(みんかぶ)。
+                                #   テーマ同期と時間帯を分け、みんかぶへの同時多発アクセス(403)を回避
     - cron: '0 21 4,14,24 * *'  # 5,15,25日 6:00 JST: ファンド月次レポート取込
     - cron: '0 14 * * 0'        # 日曜 23:00 JST: YouTube株動画の週次巡回(youtube_insights)
   workflow_dispatch:
@@ -13,7 +15,7 @@ on:
       job:
         description: '実行ジョブ'
         type: choice
-        options: [edinet_texts, fund_watch, youtube]
+        options: [edinet_texts, fund_watch, youtube, consensus]
         default: edinet_texts
 
 jobs:
@@ -84,10 +86,11 @@ jobs:
         if: ${{ github.event.schedule == '30 15 * * *' || inputs.job == 'edinet_texts' }}
         run: python theme_master.py
 
-      # アナリスト業績コンセンサス取得（みんかぶ・250件/日≒全銘柄を2週間で一巡）。
-      # 目標株価/レーティング/会社予想vsコンセンサス乖離をDB化。取得失敗は既存維持。
+      # アナリスト業績コンセンサス取得（みんかぶ・140件/日）。テーマ同期(00:30)と別枠の
+      # 05:00 JST 単独実行にして、みんかぶへの同時多発アクセス(403)を避ける。
+      # 目標株価/レーティング/会社予想vsコンセンサス乖離をDB化。403検知で当日打ち切り。
       - name: アナリストコンセンサス取得（みんかぶ）
-        if: ${{ github.event.schedule == '30 15 * * *' || inputs.job == 'edinet_texts' }}
+        if: ${{ github.event.schedule == '0 20 * * *' || inputs.job == 'consensus' }}
         run: python analyst_consensus.py
 
       # 会社概要・kabutanテーマタグの定期メンテ（150件/日 ≒ 月次で全銘柄一巡）。

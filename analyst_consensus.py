@@ -51,9 +51,10 @@ MINKABU_HEADERS = {
     "Referer": "https://minkabu.jp/",
 }
 
-DAILY_LIMIT  = 250   # 1回の巡回件数（全3700銘柄を約2週間で一巡）
-DELAY        = 0.5   # リクエスト間隔(秒)
-REFRESH_DAYS = 10    # 取得済みをこの日数は再取得しない
+DAILY_LIMIT  = 140   # 1回の巡回件数（みんかぶ負荷/403回避。テーマ同期と合わせ穏やかに）
+DELAY        = 1.1   # リクエスト間隔(秒)。速すぎると403(アクセス制限)を受けるため長め
+REFRESH_DAYS = 12    # 取得済みをこの日数は再取得しない
+MAX_403      = 5     # 連続403がこの数に達したら以降を諦める（ブロック検知・翌日再試行）
 RATING_MAP = {"強気買い": 5, "買い": 4, "中立": 3, "売り": 2, "強気売り": 1}
 
 
@@ -205,12 +206,18 @@ def parse_consensus(html: str) -> dict:
     return d
 
 
+class Blocked(Exception):
+    """みんかぶに403(アクセス制限)された。以降のリクエストは諦める。"""
+
+
 def fetch_one(session: requests.Session, code: str) -> dict | None:
-    """1銘柄のコンセンサスを取得。ページ無し/未カバレッジは {} を返す。"""
+    """1銘柄のコンセンサスを取得。ページ無し/未カバレッジは {} を返す。403は Blocked。"""
     r = session.get(f"{BASE}/stock/{code}/analyst_consensus",
                     headers=MINKABU_HEADERS, timeout=20)
     if r.status_code == 404:
         return {}
+    if r.status_code in (403, 429):
+        raise Blocked(f"HTTP {r.status_code}")
     r.raise_for_status()
     d = parse_consensus(r.text)
     # 目標株価もレーティングも取れなければ未カバレッジ扱い
@@ -244,17 +251,28 @@ def _targets(cur, limit: int, only_codes: list[str] | None) -> list[str]:
 
 
 def run(limit: int = DAILY_LIMIT, only_codes: list[str] | None = None, verbose: bool = True) -> dict:
-    stats = {"fetched": 0, "saved": 0, "no_data": 0, "failed": 0}
+    stats = {"fetched": 0, "saved": 0, "no_data": 0, "failed": 0, "blocked": False}
     session = requests.Session()
     conn = get_conn()
     cur = conn.cursor()
     ensure_table(cur)
     conn.commit()
     now = datetime.now().replace(microsecond=0)
+    consec_403 = 0
 
     for code in _targets(cur, limit, only_codes):
         try:
             d = fetch_one(session, code)
+            consec_403 = 0
+        except Blocked as e:
+            consec_403 += 1
+            if consec_403 >= MAX_403:
+                stats["blocked"] = True
+                if verbose:
+                    print(f"  みんかぶに連続{MAX_403}回ブロック({e})→本日は打ち切り（翌日再開）")
+                break
+            time.sleep(DELAY * 6)   # ブロック時はさらに間隔を空けて様子見
+            continue
         except Exception as e:  # noqa: BLE001
             stats["failed"] += 1
             if verbose:
@@ -287,7 +305,8 @@ def run(limit: int = DAILY_LIMIT, only_codes: list[str] | None = None, verbose: 
     conn.close()
     if verbose:
         print(f"完了: 取得{stats['fetched']} 保存{stats['saved']} "
-              f"未カバレッジ{stats['no_data']} 失敗{stats['failed']}")
+              f"未カバレッジ{stats['no_data']} 失敗{stats['failed']}"
+              f"{' / 403ブロックで打ち切り' if stats['blocked'] else ''}")
     return stats
 
 
