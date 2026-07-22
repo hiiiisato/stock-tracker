@@ -4493,6 +4493,22 @@ _AIFUND_CSS = """
 .af-table .num { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .af-side-buy { color:#3fb950; font-weight:700; } .af-side-sell { color:#f85149; font-weight:700; }
 .af-trade-reason { font-size:11.5px; color:#8b949e; line-height:1.6; max-width:520px; }
+/* 売買履歴カード（横スクロール不要・理由は全幅で折り返し） */
+.af-trades { display:flex; flex-direction:column; gap:8px; }
+.af-trade { background:#161b22; border:1px solid #30363d; border-left:3px solid #58a6ff;
+  border-radius:8px; padding:10px 14px; }
+.af-trade.buy { border-left-color:#3fb950; } .af-trade.sell { border-left-color:#f85149; }
+.af-trade-hd { display:flex; align-items:baseline; gap:8px 10px; flex-wrap:wrap; font-size:13px; }
+.af-trade-date { color:#8b949e; font-size:11.5px; white-space:nowrap; }
+.af-trade-badge { font-weight:700; font-size:12px; padding:0 7px; border-radius:6px; }
+.af-trade-badge.buy { color:#3fb950; background:#3fb95015; } .af-trade-badge.sell { color:#f85149; background:#f8514915; }
+.af-trade-name { font-weight:700; color:#e6edf3; }
+.af-trade-name a { color:#e6edf3; text-decoration:none; } .af-trade-name a:hover { color:#58a6ff; }
+.af-trade-spec { color:#8b949e; font-size:12px; white-space:nowrap; }
+.af-trade-pnl { margin-left:auto; font-weight:700; font-size:13px; white-space:nowrap; text-align:right; }
+.af-trade-pnl small { font-weight:400; color:#8b949e; }
+.af-trade-body { font-size:12.5px; color:#c9d1d9; line-height:1.7; margin-top:7px; }
+.af-trade-body .buy-ctx { color:#6e7681; }
 .af-empty { text-align:center; color:#8b949e; padding:50px 0; font-size:14px; }
 .af-note { font-size:11px; color:#6e7681; margin:6px 0 0; }
 .af-spark { width:100%; height:54px; display:block; margin:8px 0 2px; background:#0d1117;
@@ -4844,24 +4860,28 @@ Plotly.newPlot('afChart', [
     if trades:
         rows_h = []
         for td, side, code, name, shares, price, pnl, pnl_pct, hold_days, reason, buy_reason, strategy, order_type, limit_price in trades:
-            side_cls = "af-side-buy" if side == "buy" else "af-side-sell"
-            side_jp = "買" if side == "buy" else "売"
-            pnl_html = "—"
+            side_jp = "買い" if side == "buy" else "売り"
+            ot_tag = ' <span class="af-ot-limit">指値</span>' if order_type == "limit" else ""
+            pnl_html = ""
             if side == "sell" and pnl is not None:
-                pnl_html = f'<span class="{_pnl_cls(float(pnl))}">{float(pnl)/1e4:+,.1f}万<br><small>{float(pnl_pct):+.1f}%・{hold_days}日</small></span>'
-            reason_html = _html.escape(reason or "")
+                pnl_html = (f'<span class="af-trade-pnl {_pnl_cls(float(pnl))}">{float(pnl)/1e4:+,.1f}万円'
+                            f' <small>{float(pnl_pct):+.1f}% / {hold_days}日</small></span>')
+            # 理由: 売りは「購入時の狙い → 売却理由」を全幅で
             if side == "sell" and buy_reason:
-                reason_html = f'<span style="color:#6e7681">購入時: {_html.escape(buy_reason[:120])}</span><br>→ {reason_html}'
-            ot_tag = '<br><small style="color:#79c0ff">指値</small>' if order_type == "limit" else ""
-            rows_h.append(f"""<tr>
-  <td class="num">{_html.escape(str(td))}</td>
-  <td class="{side_cls}">{side_jp}</td>
-  <td><a href="/stock/{code}" style="color:#58a6ff;text-decoration:none">{_html.escape(name)}</a>{_strat_badge(strategy)}</td>
-  <td class="num">{shares:,}株</td>
-  <td class="num">{float(price):,.0f}円{ot_tag}</td>
-  <td class="num">{pnl_html}</td>
-  <td class="af-trade-reason">{reason_html}</td>
-</tr>""")
+                reason_html = (f'<span class="buy-ctx">購入時の狙い: {_html.escape(buy_reason)}</span><br>'
+                               f'→ 売却: {_html.escape(reason or "")}')
+            else:
+                reason_html = _html.escape(reason or "")
+            rows_h.append(f"""<div class="af-trade {side}">
+  <div class="af-trade-hd">
+    <span class="af-trade-date">{_html.escape(str(td))}</span>
+    <span class="af-trade-badge {side}">{side_jp}</span>
+    <span class="af-trade-name"><a href="/stock/{code}">{_html.escape(name)}</a></span>{_strat_badge(strategy)}
+    <span class="af-trade-spec">{shares:,}株 × {float(price):,.0f}円{ot_tag}</span>
+    {pnl_html}
+  </div>
+  <div class="af-trade-body">{reason_html}</div>
+</div>""")
         stats_html = ""
         if n_sell:
             win_rate = int(n_win) / int(n_sell) * 100
@@ -4869,10 +4889,7 @@ Plotly.newPlot('afChart', [
                           f'<span class="{_pnl_cls(float(pnl_sum))}">{float(pnl_sum)/1e4:+,.1f}万円</span>'
                           f'・勝率{win_rate:.0f}%・平均保有{float(avg_hold or 0):.0f}日</small>')
         hist_html = f"""<div class="af-section">📜 売買履歴{stats_html}</div>
-<div style="overflow-x:auto"><table class="af-table">
-<tr><th>約定日</th><th>売買</th><th>銘柄</th><th class="num">株数</th><th class="num">約定値</th><th class="num">実現損益</th><th>理由</th></tr>
-{''.join(rows_h)}
-</table></div>"""
+<div class="af-trades">{''.join(rows_h)}</div>"""
 
     from ai_fund import CHARTER as _af_charter
     charter_html = f"""<details class="af-charter">
