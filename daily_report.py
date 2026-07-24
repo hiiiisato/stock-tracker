@@ -175,14 +175,20 @@ def _fetch_youtube_daily(cur, target: date) -> dict | None:
 
 
 def _extract_reason(ai_summary: str | None) -> str | None:
-    """price_events.ai_summary から【変動理由】の1段落だけを取り出す（レポートは簡潔に）。"""
+    """price_events.ai_summary から変動理由＋背景・詳細（＝業績の従来→修正後の数字等）を
+    取り出す。イベント履歴と同等の具体性を日次レポートでも見せる（参考ソースだけ落とす）。"""
     if not ai_summary:
         return None
-    text = ai_summary.strip()
-    if "【変動理由】" in text:
-        text = text.split("【変動理由】", 1)[1]
-        text = text.split("【", 1)[0]
-    return text.strip()[:180] or None
+    text = ai_summary.strip().split("【参考ソース】", 1)[0].split("【参考", 1)[0]
+    # 【変動理由】と【背景・詳細】の本文を見出しを外して連結（数値・固有名詞を残す）
+    parts = []
+    for label in ("【変動理由】", "【背景・詳細】", "【背景】", "【詳細】"):
+        if label in text:
+            seg = text.split(label, 1)[1].split("【", 1)[0].strip()
+            if seg and seg not in parts:
+                parts.append(seg)
+    body = " ".join(parts) if parts else text.strip()
+    return body.strip()[:600] or None
 
 
 def _fetch_movers(cur, target: date) -> dict:
@@ -410,10 +416,11 @@ body { background: #0d1117; color: #c9d1d9;
   padding: 3px 10px; margin-bottom: 8px; }
 .rp-commentary { font-size: 13px; color: #9da7b3; }
 .rp-commentary summary { cursor: pointer; color: #58a6ff; font-size: 12px; margin-top: 6px; }
-.yt-row { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 5px 6px; align-items: center; font-size: 12px; }
-.yt-chip { background: #21262d; border: 1px solid #30363d; border-radius: 5px; padding: 2px 8px; color: #c9d1d9; }
-.yt-stk { background: #1b2b34; border: 1px solid #294049; border-radius: 5px; padding: 2px 8px; color: #79c0ff; text-decoration: none; }
-.yt-stk:hover { border-color: #58a6ff; }
+.yt-sub { font-size: 11px; font-weight: 700; color: #8b949e; margin: 10px 0 3px; }
+.yt-item { font-size: 12.5px; color: #c9d1d9; line-height: 1.65; padding: 1px 0; }
+.yt-item a { color: #79c0ff; text-decoration: none; }
+.yt-item a:hover { text-decoration: underline; }
+.yt-item .mut { font-size: 11.5px; }
 .pos { color: #f85149; } .neg { color: #58a6ff; } .mut { color: #8b949e; }
 .idx-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .idx-cell { background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 8px 10px; }
@@ -431,8 +438,7 @@ body { background: #0d1117; color: #c9d1d9;
 .mv-meta { font-size: 11px; color: #484f58; }
 .mv-cat { font-size: 11px; font-weight: 700; color: #d2a8ff; background: #bc8cff14;
   border: 1px solid #bc8cff40; border-radius: 6px; padding: 0 6px; white-space: nowrap; }
-.mv-reason { font-size: 12px; color: #9da7b3; margin-top: 2px;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mv-reason { font-size: 12px; color: #9da7b3; margin-top: 3px; line-height: 1.6; }
 .mv-spark { flex-shrink: 0; }
 .tr-group { margin-bottom: 10px; }
 .tr-group:last-child { margin-bottom: 0; }
@@ -455,7 +461,6 @@ body { background: #0d1117; color: #c9d1d9;
 .rp-foot { font-size: 11px; color: #484f58; text-align: center; margin-top: 18px; }
 @media (max-width: 480px) {
   .idx-grid { grid-template-columns: repeat(2, 1fr); }
-  .mv-reason { -webkit-line-clamp: 3; }
 }
 """
 
@@ -634,13 +639,18 @@ def build_report_html(target_date: date | None = None) -> str:
     # ── 2.5 今日のYouTube要約（資金フローの前） ──
     sec_youtube = ""
     if ytd and (ytd["summary"] or ytd["themes"] or ytd["stocks"]):
-        theme_html = "".join(
-            f'<span class="yt-chip">{esc(t.get("theme", ""))}</span>'
-            for t in ytd["themes"][:5] if t.get("theme"))
-        stock_html = "".join(
-            (f'<a href="/stock/{s["code"]}" class="yt-stk">{esc(s.get("name", ""))}</a>'
-             if s.get("code") else f'<span class="yt-stk">{esc(s.get("name", ""))}</span>')
-            for s in ytd["stocks"][:6] if s.get("name"))
+        theme_rows = "".join(
+            f'<div class="yt-item"><b>{esc(t.get("theme", ""))}</b>'
+            + (f' <span class="mut">— {esc(t.get("note", ""))}</span>' if t.get("note") else "")
+            + "</div>"
+            for t in ytd["themes"][:4] if t.get("theme"))
+        stock_rows = "".join(
+            "<div class=\"yt-item\">"
+            + (f'<a href="/stock/{s["code"]}"><b>{esc(s.get("name", ""))}</b> <span class="mut">{s["code"]}</span></a>'
+               if s.get("code") else f'<b>{esc(s.get("name", ""))}</b>')
+            + (f' <span class="mut">— {esc(s.get("note", ""))}</span>' if s.get("note") else "")
+            + "</div>"
+            for s in ytd["stocks"][:8] if s.get("name"))
         stale = ("" if ytd["date"] == target
                  else f'<span class="mut" style="font-size:11px">（{ytd["date"].month}/{ytd["date"].day}分）</span>')
         cons = (f'<div class="mut" style="font-size:12px;margin-top:5px">🧭 {esc(ytd["consensus"])}</div>'
@@ -649,8 +659,8 @@ def build_report_html(target_date: date | None = None) -> str:
   <div class="rp-h">📺 今日のYouTube要約 <small>岩井コスモ証券・日本株速報・日経CNBCを巡回（{ytd["n"]}本）{stale}・<a href="/youtube">詳細</a></small></div>
   <div style="font-size:13px;line-height:1.65">{esc(ytd["summary"])}</div>
   {cons}
-  {f'<div class="yt-row">🔥 {theme_html}</div>' if theme_html else ""}
-  {f'<div class="yt-row">👀 {stock_html}</div>' if stock_html else ""}
+  {f'<div class="yt-sub">🔥 注目テーマ</div>{theme_rows}' if theme_rows else ""}
+  {f'<div class="yt-sub">👀 個別銘柄</div>{stock_rows}' if stock_rows else ""}
 </div>"""
 
     # ── 3. 資金フロー ──
