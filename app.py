@@ -4131,7 +4131,8 @@ _DISC_CSS = """
 .dcx-row { display: flex; align-items: center; gap: 12px; padding: 11px 4px;
   border-bottom: 1px solid #21262d; font-size: 13px; }
 .dcx-row:hover { background: #161b22; }
-.dcx-cat { flex: 0 0 90px; text-align: center; font-size: 11px; font-weight: 600;
+.dcx-cats { flex: 0 0 90px; display: flex; flex-direction: column; gap: 3px; }
+.dcx-cat { text-align: center; font-size: 11px; font-weight: 600;
   padding: 3px 0; border: 1px solid #30363d; border-radius: 4px; color: #8b949e;
   background: #0d1117; white-space: nowrap; }
 .dcx-cat.pos { border-color: rgba(63,185,80,0.45); color: #3fb950; }
@@ -4151,7 +4152,8 @@ _DISC_CSS = """
 @media (max-width: 768px) {
   .dc-row a.title { min-width: 100%; order: 5; }
   .dcx-row { gap: 8px; flex-wrap: wrap; }
-  .dcx-cat { flex-basis: 66px; font-size: 10px; }
+  .dcx-cats { flex-basis: 66px; }
+  .dcx-cat { font-size: 10px; }
   .dcx-date { margin-left: auto; order: 2; }
   .dcx-title { flex-basis: 100%; order: 3; }
 }
@@ -4176,7 +4178,7 @@ def _stock_disclosures_html(code: str) -> str:
     """銘柄ページの適時開示タブ: 分類タブ＋[分類] タイトル＋日時＋ページ送り（kabutan風）。
     上部にAI考察付きの好材料カードを残す。"""
     import html as _html
-    from disclosures import CATEGORY_LABELS
+    from disclosures import CATEGORY_LABELS, classify_title_all
     conn = get_conn(); cur = conn.cursor()
     cur.execute("""
         SELECT disclosed_at, title, pdf_url, category, sentiment, ai_summary, ai_related
@@ -4193,9 +4195,21 @@ def _stock_disclosures_html(code: str) -> str:
     ai_cards = []
     disc_js = []
     for dts, title, pdf, cat, senti, ai_sum, ai_rel in rows:
-        tab = cat2tab.get(cat, "その他")
-        chip = CATEGORY_LABELS.get(cat) or "その他"
         scls = "pos" if senti == 1 else ("neg" if senti == -1 else "")
+        # 複数ラベル対応: 保存カテゴリ(primary・AI補正反映)＋タイトル全一致カテゴリ。
+        # タブ単位で重複排除し、最大3ラベル。先頭(primary)のみ色付け、以降はグレー。
+        cat_seq = [cat] + [c for c in classify_title_all(title or "") if c != cat]
+        tabs_of, chips, seen = [], [], set()
+        for c in cat_seq:
+            t = cat2tab.get(c, "その他")
+            if t in seen:
+                continue
+            seen.add(t); tabs_of.append(t)
+            chips.append({"cat": CATEGORY_LABELS.get(c) or "その他",
+                          "scls": scls if not chips else ""})
+            if len(chips) >= 3:
+                break
+        primary_chip = chips[0]["cat"] if chips else "その他"
         if ai_sum and len(ai_cards) < 5:
             ripple_html = ""
             try:
@@ -4206,7 +4220,7 @@ def _stock_disclosures_html(code: str) -> str:
                 pass
             ai_cards.append(f"""<div class="dc-hl-card" style="border-left-color:{'#3fb950' if senti == 1 else '#8b949e'}">
   <div class="dc-hl-top">
-    <span class="dc-cat {scls}">{chip}</span>
+    <span class="dc-cat {scls}">{primary_chip}</span>
     <span style="font-size:12px;color:#8b949e">{dts.strftime("%Y/%m/%d %H:%M")}</span>
   </div>
   <div style="font-size:13px;color:#e6edf3;font-weight:600;margin:2px 0">{_html.escape(title)}</div>
@@ -4214,8 +4228,8 @@ def _stock_disclosures_html(code: str) -> str:
   {ripple_html}
   <div class="dc-hl-meta"><a class="dc-pdf-link" href="{_html.escape(pdf or '#')}" target="_blank" rel="noopener">開示PDF ↗</a></div>
 </div>""")
-        disc_js.append({"dt": dts.strftime("%Y/%m/%d %H:%M"), "tab": tab,
-                        "cat": chip, "scls": scls, "title": title, "url": pdf or ""})
+        disc_js.append({"dt": dts.strftime("%Y/%m/%d %H:%M"), "tabs": tabs_of,
+                        "chips": chips, "title": title, "url": pdf or ""})
 
     ai_html = ""
     if ai_cards:
@@ -4236,16 +4250,18 @@ def _stock_disclosures_html(code: str) -> str:
 (function(){
   var DATA = __DISC_JSON__, PAGE = 15, curTab = 'すべて', page = 1;
   function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-  function filt(){ return curTab==='すべて' ? DATA : DATA.filter(function(d){return d.tab===curTab;}); }
+  function filt(){ return curTab==='すべて' ? DATA : DATA.filter(function(d){return d.tabs.indexOf(curTab)>=0;}); }
   function render(){
     var arr=filt(), pages=Math.max(1,Math.ceil(arr.length/PAGE));
     if(page>pages) page=pages;
     var slice=arr.slice((page-1)*PAGE, page*PAGE);
     document.getElementById('dcx-list').innerHTML = slice.map(function(d){
-      var chip='<span class="dcx-cat '+d.scls+'">'+esc(d.cat)+'</span>';
+      var chips='<span class="dcx-cats">'+d.chips.map(function(ch){
+        return '<span class="dcx-cat '+ch.scls+'">'+esc(ch.cat)+'</span>';
+      }).join('')+'</span>';
       var t = d.url ? '<a class="dcx-title" href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.title)+'</a>'
                     : '<span class="dcx-title">'+esc(d.title)+'</span>';
-      return '<div class="dcx-row">'+chip+t+'<span class="dcx-date">'+esc(d.dt)+'</span></div>';
+      return '<div class="dcx-row">'+chips+t+'<span class="dcx-date">'+esc(d.dt)+'</span></div>';
     }).join('') || '<div class="dcx-empty">この分類の開示はありません</div>';
     var p='';
     if(pages>1){

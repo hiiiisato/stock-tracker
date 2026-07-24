@@ -48,7 +48,8 @@ _CATEGORY_RULES = [
     ("earnings_down", ("下方修正",), -1),
     ("div_up",        ("増配", "復配", "記念配当", "特別配当"), +1),
     ("div_down",      ("減配", "無配転落"), -1),
-    ("earnings_rev",  ("業績予想の修正", "業績予想及び", "業績予想値との差異", "通期業績予想"), 0),
+    ("earnings_rev",  ("業績予想の修正", "業績予想及び", "業績予想および", "業績予想値との差異",
+                       "実績値との差異", "通期業績予想", "四半期業績予想"), 0),
     ("dividend_rev",  ("配当予想の修正", "配当予想に関する"), 0),
     ("buyback",       ("自己株式の取得", "自己株式立会外買付", "自社株買い"), +1),
     ("split",         ("株式分割",), +1),
@@ -105,6 +106,14 @@ def classify_title(title: str) -> tuple[str, int]:
                     senti = -1
             return cat, senti
     return "other", 0
+
+
+def classify_title_all(title: str) -> list[str]:
+    """タイトルに一致する全カテゴリキーを優先順で返す（複数ラベル対応）。
+    例: 「業績予想値との差異ならびに…配当予想に関するお知らせ」→ [earnings_rev, dividend_rev]。
+    一致が無ければ ['other']。"""
+    cats = [cat for cat, keywords, _ in _CATEGORY_RULES if any(kw in title for kw in keywords)]
+    return cats or ["other"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
