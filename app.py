@@ -4141,6 +4141,7 @@ _DISC_CSS = """
 .dcx-date { flex: 0 0 auto; color: #8b949e; font-size: 11.5px; white-space: nowrap;
   font-variant-numeric: tabular-nums; }
 .dcx-empty { padding: 26px; text-align: center; color: #8b949e; font-size: 13px; }
+.dcx-note { font-size: 12px; color: #8b949e; margin-bottom: 10px; }
 .dcx-pager { display: flex; justify-content: center; gap: 5px; margin-top: 16px; flex-wrap: wrap; }
 .dcx-pg { min-width: 34px; padding: 6px 10px; background: #161b22; border: 1px solid #30363d;
   border-radius: 6px; color: #c9d1d9; cursor: pointer; font-size: 13px; }
@@ -4157,16 +4158,17 @@ _DISC_CSS = """
 """
 
 
-# 適時開示の分類タブ（内部カテゴリ → タブ表示名）。kabutan風の見やすい絞り込み。
+# 適時開示の分類タブ（内部カテゴリ → タブ表示名）。kabutanと同じ分類。
+# 該当開示が無くても全タブを常に表示する（順序どおり）。
 _DISC_TAB_MAP = [
-    ("決算短信",     {"earnings_report"}),
-    ("業績予想",     {"earnings_up", "earnings_down", "earnings_rev", "guidance"}),
-    ("配当",         {"div_up", "div_down", "dividend_rev"}),
-    ("自己株",       {"buyback"}),
-    ("提携・M&A",    {"alliance", "tob"}),
-    ("受注・新製品", {"order"}),
-    ("月次",         {"monthly"}),
-    ("その他",       {"other", "split"}),
+    ("決算短信",   {"earnings_report"}),
+    ("業績予想",   {"earnings_up", "earnings_down", "earnings_rev", "guidance"}),
+    ("配当",       {"div_up", "div_down", "dividend_rev"}),
+    ("自己株",     {"buyback"}),
+    ("PR",         {"order", "alliance"}),
+    ("人事",       {"personnel"}),
+    ("エクイティ", {"equity", "split", "tob"}),
+    ("その他",     {"other", "monthly"}),
 ]
 
 
@@ -4185,11 +4187,6 @@ def _stock_disclosures_html(code: str) -> str:
     """, (code,))
     rows = cur.fetchall()
     cur.close(); conn.close()
-
-    if not rows:
-        return ('<p class="muted" style="font-size:13px;padding:20px">この銘柄の開示データはまだありません'
-                '（TDnetは1ヶ月保持のため蓄積は2026年6月以降・今後増えます）。'
-                '<a href="/disclosures">適時開示ページ →</a></p>')
 
     cat2tab = {c: tab for tab, cats in _DISC_TAB_MAP for c in cats}
 
@@ -4225,13 +4222,15 @@ def _stock_disclosures_html(code: str) -> str:
         ai_html = (f'<div class="dc-section-title">AI考察付きの開示</div>'
                    f'<div class="dc-highlights" style="margin-bottom:18px">{"".join(ai_cards)}</div>')
 
-    # 存在する分類だけタブ表示（空タブは出さない）。先頭は「すべて」。
-    present = [tab for tab, _ in _DISC_TAB_MAP if any(d["tab"] == tab for d in disc_js)]
-    tabs = ["すべて"] + present
+    # 該当開示が無くても全タブを常に表示する（先頭は「すべて」）。
+    tabs = ["すべて"] + [tab for tab, _ in _DISC_TAB_MAP]
     tabs_html = "".join(
         f'<button class="dcx-tab{" active" if i == 0 else ""}" data-tab="{_html.escape(t)}">{_html.escape(t)}</button>'
         for i, t in enumerate(tabs))
     disc_json = _json.dumps(disc_js, ensure_ascii=False).replace("<", "\\u003c")
+    empty_note = ('<div class="dcx-note">この銘柄の開示はまだ蓄積されていません'
+                  '（TDnetは1ヶ月保持のため2026年6月以降・今後増えます）。</div>'
+                  if not disc_js else "")
 
     js = """
 (function(){
@@ -4271,6 +4270,7 @@ def _stock_disclosures_html(code: str) -> str:
 
     return (ai_html
             + '<div class="dc-section-title">適時開示</div>'
+            + empty_note
             + f'<div class="dcx-tabs">{tabs_html}</div>'
             + '<div id="dcx-list" class="dcx-list"></div>'
             + '<div id="dcx-pager" class="dcx-pager"></div>'
