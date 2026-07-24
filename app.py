@@ -4119,14 +4119,60 @@ _DISC_CSS = """
   border-radius: 6px; padding: 4px 10px; text-decoration: none; font-size: 13px;
 }
 .dc-nav .lbl { font-size: 16px; font-weight: 700; color: #e6edf3; padding: 0 6px; }
+
+/* 適時開示 kabutan風タブ＋一覧＋ページ送り */
+.dcx-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px;
+  border-bottom: 1px solid #21262d; padding-bottom: 8px; }
+.dcx-tab { font-size: 12.5px; padding: 5px 14px; border-radius: 7px; background: transparent;
+  border: 1px solid transparent; color: #8b949e; cursor: pointer; white-space: nowrap; }
+.dcx-tab:hover { color: #c9d1d9; }
+.dcx-tab.active { background: #1f6feb; color: #fff; }
+.dcx-list { display: flex; flex-direction: column; }
+.dcx-row { display: flex; align-items: center; gap: 12px; padding: 11px 4px;
+  border-bottom: 1px solid #21262d; font-size: 13px; }
+.dcx-row:hover { background: #161b22; }
+.dcx-cat { flex: 0 0 90px; text-align: center; font-size: 11px; font-weight: 600;
+  padding: 3px 0; border: 1px solid #30363d; border-radius: 4px; color: #8b949e;
+  background: #0d1117; white-space: nowrap; }
+.dcx-cat.pos { border-color: rgba(63,185,80,0.45); color: #3fb950; }
+.dcx-cat.neg { border-color: rgba(248,81,73,0.45); color: #f85149; }
+.dcx-title { flex: 1; color: #4493f8; text-decoration: none; min-width: 0; }
+.dcx-title:hover { text-decoration: underline; }
+.dcx-date { flex: 0 0 auto; color: #8b949e; font-size: 11.5px; white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+.dcx-empty { padding: 26px; text-align: center; color: #8b949e; font-size: 13px; }
+.dcx-pager { display: flex; justify-content: center; gap: 5px; margin-top: 16px; flex-wrap: wrap; }
+.dcx-pg { min-width: 34px; padding: 6px 10px; background: #161b22; border: 1px solid #30363d;
+  border-radius: 6px; color: #c9d1d9; cursor: pointer; font-size: 13px; }
+.dcx-pg:hover:not(:disabled) { border-color: #484f58; }
+.dcx-pg.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.dcx-pg:disabled { opacity: 0.4; cursor: default; }
 @media (max-width: 768px) {
   .dc-row a.title { min-width: 100%; order: 5; }
+  .dcx-row { gap: 8px; flex-wrap: wrap; }
+  .dcx-cat { flex-basis: 66px; font-size: 10px; }
+  .dcx-date { margin-left: auto; order: 2; }
+  .dcx-title { flex-basis: 100%; order: 3; }
 }
 """
 
 
+# 適時開示の分類タブ（内部カテゴリ → タブ表示名）。kabutan風の見やすい絞り込み。
+_DISC_TAB_MAP = [
+    ("決算短信",     {"earnings_report"}),
+    ("業績予想",     {"earnings_up", "earnings_down", "earnings_rev", "guidance"}),
+    ("配当",         {"div_up", "div_down", "dividend_rev"}),
+    ("自己株",       {"buyback"}),
+    ("提携・M&A",    {"alliance", "tob"}),
+    ("受注・新製品", {"order"}),
+    ("月次",         {"monthly"}),
+    ("その他",       {"other", "split"}),
+]
+
+
 def _stock_disclosures_html(code: str) -> str:
-    """銘柄ページの適時開示タブ: この銘柄の開示履歴とAI考察（/disclosuresと同じ見た目）。"""
+    """銘柄ページの適時開示タブ: 分類タブ＋[分類] タイトル＋日時＋ページ送り（kabutan風）。
+    上部にAI考察付きの好材料カードを残す。"""
     import html as _html
     from disclosures import CATEGORY_LABELS
     conn = get_conn(); cur = conn.cursor()
@@ -4135,21 +4181,24 @@ def _stock_disclosures_html(code: str) -> str:
         FROM disclosures
         WHERE code = %s
         ORDER BY disclosed_at DESC
-        LIMIT 80
+        LIMIT 400
     """, (code,))
     rows = cur.fetchall()
     cur.close(); conn.close()
 
     if not rows:
         return ('<p class="muted" style="font-size:13px;padding:20px">この銘柄の開示データはまだありません'
-                '（蓄積は2026年6月以降）。<a href="/disclosures">適時開示ページ →</a></p>')
+                '（TDnetは1ヶ月保持のため蓄積は2026年6月以降・今後増えます）。'
+                '<a href="/disclosures">適時開示ページ →</a></p>')
 
-    # AI考察付きの開示はカードで上部に表示
+    cat2tab = {c: tab for tab, cats in _DISC_TAB_MAP for c in cats}
+
     ai_cards = []
-    list_rows = []
+    disc_js = []
     for dts, title, pdf, cat, senti, ai_sum, ai_rel in rows:
-        cat_lbl = CATEGORY_LABELS.get(cat, "")
-        cat_cls = "pos" if senti == 1 else ("neg" if senti == -1 else "")
+        tab = cat2tab.get(cat, "その他")
+        chip = CATEGORY_LABELS.get(cat) or "その他"
+        scls = "pos" if senti == 1 else ("neg" if senti == -1 else "")
         if ai_sum and len(ai_cards) < 5:
             ripple_html = ""
             try:
@@ -4160,7 +4209,7 @@ def _stock_disclosures_html(code: str) -> str:
                 pass
             ai_cards.append(f"""<div class="dc-hl-card" style="border-left-color:{'#3fb950' if senti == 1 else '#8b949e'}">
   <div class="dc-hl-top">
-    <span class="dc-cat {cat_cls}">{cat_lbl or 'その他'}</span>
+    <span class="dc-cat {scls}">{chip}</span>
     <span style="font-size:12px;color:#8b949e">{dts.strftime("%Y/%m/%d %H:%M")}</span>
   </div>
   <div style="font-size:13px;color:#e6edf3;font-weight:600;margin:2px 0">{_html.escape(title)}</div>
@@ -4168,20 +4217,64 @@ def _stock_disclosures_html(code: str) -> str:
   {ripple_html}
   <div class="dc-hl-meta"><a class="dc-pdf-link" href="{_html.escape(pdf or '#')}" target="_blank" rel="noopener">開示PDF ↗</a></div>
 </div>""")
-        cat_html = f'<span class="dc-cat {cat_cls}">{cat_lbl}</span>' if cat != "other" else ""
-        list_rows.append(
-            f'<div class="dc-row"><span class="time">{dts.strftime("%m/%d %H:%M")}</span>'
-            f'{cat_html}'
-            f'<a class="title" href="{_html.escape(pdf or "#")}" target="_blank" rel="noopener">{_html.escape(title)}</a></div>'
-        )
+        disc_js.append({"dt": dts.strftime("%Y/%m/%d %H:%M"), "tab": tab,
+                        "cat": chip, "scls": scls, "title": title, "url": pdf or ""})
 
     ai_html = ""
     if ai_cards:
         ai_html = (f'<div class="dc-section-title">AI考察付きの開示</div>'
-                   f'<div class="dc-highlights" style="margin-bottom:16px">{"".join(ai_cards)}</div>')
-    return f"""{ai_html}
-<div class="dc-section-title">開示履歴（直近{len(rows)}件）</div>
-<div class="dc-list">{"".join(list_rows)}</div>"""
+                   f'<div class="dc-highlights" style="margin-bottom:18px">{"".join(ai_cards)}</div>')
+
+    # 存在する分類だけタブ表示（空タブは出さない）。先頭は「すべて」。
+    present = [tab for tab, _ in _DISC_TAB_MAP if any(d["tab"] == tab for d in disc_js)]
+    tabs = ["すべて"] + present
+    tabs_html = "".join(
+        f'<button class="dcx-tab{" active" if i == 0 else ""}" data-tab="{_html.escape(t)}">{_html.escape(t)}</button>'
+        for i, t in enumerate(tabs))
+    disc_json = _json.dumps(disc_js, ensure_ascii=False).replace("<", "\\u003c")
+
+    js = """
+(function(){
+  var DATA = __DISC_JSON__, PAGE = 15, curTab = 'すべて', page = 1;
+  function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function filt(){ return curTab==='すべて' ? DATA : DATA.filter(function(d){return d.tab===curTab;}); }
+  function render(){
+    var arr=filt(), pages=Math.max(1,Math.ceil(arr.length/PAGE));
+    if(page>pages) page=pages;
+    var slice=arr.slice((page-1)*PAGE, page*PAGE);
+    document.getElementById('dcx-list').innerHTML = slice.map(function(d){
+      var chip='<span class="dcx-cat '+d.scls+'">'+esc(d.cat)+'</span>';
+      var t = d.url ? '<a class="dcx-title" href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.title)+'</a>'
+                    : '<span class="dcx-title">'+esc(d.title)+'</span>';
+      return '<div class="dcx-row">'+chip+t+'<span class="dcx-date">'+esc(d.dt)+'</span></div>';
+    }).join('') || '<div class="dcx-empty">この分類の開示はありません</div>';
+    var p='';
+    if(pages>1){
+      p+='<button class="dcx-pg" data-pg="'+(page-1)+'"'+(page<=1?' disabled':'')+'>‹</button>';
+      for(var i=1;i<=pages;i++) p+='<button class="dcx-pg'+(i===page?' active':'')+'" data-pg="'+i+'">'+i+'</button>';
+      p+='<button class="dcx-pg" data-pg="'+(page+1)+'"'+(page>=pages?' disabled':'')+'>›</button>';
+    }
+    document.getElementById('dcx-pager').innerHTML=p;
+  }
+  document.querySelector('.dcx-tabs').addEventListener('click', function(e){
+    var b=e.target.closest('.dcx-tab'); if(!b) return;
+    document.querySelectorAll('.dcx-tab').forEach(function(x){x.classList.remove('active');});
+    b.classList.add('active'); curTab=b.getAttribute('data-tab'); page=1; render();
+  });
+  document.getElementById('dcx-pager').addEventListener('click', function(e){
+    var b=e.target.closest('.dcx-pg'); if(!b||b.disabled) return;
+    page=parseInt(b.getAttribute('data-pg'),10); render();
+  });
+  render();
+})();
+""".replace("__DISC_JSON__", disc_json)
+
+    return (ai_html
+            + '<div class="dc-section-title">適時開示</div>'
+            + f'<div class="dcx-tabs">{tabs_html}</div>'
+            + '<div id="dcx-list" class="dcx-list"></div>'
+            + '<div id="dcx-pager" class="dcx-pager"></div>'
+            + f'<script>{js}</script>')
 
 
 def _build_disclosures_page(date_str: str = None, category: str = "") -> str:
