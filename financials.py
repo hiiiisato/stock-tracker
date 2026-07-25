@@ -10,6 +10,24 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import get_conn, bulk_upsert
 
 SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
+# Yahooの新しい fundamentals-timeseries エンドポイント。旧 quoteSummary/incomeStatementHistory は
+# Yahooに劣化させられ、日本株で営業利益・売上総利益がNull・売上も一部誤値になる（例6504）。
+# timeseries は営業利益・粗利・総資産・自己資本・営業CFまで正確に返る（Yahoo日本版/EDINETと一致）。
+TS_URL = "https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/{ticker}"
+# timeseries の型 → financials 列（period_type, column）
+_TS_MAP = {
+    "annualTotalRevenue":    ("A", "revenue"),
+    "annualGrossProfit":     ("A", "gross_profit"),
+    "annualOperatingIncome": ("A", "operating_income"),
+    "annualNetIncome":       ("A", "net_income"),
+    "annualTotalAssets":     ("A", "total_assets"),
+    "annualStockholdersEquity": ("A", "total_equity"),
+    "annualOperatingCashFlow":  ("A", "cf_operating"),
+    "quarterlyTotalRevenue":    ("Q", "revenue"),
+    "quarterlyGrossProfit":     ("Q", "gross_profit"),
+    "quarterlyOperatingIncome": ("Q", "operating_income"),
+    "quarterlyNetIncome":       ("Q", "net_income"),
+}
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
 
@@ -54,56 +72,44 @@ def _parse_income(stmt: dict, code: str, period_type: str) -> Optional[Tuple]:
 
 
 def _fetch_financials(code4: str, session: requests.Session, crumb: str) -> List[Tuple]:
-    """1銘柄の財務諸表を取得。四半期×4期 + 通期×4期。"""
+    """1銘柄の財務時系列を Yahoo fundamentals-timeseries から取得（通期＋四半期）。
+    返り値の各行: (code, period_end, period_type, revenue, gross_profit, operating_income,
+                   net_income, total_assets, total_equity, total_debt, cf_operating)。"""
     ticker = f"{code4}.T"
-    modules = "incomeStatementHistory,incomeStatementHistoryQuarterly,balanceSheetHistory"
-
+    types = ",".join(_TS_MAP.keys())
+    now = int(time.time())
     for attempt in range(3):
         try:
-            r = session.get(SUMMARY_URL.format(ticker=ticker),
-                params={"modules": modules, "crumb": crumb},
+            r = session.get(TS_URL.format(ticker=ticker),
+                params={"type": types, "period1": 1262304000, "period2": now, "crumb": crumb},
                 timeout=20)
             if r.status_code == 429:
                 time.sleep(2 ** attempt + 1)
                 continue
-            if r.status_code in (401, 403):
-                return []
             if r.status_code != 200:
                 return []
-
-            result = r.json().get("quoteSummary", {}).get("result")
-            if not result:
-                return []
-            data = result[0]
-            rows = []
-
-            # 通期損益
-            for stmt in data.get("incomeStatementHistory", {}).get("incomeStatementHistory", []):
-                row = _parse_income(stmt, code4, "A")
-                if row:
-                    rows.append(row)
-
-            # 四半期損益
-            for stmt in data.get("incomeStatementHistoryQuarterly", {}).get("incomeStatementHistory", []):
-                row = _parse_income(stmt, code4, "Q")
-                if row:
-                    rows.append(row)
-
-            # BS（取れる場合のみ）
-            bs_list = data.get("balanceSheetHistory", {}).get("balanceSheetStatements", [])
-            for stmt in bs_list:
-                end_date = stmt.get("endDate", {}).get("fmt")
-                if not end_date:
+            res = (r.json().get("timeseries") or {}).get("result") or []
+            acc: dict = {}          # (period_type, asOfDate) -> {col: value}
+            for item in res:
+                meta_t = (item.get("meta") or {}).get("type") or []
+                t = meta_t[0] if meta_t else None
+                if t not in _TS_MAP or t not in item:
                     continue
-                total_assets = _to_int(stmt.get("totalAssets"))
-                total_equity = _to_int(stmt.get("totalStockholderEquity"))
-                total_debt = _to_int(stmt.get("longTermDebt") or stmt.get("totalDebt"))
-                if any(v is not None for v in [total_assets, total_equity, total_debt]):
-                    # 既存の通期行に BS データをマージ（UPSERT で更新）
-                    rows.append((code4, end_date, "A",
-                        None, None, None, None,
-                        total_assets, total_equity, total_debt, None))
-
+                ptype, col = _TS_MAP[t]
+                for pt in (item.get(t) or []):
+                    if not pt:
+                        continue
+                    d = pt.get("asOfDate")
+                    rv = (pt.get("reportedValue") or {}).get("raw")
+                    if not d or rv is None:
+                        continue
+                    acc.setdefault((ptype, d), {})[col] = int(rv)
+            rows = []
+            for (ptype, d), v in acc.items():
+                rows.append((code4, d, ptype,
+                    _zero_to_none(v.get("revenue")), _zero_to_none(v.get("gross_profit")),
+                    _zero_to_none(v.get("operating_income")), _zero_to_none(v.get("net_income")),
+                    v.get("total_assets"), v.get("total_equity"), None, v.get("cf_operating")))
             return rows
         except Exception:
             time.sleep(1)
@@ -154,11 +160,11 @@ def fetch_all_financials(max_workers: int = 5) -> int:
         all_rows,
         update_cols=["revenue", "gross_profit", "operating_income", "net_income",
                      "total_assets", "total_equity", "total_debt", "cf_operating"],
-        # 損益は権威データ=TDnet(financials_tdnet)が正。Yahooは穴埋め専用にし、
-        # 既に値がある行は上書きしない（Yahooの欠損=0/None で公式値を壊さない）。
-        # total_debt だけは TDnet が持たないため Yahoo が通常更新する。
-        fill_only_cols=["revenue", "gross_profit", "operating_income", "net_income",
-                        "total_assets", "total_equity", "cf_operating"])
+        # 損益(売上/粗利/営業益/純益)は timeseries が公式値と一致する信頼データなので
+        # 通常更新=上書きにする（旧quoteSummory由来の欠損Null・誤値を修正するため）。
+        # timeseries は値がある期のみ行を作るので、TDnet 等の既存値をNullで壊すことはない。
+        # BS/CF(総資産・自己資本・営業CF)は EDINET(financials_edinet)がより深いので穴埋め専用。
+        fill_only_cols=["total_assets", "total_equity", "cf_operating"])
     conn.commit()
     cur.close()
     conn.close()
