@@ -5419,6 +5419,14 @@ def _build_screen_page() -> str:
     <input id="f-ordm-min" type="hidden"><input id="f-roic-min" type="hidden">
     <input id="f-fscore-min" type="hidden">
     <input id="f-cap-min" type="hidden"><input id="f-cap-max" type="hidden">
+    <input id="f-revcagr-min" type="hidden"><input id="f-profcagr-min" type="hidden">
+    <input id="f-consrev-min" type="hidden"><input id="f-consprof-min" type="hidden">
+    <input id="f-consdiv-min" type="hidden">
+    <input id="f-roe5y-min" type="hidden"><input id="f-roa5y-min" type="hidden">
+    <input id="f-opm5y-min" type="hidden"><input id="f-roed3y-min" type="hidden">
+    <input id="f-peg-min" type="hidden"><input id="f-peg-max" type="hidden">
+    <input id="f-finlev-min" type="hidden"><input id="f-finlev-max" type="hidden">
+    <input id="f-dm50-min" type="hidden"><input id="f-dm50-max" type="hidden">
     <input id="f-macd-gc" type="checkbox"><input id="f-break20" type="checkbox">
     <input id="f-break65" type="checkbox"><input id="f-cf-pos" type="checkbox">
     <input id="f-ma-up" type="checkbox">
@@ -5518,8 +5526,14 @@ def _build_screen_page() -> str:
     close:{{h:'株価',cls:'num'}},change_pct:{{h:'前日比',cls:'num'}},
     chg5d:{{h:'5日',cls:'num'}},chg25d:{{h:'25日',cls:'num'}},chg75d:{{h:'75日',cls:'num'}},
     period_chg:{{h:'期間騰落',cls:'num'}},period_range:{{h:'期間高安幅',cls:'num'}},
-    dev_ma25:{{h:'MA25乖離',cls:'num'}},dev_ma75:{{h:'MA75乖離',cls:'num'}},
+    dev_ma25:{{h:'MA25乖離',cls:'num'}},dev_ma50:{{h:'MA50乖離',cls:'num'}},dev_ma75:{{h:'MA75乖離',cls:'num'}},
     dev_high52w:{{h:'52週高値乖離',cls:'num'}},rsi14:{{h:'RSI',cls:'num'}},
+    peg:{{h:'PEG',cls:'num'}},fin_leverage:{{h:'財務レバ',cls:'num'}},
+    rev_cagr_5y:{{h:'売上CAGR5y%',cls:'num'}},profit_cagr_5y:{{h:'純益CAGR5y%',cls:'num'}},
+    consec_rev_growth:{{h:'連続増収',cls:'num'}},consec_profit_growth:{{h:'連続増益',cls:'num'}},
+    consec_div_growth:{{h:'連続増配',cls:'num'}},roe_5y_avg:{{h:'ROE5y平均%',cls:'num'}},
+    roa_5y_avg:{{h:'ROA5y平均%',cls:'num'}},opm_5y_avg:{{h:'営利率5y平均%',cls:'num'}},
+    roe_delta_3y:{{h:'ROE改善3y',cls:'num'}},is_record_profit:{{h:'最高益',cls:'num'}},
     macd:{{h:'MACD',cls:'num'}},macd_signal:{{h:'Signal',cls:'num'}},macd_gc:{{h:'GC',cls:'num'}},
     vol20_ratio:{{h:'出来高比',cls:'num'}},turnover_day:{{h:'売買代金',cls:'num'}},
     turnover_20d:{{h:'20日売買代金',cls:'num'}},break_20d:{{h:'20日更新',cls:'num'}},
@@ -5741,6 +5755,8 @@ def _build_screen_page() -> str:
     if(!mx('dev_ma25','f-dm25-max'))return false;
     if(!mn('dev_ma75','f-dm75-min'))return false;
     if(!mx('dev_ma75','f-dm75-max'))return false;
+    if(!mn('dev_ma50','f-dm50-min'))return false;
+    if(!mx('dev_ma50','f-dm50-max'))return false;
     if(!mn('dev_ma200','f-dm200-min'))return false;
     if(!mx('dev_ma200','f-dm200-max'))return false;
     if(!mn('dev_high52w','f-d52h-min'))return false;
@@ -5792,6 +5808,10 @@ def _build_screen_page() -> str:
     if(!mx('pcfr','f-pcfr-max'))return false;
     if(!mn('beta','f-beta-min'))return false;
     if(!mx('beta','f-beta-max'))return false;
+    if(!mn('peg','f-peg-min'))return false;
+    if(!mx('peg','f-peg-max'))return false;
+    if(!mn('fin_leverage','f-finlev-min'))return false;
+    if(!mx('fin_leverage','f-finlev-max'))return false;
     if(!mn('market_cap','f-cap-min',1e8))return false;
     if(!mx('market_cap','f-cap-max',1e8))return false;
     /* ── 成長 ── */
@@ -5802,8 +5822,18 @@ def _build_screen_page() -> str:
     if(!mn('op_margin','f-opm-min'))return false;
     if(!mn('ord_margin','f-ordm-min'))return false;
     if(!mn('roic','f-roic-min'))return false;
+    if(!mn('rev_cagr_5y','f-revcagr-min'))return false;
+    if(!mn('profit_cagr_5y','f-profcagr-min'))return false;
+    if(!mn('consec_rev_growth','f-consrev-min'))return false;
+    if(!mn('consec_profit_growth','f-consprof-min'))return false;
     /* ── クオリティ ── */
     if(!mn('fscore','f-fscore-min'))return false;
+    if(!mn('roe_5y_avg','f-roe5y-min'))return false;
+    if(!mn('roa_5y_avg','f-roa5y-min'))return false;
+    if(!mn('opm_5y_avg','f-opm5y-min'))return false;
+    if(!mn('consec_div_growth','f-consdiv-min'))return false;
+    if(!mn('roe_delta_3y','f-roed3y-min'))return false;
+    if(_chk('f-record') && s.is_record_profit!==1)return false;
     if(_chk('f-buyback')&&!s.buyback_recent)return false;
     /* ── 理論株価 ── */
     if(!mn('theo_ratio','f-theoratio-min'))return false;
@@ -5891,6 +5921,7 @@ def _build_screen_page() -> str:
     {{cat:'テクニカル',id:'rsi',   lbl:'RSI',       field:'rsi14',        minId:'f-rsi-min',  maxId:'f-rsi-max',  unit:'',  step:1}},
     {{cat:'テクニカル',id:'dm25',  lbl:'MA25乖離',   field:'dev_ma25',     minId:'f-dm25-min', maxId:'f-dm25-max', unit:'%', step:1}},
     {{cat:'テクニカル',id:'dm75',  lbl:'MA75乖離',   field:'dev_ma75',     minId:'f-dm75-min', maxId:'f-dm75-max', unit:'%', step:1}},
+    {{cat:'テクニカル',id:'dm50',  lbl:'MA50乖離',   field:'dev_ma50',     minId:'f-dm50-min', maxId:'f-dm50-max', unit:'%', step:1}},
     {{cat:'テクニカル',id:'dm200', lbl:'MA200乖離',  field:'dev_ma200',    minId:'f-dm200-min',maxId:'f-dm200-max',unit:'%', step:1}},
     {{cat:'テクニカル',id:'d52h',  lbl:'52週高値乖離',field:'dev_high52w', minId:'f-d52h-min', maxId:'f-d52h-max', unit:'%', step:1}},
     {{cat:'テクニカル',id:'d52l',  lbl:'52週安値上昇',field:'dev_low52w',  minId:'f-d52l-min', maxId:'f-d52l-max', unit:'%', step:1}},
@@ -5929,6 +5960,8 @@ def _build_screen_page() -> str:
     {{cat:'バリュー',id:'psr',  lbl:'PSR',       field:'psr',           minId:'f-psr-min',  maxId:'f-psr-max',  unit:'倍', step:0.1}},
     {{cat:'バリュー',id:'pcfr', lbl:'PCFR',      field:'pcfr',          minId:'f-pcfr-min', maxId:'f-pcfr-max', unit:'倍', step:0.1}},
     {{cat:'バリュー',id:'beta', lbl:'Beta',      field:'beta',          minId:'f-beta-min', maxId:'f-beta-max', unit:'',   step:0.1}},
+    {{cat:'バリュー',id:'peg',  lbl:'PEGレシオ',  field:'peg',           minId:'f-peg-min',  maxId:'f-peg-max',  unit:'倍', step:0.1}},
+    {{cat:'バリュー',id:'finlev',lbl:'財務レバレッジ',field:'fin_leverage',minId:'f-finlev-min',maxId:'f-finlev-max',unit:'倍',step:0.1}},
     {{cat:'バリュー',id:'turn', lbl:'売買代金(20日)',field:'turnover_20d',minId:'f-turn-min', maxId:'f-turn-max', unit:'億', step:1}},
     {{cat:'バリュー',id:'cap',  lbl:'時価総額',   field:'market_cap',    minId:'f-cap-min',  maxId:'f-cap-max',  unit:'億', step:10,scale:1e-8}},
     /* ── 成長 ── */
@@ -5939,8 +5972,18 @@ def _build_screen_page() -> str:
     {{cat:'成長',id:'opm',  lbl:'営業利益率',   field:'op_margin',  minId:'f-opm-min', unit:'%',step:1,minOnly:true}},
     {{cat:'成長',id:'ordm', lbl:'経常利益率',   field:'ord_margin', minId:'f-ordm-min',unit:'%',step:1,minOnly:true}},
     {{cat:'成長',id:'roic', lbl:'ROIC',        field:'roic',       minId:'f-roic-min',unit:'%',step:1,minOnly:true}},
+    {{cat:'成長',id:'revcagr', lbl:'売上CAGR5年', field:'rev_cagr_5y',    minId:'f-revcagr-min', unit:'%',step:1,minOnly:true}},
+    {{cat:'成長',id:'profcagr',lbl:'純利益CAGR5年',field:'profit_cagr_5y',minId:'f-profcagr-min',unit:'%',step:1,minOnly:true}},
+    {{cat:'成長',id:'consrev', lbl:'連続増収年数', field:'consec_rev_growth',   minId:'f-consrev-min', unit:'年',step:1,minOnly:true}},
+    {{cat:'成長',id:'consprof',lbl:'連続増益年数', field:'consec_profit_growth',minId:'f-consprof-min',unit:'年',step:1,minOnly:true}},
     /* ── クオリティ ── */
     {{cat:'クオリティ',id:'fscore', lbl:'財務健全性(F-score)', field:'fscore', minId:'f-fscore-min', unit:'点', step:1, minOnly:true}},
+    {{cat:'クオリティ',id:'roe5y', lbl:'ROE5年平均',   field:'roe_5y_avg', minId:'f-roe5y-min', unit:'%',step:1,minOnly:true}},
+    {{cat:'クオリティ',id:'roa5y', lbl:'ROA5年平均',   field:'roa_5y_avg', minId:'f-roa5y-min', unit:'%',step:1,minOnly:true}},
+    {{cat:'クオリティ',id:'opm5y', lbl:'営業利益率5年平均',field:'opm_5y_avg',minId:'f-opm5y-min',unit:'%',step:1,minOnly:true}},
+    {{cat:'クオリティ',id:'consdiv',lbl:'連続増配年数', field:'consec_div_growth', minId:'f-consdiv-min', unit:'年',step:1,minOnly:true}},
+    {{cat:'クオリティ',id:'roed3y', lbl:'ROE改善(3年pt)',field:'roe_delta_3y', minId:'f-roed3y-min', unit:'pt',step:1,minOnly:true}},
+    {{cat:'クオリティ',id:'record', lbl:'最高益(過去最高益を更新)', chkId:'f-record', isFlag:true}},
     {{cat:'クオリティ',id:'buyback', lbl:'直近30日に自社株買い発表', chkId:'f-buyback', isFlag:true}},
     /* ── 理論株価 ── */
     {{cat:'理論株価',id:'theoratio', lbl:'理論株価倍率', field:'theo_ratio',     minId:'f-theoratio-min', unit:'倍', step:0.1, minOnly:true}},
@@ -8290,9 +8333,15 @@ def api_screen():
                ps.psr, ps.pcfr,
                tv.theo_ratio, tv.upside_3y_pct, tv.pass_all,
                ps.fscore,
-               (bb.code IS NOT NULL) AS buyback_recent
+               (bb.code IS NOT NULL) AS buyback_recent,
+               ps.ma50,
+               fm.rev_cagr_5y, fm.profit_cagr_5y,
+               fm.consec_rev_growth, fm.consec_profit_growth, fm.consec_div_growth,
+               fm.roe_5y_avg, fm.roa_5y_avg, fm.opm_5y_avg,
+               fm.is_record_profit, fm.roe_delta_3y, fm.roe_driver_3y
         FROM stocks s
         LEFT JOIN markets m ON s.market_id = m.id
+        LEFT JOIN fundamental_metrics fm ON s.code = fm.code
         LEFT JOIN stock_fundamentals f ON s.code = f.code
         LEFT JOIN (
             SELECT dp.code, dp.close, dp.change_pct
@@ -8393,11 +8442,27 @@ def api_screen():
             "theo_pass_all":  _i(r[61]),
             "fscore":         _i(r[62]) if r[62] is not None else None,
             "buyback_recent": _i(r[63]),
+            # 複数年ファンダ（fundamental_metrics・日次更新）
+            "rev_cagr_5y":       _f(r[65]),
+            "profit_cagr_5y":    _f(r[66]),
+            "consec_rev_growth":    _i(r[67]) if r[67] is not None else None,
+            "consec_profit_growth": _i(r[68]) if r[68] is not None else None,
+            "consec_div_growth":    _i(r[69]) if r[69] is not None else None,
+            "roe_5y_avg":        _f(r[70]),
+            "roa_5y_avg":        _f(r[71]),
+            "opm_5y_avg":        _f(r[72]),
+            "is_record_profit":  _i(r[73]) if r[73] is not None else None,
+            "roe_delta_3y":      _f(r[74]),
+            "roe_driver_3y":     _i(r[75]) if r[75] is not None else None,
             # クライアント側計算
             "vs_ma25":        (close - ma25)  if (close is not None and ma25  is not None) else None,
             "vs_ma75":        (close - ma75)  if (close is not None and ma75  is not None) else None,
             "ma25_vs_ma75":   (ma25  - ma75)  if (ma25  is not None and ma75  is not None) else None,
             "earnings_yield": round(100.0 / per, 2) if (per and per > 0) else None,
+            # 派生: PEG(PER/EPS成長)・財務レバレッジ(100/自己資本比率)・50日線乖離
+            "peg":            round(per / _f(r[35]), 2) if (per and per > 0 and _f(r[35]) and _f(r[35]) > 0) else None,
+            "fin_leverage":   round(100.0 / _f(r[54]), 2) if (_f(r[54]) and _f(r[54]) > 0) else None,
+            "dev_ma50":       round((close - _f(r[64])) / _f(r[64]) * 100, 2) if (close and _f(r[64])) else None,
         })
     import json as _json
     payload = _json.dumps(results, ensure_ascii=False)

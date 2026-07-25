@@ -333,6 +333,18 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
             print(f"  エラー: {e}")
             _log("theoretical_values", "failed", error=str(e))
 
+    # 複数年ファンダ指標（CAGR・連続増収増益増配・5年平均ROE等・最高益・ROE分解）を
+    # EDINET年次から算出 → fundamental_metrics。スクリーニングの継続性条件に使う。
+    if not rankings_only:
+        print("\n[複数年ファンダ] fundamental_metrics を算出中...")
+        try:
+            from fundamentals_ext import run as compute_fundamentals_ext
+            n = compute_fundamentals_ext(verbose=False)
+            _log("fundamental_metrics", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("fundamental_metrics", "failed", error=str(e))
+
     # バックテスト用の週次スナップショット（直近週）を追記
     # price_stats_history に当週の全指標(PIT補正済)を upsert。過去分は
     # compute_stats_history.py --backfill で一度だけ生成済み。
