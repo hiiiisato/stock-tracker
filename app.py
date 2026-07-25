@@ -360,6 +360,11 @@ tr:hover { background: #1c2128; }
 .cg-metric { flex: 1; text-align: center; padding: 3px 2px; }
 .cg-metric-lbl { font-size: 9px; color: #484f58; display: block; }
 .cg-metric-val { font-size: 11px; color: #8b949e; font-weight: 600; display: block; }
+.sp-grow { font-size: 11px; font-weight: 700; color: #3fb950; background: rgba(63,185,80,0.12);
+  border-radius: 5px; padding: 2px 7px; white-space: nowrap; }
+.sp-nodata { height: 150px; display: flex; align-items: center; justify-content: center;
+  color: #6e7681; font-size: 12px; }
+.sp-metrics .cg-metric-val { color: #c9d1d9; }
 .cg-ma-btn {
   background: transparent; border: 1px solid #30363d; border-radius: 4px;
   color: #484f58; font-size: 11px; padding: 2px 7px; cursor: pointer; transition: all 0.15s;
@@ -5328,7 +5333,8 @@ def _build_screen_page() -> str:
     <span class="sc-count" id="sc-count">読み込み中...</span>
     <div style="display:flex;gap:4px;margin:0 6px">
       <button class="cg-view-btn active" id="sc-btn-list">☰ リスト</button>
-      <button class="cg-view-btn" id="sc-btn-chart">⊞ チャート</button>
+      <button class="cg-view-btn" id="sc-btn-chart">⊞ 株価</button>
+      <button class="cg-view-btn" id="sc-btn-perf">📊 業績</button>
     </div>
     <select class="sc-sort" id="sc-sort">
       <option value="market_cap-desc">時価総額 大きい順</option>
@@ -5358,16 +5364,26 @@ def _build_screen_page() -> str:
 
   <div id="sc-chart-wrap" style="display:none">
     <div style="display:flex;gap:6px;padding:8px 0;flex-wrap:wrap;align-items:center">
-      <div style="display:flex;gap:3px">
-        <button class="cg-period-btn sc-period-btn" data-period="1M">1M</button>
-        <button class="cg-period-btn sc-period-btn" data-period="3M">3M</button>
-        <button class="cg-period-btn sc-period-btn active" data-period="6M">6M</button>
-        <button class="cg-period-btn sc-period-btn" data-period="1Y">1Y</button>
-      </div>
-      <div style="display:flex;gap:3px">
-        <button class="cg-ma-btn sc-ma-btn active" data-ma="25">MA25</button>
-        <button class="cg-ma-btn sc-ma-btn" data-ma="75">MA75</button>
-      </div>
+      <span id="sc-chart-controls" style="display:flex;gap:6px;align-items:center">
+        <span style="display:flex;gap:3px">
+          <button class="cg-period-btn sc-period-btn" data-period="1M">1M</button>
+          <button class="cg-period-btn sc-period-btn" data-period="3M">3M</button>
+          <button class="cg-period-btn sc-period-btn active" data-period="6M">6M</button>
+          <button class="cg-period-btn sc-period-btn" data-period="1Y">1Y</button>
+        </span>
+        <span style="display:flex;gap:3px">
+          <button class="cg-ma-btn sc-ma-btn active" data-ma="25">MA25</button>
+          <button class="cg-ma-btn sc-ma-btn" data-ma="75">MA75</button>
+        </span>
+      </span>
+      <select id="sc-perf-metric" class="cg-sort-select" style="display:none">
+        <option value="rev_op">売上高＋営業利益</option>
+        <option value="net">純利益</option>
+        <option value="op_margin">営業利益率</option>
+        <option value="net_margin">純利益率</option>
+        <option value="roe">ROE</option>
+        <option value="eps">EPS</option>
+      </select>
       <span id="sc-chart-note" style="font-size:12px;color:#484f58"></span>
       <div style="display:flex;gap:4px;align-items:center;margin-left:auto">
         <select id="sc-per-sel" class="cg-sort-select">
@@ -5945,7 +5961,7 @@ def _build_screen_page() -> str:
       document.getElementById('sc-sort').value='market_cap-desc';
     }}
     populateInputs(idx);
-    if(scView==='chart'){{loadScChart();}}else{{render();}}
+    if(scView==='chart'){{loadScChart();}}else if(scView==='perf'){{loadScPerf();}}else{{render();}}
   }}
 
   /* ── 条件定義 (カテゴリ別) ── */
@@ -6466,7 +6482,81 @@ def _build_screen_page() -> str:
       grid.appendChild(card);scDrawChart(cid,shown,prices);
     }});
   }}
-  function refreshScGrid(){{if(allScData)scBuildGrid(allScData,lastScCodeOrder);}}
+  function refreshScGrid(){{
+    if(scView==='perf'){{if(allScPerfData)scBuildPerfGrid(allScPerfData,lastScPerfOrder);}}
+    else{{if(allScData)scBuildGrid(allScData,lastScCodeOrder);}}
+  }}
+  /* ── 業績ビュー ── */
+  var allScPerfData=null,lastScPerfOrder=[],SC_PERF_METRIC='rev_op';
+  function scStockMap(){{var m={{}};stocks.forEach(function(s){{m[s.code]=s;}});return m;}}
+  function pfLast(a){{if(!a)return null;for(var i=a.length-1;i>=0;i--){{if(a[i]!=null)return a[i];}}return null;}}
+  function pfNum(v,unit){{
+    if(v==null)return '—';
+    if(unit==='億')return Math.round(v).toLocaleString('ja-JP')+'億';
+    if(unit==='%')return (Math.round(v*10)/10)+'%';
+    return (Math.round(v*10)/10)+unit;
+  }}
+  function pfStat(lbl,v,unit){{return '<div class="cg-metric"><span class="cg-metric-lbl">'+lbl+'</span><span class="cg-metric-val">'+pfNum(v,unit)+'</span></div>';}}
+  function loadScPerf(){{
+    var codes=scGetFilteredCodes(200),grid=document.getElementById('sc-cg-grid');
+    if(!codes.length){{allScPerfData=[];lastScPerfOrder=[];grid.innerHTML='<div style="color:#8b949e;padding:20px">条件に一致する銘柄がありません</div>';scUpdatePagination(1,0);return;}}
+    grid.innerHTML='<div style="color:#8b949e;padding:30px;text-align:center">業績を読み込み中...</div>';
+    fetch('/api/perf_grid?codes='+codes.join(','))
+      .then(function(r){{return r.json();}}).then(function(data){{scBuildPerfGrid(data,codes);}})
+      .catch(function(){{grid.innerHTML='<div style="color:#e84040;padding:20px">読み込み失敗</div>';}});
+  }}
+  function scBuildPerfGrid(data,codeOrder){{
+    allScPerfData=data;lastScPerfOrder=codeOrder;
+    var grid=document.getElementById('sc-cg-grid');
+    if(!data||!data.length){{grid.innerHTML='<div style="color:#8b949e;padding:20px">データなし</div>';scUpdatePagination(1,0);return;}}
+    var sorted=data.slice().sort(function(a,b){{return codeOrder.indexOf(a.code)-codeOrder.indexOf(b.code);}});
+    var tp=Math.max(1,Math.ceil(sorted.length/SC_PER));SC_PAGE=Math.min(SC_PAGE,tp-1);
+    var page=sorted.slice(SC_PAGE*SC_PER,(SC_PAGE+1)*SC_PER);scUpdatePagination(tp,sorted.length);
+    var smap=scStockMap();grid.innerHTML='';
+    page.forEach(function(item){{
+      var s=smap[item.code]||{{}},ser=item.series;
+      var badge=(s.rev_cagr_5y!=null)?'<span class="sp-grow">売上CAGR '+(s.rev_cagr_5y>=0?'+':'')+s.rev_cagr_5y.toFixed(1)+'%</span>':'';
+      var cid='sc-perf-'+item.code;
+      var plot=(ser&&ser.years&&ser.years.length)?'<div id="'+cid+'" class="cg-plot"></div>':'<div class="sp-nodata">業績データ準備中（EDINET取得待ち）</div>';
+      var card=document.createElement('div');card.className='cg-card sp-card';
+      card.innerHTML='<div class="cg-card-hd">'+
+        '<div><div class="cg-name">'+escHtml(item.name)+'</div><div class="cg-code-label">'+item.code+(item.sector?' / '+escHtml(item.sector):'')+'</div></div>'+
+        '<div style="text-align:right">'+badge+'</div></div>'+plot+
+        '<div class="cg-metrics sp-metrics">'+
+          pfStat('売上',ser&&pfLast(ser.revenue),'億')+pfStat('営業益',ser&&pfLast(ser.op),'億')+
+          pfStat('営利率',ser&&pfLast(ser.op_margin),'%')+pfStat('EPS成長',s.eps_growth,'%')+
+          pfStat('RSI',s.rsi14,'')+
+        '</div>';
+      card.querySelector('.cg-card-hd').addEventListener('click',function(){{window.location.href='/stock/'+item.code;}});
+      grid.appendChild(card);
+      if(ser&&ser.years&&ser.years.length)drawPerfChart(cid,ser);
+    }});
+  }}
+  function drawPerfChart(id,ser){{
+    if(typeof Plotly==='undefined')return;
+    var yrs=ser.years.map(String),m=SC_PERF_METRIC,traces=[];
+    var layout={{paper_bgcolor:'#161b22',plot_bgcolor:'#161b22',height:150,margin:{{l:4,r:42,t:6,b:20}},
+      showlegend:false,barmode:'group',bargap:0.25,
+      xaxis:{{type:'category',tickfont:{{size:9}},color:'#6e7681',showgrid:false}},
+      yaxis:{{tickfont:{{size:9}},color:'#6e7681',gridcolor:'#21262d',side:'right',automargin:true}}}};
+    var y2={{overlaying:'y',side:'left',tickfont:{{size:9}},color:'#f0883e',showgrid:false,ticksuffix:'%',zeroline:false}};
+    if(m==='rev_op'){{
+      traces.push({{type:'bar',x:yrs,y:ser.revenue,marker:{{color:'#3b82f6'}}}});
+      traces.push({{type:'bar',x:yrs,y:ser.op,marker:{{color:'#3fb950'}}}});
+      traces.push({{type:'scatter',mode:'lines+markers',x:yrs,y:ser.op_margin,yaxis:'y2',line:{{color:'#f0883e',width:2}},marker:{{size:4}}}});
+      layout.yaxis2=y2;
+    }}else if(m==='net'){{
+      traces.push({{type:'bar',x:yrs,y:ser.net,marker:{{color:ser.net.map(function(v){{return v>=0?'#3b82f6':'#f85149';}})}}}});
+      traces.push({{type:'scatter',mode:'lines+markers',x:yrs,y:ser.net_margin,yaxis:'y2',line:{{color:'#f0883e',width:2}},marker:{{size:4}}}});
+      layout.yaxis2=y2;
+    }}else{{
+      var map={{op_margin:ser.op_margin,net_margin:ser.net_margin,roe:ser.roe,eps:ser.eps}};
+      var suffix=(m==='eps')?'':'%';
+      traces.push({{type:'bar',x:yrs,y:map[m],marker:{{color:'#3b82f6'}}}});
+      layout.yaxis.ticksuffix=suffix;
+    }}
+    Plotly.react(id,traces,layout,{{responsive:true,displayModeBar:false}});
+  }}
   function loadScChart(){{
     SC_PAGE=0;
     var _totalFiltered=stocks.filter(passFilter).length;
@@ -6484,12 +6574,21 @@ def _build_screen_page() -> str:
   function setScView(v){{
     scView=v;
     var tw=document.querySelector('.sc-table-wrap'),cw=document.getElementById('sc-chart-wrap');
-    var bl=document.getElementById('sc-btn-list'),bc=document.getElementById('sc-btn-chart');
-    if(v==='chart'){{tw.style.display='none';cw.style.display='';bl.classList.remove('active');bc.classList.add('active');loadScChart();}}
-    else{{tw.style.display='';cw.style.display='none';bl.classList.add('active');bc.classList.remove('active');}}
+    var bl=document.getElementById('sc-btn-list'),bc=document.getElementById('sc-btn-chart'),bp=document.getElementById('sc-btn-perf');
+    var cc=document.getElementById('sc-chart-controls'),pm=document.getElementById('sc-perf-metric');
+    [bl,bc,bp].forEach(function(b){{if(b)b.classList.remove('active');}});
+    if(v==='list'){{tw.style.display='';cw.style.display='none';bl.classList.add('active');}}
+    else{{
+      tw.style.display='none';cw.style.display='';
+      if(v==='chart'){{bc.classList.add('active');if(cc)cc.style.display='';if(pm)pm.style.display='none';loadScChart();}}
+      else{{bp.classList.add('active');if(cc)cc.style.display='none';if(pm)pm.style.display='';loadScPerf();}}
+    }}
   }}
   document.getElementById('sc-btn-list').addEventListener('click',function(){{setScView('list');}});
   document.getElementById('sc-btn-chart').addEventListener('click',function(){{setScView('chart');}});
+  document.getElementById('sc-btn-perf').addEventListener('click',function(){{setScView('perf');}});
+  var pmSel=document.getElementById('sc-perf-metric');
+  if(pmSel)pmSel.addEventListener('change',function(){{SC_PERF_METRIC=this.value;if(scView==='perf')refreshScGrid();}});
   document.querySelectorAll('.sc-cg-tab').forEach(function(t){{
     t.addEventListener('click',function(){{
       document.querySelectorAll('.sc-cg-tab').forEach(function(x){{x.classList.remove('active');}});
@@ -9747,6 +9846,61 @@ def api_chart_grid():
             "prices":     price_map.get(code, []),
         })
 
+    return _json.dumps(result, ensure_ascii=False, default=str)
+
+
+@app.route("/api/perf_grid")
+def api_perf_grid():
+    """業績カードビュー用: 指定銘柄の年次業績時系列（EDINET公式）を返す。
+    スクリーニング結果の「業績」ビューが表示中ページの銘柄だけを取りに来る。"""
+    codes = [c.strip() for c in request.args.get("codes", "").split(",") if c.strip()]
+    if not codes or len(codes) > 200:
+        return _json.dumps({"error": "invalid"}), 400
+
+    conn = get_conn(); cur = conn.cursor()
+    ph = ",".join(["%s"] * len(codes))
+    cur.execute(f"""
+        SELECT fa.code, fa.fiscal_year, fa.revenue, fa.operating_income, fa.net_income,
+               fa.roe_official, fa.eps
+        FROM financials_edinet_annual fa
+        WHERE fa.code IN ({ph})
+        ORDER BY fa.code, fa.fiscal_year
+    """, (*codes,))
+    fin_rows = cur.fetchall()
+    cur.execute(f"""SELECT s.code, s.name, sec.name FROM stocks s
+                    LEFT JOIN sectors sec ON s.sector_id = sec.id
+                    WHERE s.code IN ({ph})""", (*codes,))
+    meta = {r[0]: {"name": r[1], "sector": r[2]} for r in cur.fetchall()}
+    cur.close(); conn.close()
+
+    from collections import defaultdict as _dd
+    series = _dd(lambda: {"years": [], "revenue": [], "op": [], "net": [],
+                          "op_margin": [], "net_margin": [], "roe": [], "eps": []})
+
+    def _oku(v):
+        return round(float(v) / 1e8, 1) if v is not None else None
+
+    def _pct(a, b):
+        return round(float(a) / float(b) * 100, 1) if a is not None and b else None
+
+    for code, fy, rev, op, net, roe, eps in fin_rows:
+        d = series[code]
+        d["years"].append(fy)
+        d["revenue"].append(_oku(rev))
+        d["op"].append(_oku(op))
+        d["net"].append(_oku(net))
+        d["op_margin"].append(_pct(op, rev))
+        d["net_margin"].append(_pct(net, rev))
+        d["roe"].append(round(float(roe) * 100, 1) if roe is not None else None)
+        d["eps"].append(float(eps) if eps is not None else None)
+
+    result = []
+    for code in codes:
+        m = meta.get(code, {})
+        d = series.get(code)
+        result.append({"code": code, "name": (m.get("name") or code),
+                       "sector": (m.get("sector") or ""),
+                       "series": (dict(d) if d else None)})
     return _json.dumps(result, ensure_ascii=False, default=str)
 
 
