@@ -6167,10 +6167,11 @@ def _build_screen_page() -> str:
 
   /* ── よく使う条件（ワンタップで条件セット） ── */
   var QUICKS=[
-    {{lbl:'大型株',   conds:[{{k:'min',id:'cap',v:3000}}]}},
-    {{lbl:'中小型株', conds:[{{k:'max',id:'cap',v:1000}}]}},
+    {{lbl:'大型株',   group:'cap', conds:[{{k:'min',id:'cap',v:3000}}]}},
+    {{lbl:'中型株',   group:'cap', conds:[{{k:'min',id:'cap',v:1000}},{{k:'max',id:'cap',v:3000}}]}},
+    {{lbl:'小型株',   group:'cap', conds:[{{k:'min',id:'cap',v:30}},{{k:'max',id:'cap',v:1000}}]}},
     {{lbl:'高配当',   conds:[{{k:'min',id:'div',v:3.5}}]}},
-    {{lbl:'割安',     conds:[{{k:'max',id:'per',v:15}}]}},
+    {{lbl:'割安',     conds:[{{k:'max',id:'per',v:15}},{{k:'max',id:'pbr',v:1.5}}]}},
     {{lbl:'高ROE',    conds:[{{k:'min',id:'roe',v:15}}]}},
     {{lbl:'増収増益', conds:[{{k:'min',id:'rev',v:10}},{{k:'min',id:'op',v:10}}]}},
     {{lbl:'流動性',   conds:[{{k:'min',id:'turn',v:5}}]}}
@@ -6189,6 +6190,8 @@ def _build_screen_page() -> str:
   }}
   function toggleQuick(q){{
     var on=quickActive(q);
+    /* サイズ系など同一groupは排他: 選ぶ時に同フィールドの上下限を一旦クリア */
+    if(!on&&q.group){{delete _cmin[q.group];delete _cmax[q.group];}}
     q.conds.forEach(function(c){{
       if(c.k==='flag'){{if(on)delete _cflg[c.id];else _cflg[c.id]=true;}}
       else if(c.k==='min'){{if(on)delete _cmin[c.id];else _cmin[c.id]=c.v;}}
