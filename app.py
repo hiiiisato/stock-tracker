@@ -2535,6 +2535,12 @@ input.sc-range-input::-moz-range-thumb {
 
 /* ── テーブル ── */
 .sc-table-wrap { overflow-x:auto; }
+.sc-colgroups { display:flex; flex-wrap:wrap; gap:3px; margin-bottom:8px;
+  border-bottom:1px solid #21262d; padding-bottom:6px; }
+.sc-cg-tab { font-size:12.5px; padding:5px 15px; border-radius:7px; background:transparent;
+  border:1px solid transparent; color:#8b949e; cursor:pointer; white-space:nowrap; }
+.sc-cg-tab:hover { color:#c9d1d9; }
+.sc-cg-tab.active { background:#1f6feb; color:#fff; }
 .sc-table { width:100%; border-collapse:collapse; font-size:13px; }
 .sc-table th { background:#161b22; color:#8b949e; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; padding:8px 10px; border-bottom:1px solid #30363d; white-space:nowrap; cursor:pointer; user-select:none; }
 .sc-table th:hover { color:#c9d1d9; }
@@ -5378,6 +5384,15 @@ def _build_screen_page() -> str:
   </div>
 
   <div class="sc-table-wrap">
+    <div class="sc-colgroups" id="sc-colgroups">
+      <button class="sc-cg-tab active" data-cg="">標準</button>
+      <button class="sc-cg-tab" data-cg="評価">評価</button>
+      <button class="sc-cg-tab" data-cg="配当">配当</button>
+      <button class="sc-cg-tab" data-cg="収益率">収益率</button>
+      <button class="sc-cg-tab" data-cg="成長">成長</button>
+      <button class="sc-cg-tab" data-cg="品質">品質</button>
+      <button class="sc-cg-tab" data-cg="1株">1株</button>
+    </div>
     <table class="sc-table" id="sc-table">
       <thead id="sc-thead"><tr></tr></thead>
       <tbody id="sc-tbody"><tr><td class="sc-loading">データ読み込み中...</td></tr></tbody>
@@ -5534,6 +5549,11 @@ def _build_screen_page() -> str:
     consec_div_growth:{{h:'連続増配',cls:'num'}},roe_5y_avg:{{h:'ROE5y平均%',cls:'num'}},
     roa_5y_avg:{{h:'ROA5y平均%',cls:'num'}},opm_5y_avg:{{h:'営利率5y平均%',cls:'num'}},
     roe_delta_3y:{{h:'ROE改善3y',cls:'num'}},is_record_profit:{{h:'最高益',cls:'num'}},
+    net_margin:{{h:'純利益率%',cls:'num'}},eps:{{h:'EPS',cls:'num'}},bps:{{h:'BPS',cls:'num'}},
+    dps:{{h:'1株配当',cls:'num'}},roa:{{h:'ROA%',cls:'num'}},psr:{{h:'PSR',cls:'num'}},
+    pcfr:{{h:'PCFR',cls:'num'}},payout_ratio:{{h:'配当性向%',cls:'num'}},
+    equity_ratio:{{h:'自己資本比率%',cls:'num'}},debt_to_equity:{{h:'D/E',cls:'num'}},
+    roic:{{h:'ROIC%',cls:'num'}},op_growth:{{h:'営業益成長%',cls:'num'}},eps_growth:{{h:'EPS成長%',cls:'num'}},
     macd:{{h:'MACD',cls:'num'}},macd_signal:{{h:'Signal',cls:'num'}},macd_gc:{{h:'GC',cls:'num'}},
     vol20_ratio:{{h:'出来高比',cls:'num'}},turnover_day:{{h:'売買代金',cls:'num'}},
     turnover_20d:{{h:'20日売買代金',cls:'num'}},break_20d:{{h:'20日更新',cls:'num'}},
@@ -5547,6 +5567,16 @@ def _build_screen_page() -> str:
     buyback_recent:{{h:'自社株買い',cls:'num'}},
   }};
   var DEFAULT_COLS=['name','close','change_pct','chg25d','chg75d','dev_ma25','market_cap','per','pbr','roe','div_yield'];
+  /* 項目分けの列ビュー（他サイト風。標準=プリセット固有の列） */
+  var COLGROUPS={{
+    '評価':['name','close','change_pct','market_cap','per','pbr','psr','pcfr','div_yield'],
+    '配当':['name','close','div_yield','dps','payout_ratio','consec_div_growth','roe','market_cap'],
+    '収益率':['name','close','op_margin','net_margin','roe','roa','roic','opm_5y_avg'],
+    '成長':['name','close','rev_growth','op_growth','eps_growth','rev_cagr_5y','profit_cagr_5y','consec_rev_growth','consec_profit_growth'],
+    '品質':['name','close','fscore','equity_ratio','debt_to_equity','roe_5y_avg','roe_delta_3y','is_record_profit'],
+    '1株':['name','close','eps','bps','dps','per','pbr','roe']
+  }};
+  var curColGroup='';
 
   /* ── 数値フィルターID ── */
   var NUM_IDS=[
@@ -5856,7 +5886,10 @@ def _build_screen_page() -> str:
     return true;
   }}
 
-  function getCols(){{return(curStrat>=0&&curStrat<STRATS.length)?STRATS[curStrat].cols:DEFAULT_COLS;}}
+  function getCols(){{
+    if(curColGroup&&COLGROUPS[curColGroup])return COLGROUPS[curColGroup];
+    return(curStrat>=0&&curStrat<STRATS.length)?STRATS[curStrat].cols:DEFAULT_COLS;
+  }}
 
   function buildHeader(cols){{
     return cols.map(function(col){{
@@ -5902,7 +5935,7 @@ def _build_screen_page() -> str:
     document.querySelectorAll('.sc-preset-card').forEach(function(b){{b.classList.remove('active');}});
     var card=document.querySelector('.sc-preset-card[data-strat="'+idx+'"]');
     if(card)card.classList.add('active');
-    if(idx>=0&&idx<=14){{
+    if(idx>=0&&idx<STRATS.length){{
       var st=STRATS[idx];
       var dashIdx=st.sort.lastIndexOf('-');
       sortCol=st.sort.slice(0,dashIdx);sortDir=st.sort.slice(dashIdx+1)==='desc'?-1:1;
@@ -6457,6 +6490,12 @@ def _build_screen_page() -> str:
   }}
   document.getElementById('sc-btn-list').addEventListener('click',function(){{setScView('list');}});
   document.getElementById('sc-btn-chart').addEventListener('click',function(){{setScView('chart');}});
+  document.querySelectorAll('.sc-cg-tab').forEach(function(t){{
+    t.addEventListener('click',function(){{
+      document.querySelectorAll('.sc-cg-tab').forEach(function(x){{x.classList.remove('active');}});
+      t.classList.add('active');curColGroup=t.dataset.cg;render();
+    }});
+  }});
   document.querySelectorAll('.sc-period-btn').forEach(function(btn){{
     btn.addEventListener('click',function(){{
       document.querySelectorAll('.sc-period-btn').forEach(function(b){{b.classList.remove('active');}});
@@ -8338,7 +8377,8 @@ def api_screen():
                fm.rev_cagr_5y, fm.profit_cagr_5y,
                fm.consec_rev_growth, fm.consec_profit_growth, fm.consec_div_growth,
                fm.roe_5y_avg, fm.roa_5y_avg, fm.opm_5y_avg,
-               fm.is_record_profit, fm.roe_delta_3y, fm.roe_driver_3y
+               fm.is_record_profit, fm.roe_delta_3y, fm.roe_driver_3y,
+               f.profit_margin, f.eps_ttm, f.bps, f.annual_dps
         FROM stocks s
         LEFT JOIN markets m ON s.market_id = m.id
         LEFT JOIN fundamental_metrics fm ON s.code = fm.code
@@ -8454,6 +8494,10 @@ def api_screen():
             "is_record_profit":  _i(r[73]) if r[73] is not None else None,
             "roe_delta_3y":      _f(r[74]),
             "roe_driver_3y":     _i(r[75]) if r[75] is not None else None,
+            "net_margin":        float(r[76]) * 100 if r[76] is not None else None,
+            "eps":               _f(r[77]),
+            "bps":               _f(r[78]),
+            "dps":               _f(r[79]),
             # クライアント側計算
             "vs_ma25":        (close - ma25)  if (close is not None and ma25  is not None) else None,
             "vs_ma75":        (close - ma75)  if (close is not None and ma75  is not None) else None,
