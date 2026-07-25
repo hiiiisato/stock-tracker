@@ -13,6 +13,10 @@ EDINETDB_API_KEY = os.environ.get("EDINETDB_API_KEY", "")
 JQUANTS_BASE_URL = "https://api.jquants.com/v2"
 JQUANTS_HEADERS = {"x-api-key": JQUANTS_API_KEY}
 
+# 四半期の営業増益率が前四半期から何ポイント変われば
+# 「加速／減速」と表示するか。小さな振れをトレンド扱いしないための中立帯。
+QUARTER_MOMENTUM_THRESHOLD_PCT = 5.0
+
 
 def _resolve_ssl_ca() -> str:
     """SSL証明書パスをクロスプラットフォームで解決する。

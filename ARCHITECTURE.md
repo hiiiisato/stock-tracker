@@ -132,6 +132,9 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - `disclosures.py` — TDnet適時開示の蓄積・分析 → `disclosures`/`market_summary`。タイトルからカテゴリ・ポジネガをルール分類（APIコストゼロ）。好材料（上方修正・増配等）はPDF本文をGeminiで読み修正理由＋関連テーマを抽出、テーマ経由で関連銘柄をサジェスト。業種・テーマ・開示動向から日次市況コメントも生成。**TDnetは約1ヶ月で消えるため毎日蓄積が必須**
 
 ### 計算・分析
+- `quarter_analysis.py` — 四半期業績の決算評価を行う純粋ロジック。前年同期比から増収増益・増収減益・
+  黒字転換・赤字縮小等を判定し、連続する四半期の営業増益率差から加速/減速も判定する。
+  赤字・黒字転換時は率の比較を避ける。閾値は `config.QUARTER_MOMENTUM_THRESHOLD_PCT`
 - `compute_price_stats.py` — テクニカル指標一式＋財務指標 → `price_stats`（現在値スナップショット）。
   財務は `_load_financials`（年次実績のみ=period_end<=今日で会社予想を除外）。
   `fscore` = 当サイト版 Piotroski F-score（`_fscore_7`・7点。標準9項目のうち流動比率/希薄化はデータ未保持で除外し、
@@ -217,7 +220,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | ルート | 内容 |
 |---|---|
 | `/` | ホーム（指数・注目銘柄） |
-| `/stock/<code>` | 銘柄詳細（チャート・業績・理論株価・メモ） |
+| `/stock/<code>` | 銘柄詳細（チャート・業績・理論株価・メモ）。四半期業績は単独3か月値をQ1〜Q4表示し、最新四半期の増収増益等の評価・加速/減速・前年同期比・利益率・会社予想進捗を結論カードで表示。比較表は指標×四半期の横持ち（スマホは最新列へ自動スクロール） |
 | `/screen` + `/api/screen` | スクリーニング（条件stateはDOM非依存のJSオブジェクト `_cmin/_cmax/_cflg`） |
 | `/api/period_stats` | 任意期間（days=N or from=日付）の騰落率・高安レンジ幅。スクリーニングの期間騰落条件📅で使用。バックテストでは期間条件は無視される |
 | `/api/screen_asof` `/api/backtest` `/api/backtest_dates` | バックテスト（週次スナップショット、TOPIX ETF 1306がベンチマーク） |

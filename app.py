@@ -24,7 +24,8 @@ import requests as _requests
 from bs4 import BeautifulSoup as _BS
 from flask import Flask, abort, redirect, request, jsonify, make_response
 
-from config import get_conn, db
+from config import QUARTER_MOMENTUM_THRESHOLD_PCT, get_conn, db
+from quarter_analysis import assess_quarter
 
 app = Flask(__name__)
 
@@ -2354,6 +2355,7 @@ _STOCK_CSS = """
   background: #161b22; border: 1px solid #30363d; border-radius: 10px;
   padding: 10px 10px 6px; overflow: hidden;
 }
+.fin-chart-box[hidden] { display: none; }
 .fin-chart-box.full { grid-column: 1 / -1; }
 .fin-chart-hd {
   display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; padding: 0 2px;
@@ -2381,11 +2383,88 @@ _STOCK_CSS = """
 .fin-table tr:last-child td { border-bottom: none; }
 .fin-table tr:hover td { background: #1c2128; }
 .fin-forecast-row td { color: #ffa657 !important; }
+.fin-quarter-summary {
+  background: linear-gradient(135deg, rgba(31,111,235,0.10), rgba(22,27,34,0.96));
+  border: 1px solid #30363d; border-radius: 10px; padding: 14px;
+  margin-bottom: 12px;
+}
+.fin-quarter-summary[hidden] { display: none; }
+.fin-qsum-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 10px;
+}
+.fin-qsum-title { color: #e6edf3; font-size: 14px; font-weight: 700; }
+.fin-qsum-note { color: #6e7681; font-size: 10px; }
+.fin-assessment {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: #0d1117; border: 1px solid #21262d; border-radius: 8px;
+  padding: 9px 10px; margin-bottom: 10px;
+}
+.fin-assessment-badge, .fin-momentum-badge {
+  flex-shrink: 0; border-radius: 99px; padding: 3px 9px;
+  font-size: 11px; font-weight: 700;
+}
+.fin-assessment-badge.positive { color: #ff7b72; background: rgba(248,81,73,0.12); }
+.fin-assessment-badge.negative { color: #79c0ff; background: rgba(56,139,253,0.12); }
+.fin-assessment-badge.mixed { color: #e3b341; background: rgba(227,179,65,0.12); }
+.fin-assessment-badge.neutral { color: #8b949e; background: #21262d; }
+.fin-assessment-text { color: #c9d1d9; font-size: 12px; line-height: 1.5; }
+.fin-momentum-badge { color: #d2a8ff; background: rgba(163,113,247,0.12); }
+.fin-qsum-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.fin-qsum-card {
+  min-width: 0; background: #0d1117; border: 1px solid #21262d;
+  border-radius: 8px; padding: 10px 11px;
+}
+.fin-qsum-label { color: #8b949e; font-size: 10px; margin-bottom: 4px; }
+.fin-qsum-value {
+  color: #e6edf3; font-size: 17px; font-weight: 700;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.fin-qsum-yoy {
+  font-size: 11px; margin-top: 4px; font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.fin-qsum-yoy.up, .fin-trend-up { color: #E84040 !important; }
+.fin-qsum-yoy.down, .fin-trend-down { color: #3A9FE0 !important; }
+.fin-qsum-yoy.flat { color: #8b949e; }
+.fin-qsum-progress {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid #21262d;
+  display: flex; align-items: center; gap: 10px;
+}
+.fin-qsum-progress-label { color: #8b949e; font-size: 11px; white-space: nowrap; }
+.fin-qsum-progress-track {
+  height: 7px; flex: 1; background: #21262d; border-radius: 99px; overflow: hidden;
+}
+.fin-qsum-progress-fill { height: 100%; background: #58a6ff; border-radius: 99px; }
+.fin-qsum-progress-value {
+  color: #c9d1d9; font-size: 12px; font-weight: 700;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.fin-table-hint { color: #6e7681; font-size: 10px; margin: -4px 0 7px; }
+.fin-table.quarterly { min-width: 740px; }
+.fin-table.quarterly th, .fin-table.quarterly td { padding: 8px 10px; text-align: right; }
+.fin-table.quarterly th:first-child,
+.fin-table.quarterly td:first-child {
+  position: sticky; left: 0; z-index: 1; min-width: 118px; text-align: left;
+  background: #161b22; box-shadow: 1px 0 0 #30363d;
+}
+.fin-table.quarterly th:first-child { z-index: 2; background: #21262d; }
+.fin-table.quarterly .fin-qhead { line-height: 1.25; }
+.fin-table.quarterly .fin-qhead small { color: #58a6ff; font-size: 9px; }
+.fin-table.quarterly .fin-subrow td {
+  color: #8b949e; font-size: 11px; background: rgba(13,17,23,0.42);
+}
+.fin-table.quarterly .fin-subrow td:first-child { background: #11161d; }
 
 @media (max-width: 900px) { .fin-charts-grid { grid-template-columns: 1fr; } .fin-chart-box.full { grid-column: auto; } }
 @media (max-width: 768px) {
   .co-facts-grid { grid-template-columns: repeat(2, 1fr); }
   .co-biz-points { grid-template-columns: 1fr; }
+  .fin-qsum-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fin-qsum-value { font-size: 15px; }
+  .fin-chart-box { padding-left: 4px; padding-right: 4px; }
+  .fin-table-wrap { overscroll-behavior-x: contain; }
+  .fin-table.quarterly { min-width: 720px; }
 }
 """
 
@@ -7369,7 +7448,8 @@ def _build_stock_page(code: str) -> str:
         if _r[5] is not None and _yr not in _fc_dps_by_year:
             _fc_dps_by_year[_yr] = float(_r[5])
 
-    def _build_fin_rows(rows, fc_rows=None, shares_cnt=None, latest_te=None):
+    def _build_fin_rows(rows, fc_rows=None, shares_cnt=None, latest_te=None,
+                        is_quarterly=False, fiscal_end_month=None):
         # r indices (financials): [0]period_end [1]period_type [2]revenue
         #   [3]operating_income [4]ordinary_income [5]net_income
         #   [6]total_assets [7]total_equity [8]cf_operating
@@ -7383,7 +7463,20 @@ def _build_stock_page(code: str) -> str:
             # kabutan由来のfinancialsは未来日付の期＝会社予想が混ざるため、
             # 期末が未来の行は「予想」として扱う（グラフの点線・(P)ラベル対象）
             is_future = period_end[:10] > _today
-            lbl = period_end[:7].replace("-", "/") + ("(P)" if is_future else "")
+            quarter_no = None
+            if is_quarterly and fiscal_end_month:
+                try:
+                    _pm = date.fromisoformat(period_end[:10]).month
+                    quarter_no = {3: 1, 6: 2, 9: 3, 0: 4}.get(
+                        (_pm - int(fiscal_end_month)) % 12
+                    )
+                except (TypeError, ValueError):
+                    pass
+            lbl = period_end[:7].replace("-", "/")
+            if quarter_no:
+                lbl += f" Q{quarter_no}"
+            if is_future:
+                lbl += "(P)"
             rev  = _to_oku(r[2])
             op   = _to_oku(r[3])
             ord_ = _to_oku(r[4])
@@ -7436,6 +7529,10 @@ def _build_stock_page(code: str) -> str:
                 payout_val = round(dps / eps_val * 100, 1)
             result.append({
                 "label": lbl, "period_end": period_end,
+                "chart_label": (
+                    period_end[2:7].replace("-", "/") + f" Q{quarter_no}"
+                    if quarter_no else lbl
+                ),
                 "revenue": rev, "op": op, "ord": ord_, "net": net,
                 "total_assets": ta, "total_equity": te, "cf_op": cf,
                 "op_mgn":  _safe_pct(r[3], r[2]),
@@ -7444,6 +7541,7 @@ def _build_stock_page(code: str) -> str:
                 "dps": dps, "payout": payout_val,
                 "roe": roe_val, "roa": roa_val,
                 "eps": eps_val, "bps": bps_val_row,
+                "quarter_no": quarter_no,
                 "is_forecast": is_future,
             })
         if fc_rows:
@@ -7483,16 +7581,63 @@ def _build_stock_page(code: str) -> str:
                     "dps": dps, "payout": fc_payout, "roe": fc_roe, "eps": fc_eps,
                     "is_forecast": True,
                 })
-        # 前年比（売上高成長率）を計算
+        # 成長率を計算。四半期は直前行ではなく必ず前年同期と比較する。
+        # 欠損四半期があっても誤って前四半期比を「前年比」と表示しないよう、
+        # 同じ暦月・前年の行を明示的に探す。
         for i, row in enumerate(result):
-            if i > 0:
+            prev = None
+            if is_quarterly:
+                try:
+                    cur_pe = date.fromisoformat(str(row["period_end"])[:10])
+                    prev = next(
+                        (candidate for candidate in reversed(result[:i])
+                         if date.fromisoformat(str(candidate["period_end"])[:10]).year == cur_pe.year - 1
+                         and date.fromisoformat(str(candidate["period_end"])[:10]).month == cur_pe.month),
+                        None,
+                    )
+                except ValueError:
+                    prev = None
+            elif i > 0:
                 prev = result[i - 1]
-                if prev.get("revenue") and row.get("revenue") and prev["revenue"] != 0:
-                    row["yoy_rev"] = round((row["revenue"] - prev["revenue"]) / abs(prev["revenue"]) * 100, 1)
-                else:
-                    row["yoy_rev"] = None
-            else:
-                row["yoy_rev"] = None
+
+            for key, out_key in (
+                ("revenue", "yoy_rev"),
+                ("op", "yoy_op"),
+                ("ord", "yoy_ord"),
+                ("net", "yoy_net"),
+            ):
+                base = prev.get(key) if prev else None
+                current = row.get(key)
+                row[out_key] = (
+                    round((current - base) / abs(base) * 100, 1)
+                    if current is not None and base not in (None, 0) else None
+                )
+                if is_quarterly:
+                    row[f"prev_year_{key}"] = base
+            prev_mgn = prev.get("op_mgn") if prev else None
+            row["yoy_op_mgn_delta"] = (
+                round(row["op_mgn"] - prev_mgn, 1)
+                if row.get("op_mgn") is not None and prev_mgn is not None else None
+            )
+        if is_quarterly:
+            for i, row in enumerate(result):
+                previous_quarter = None
+                if i > 0 and row.get("quarter_no"):
+                    expected_previous = 4 if row["quarter_no"] == 1 else row["quarter_no"] - 1
+                    try:
+                        gap_days = (
+                            date.fromisoformat(str(row["period_end"])[:10])
+                            - date.fromisoformat(str(result[i - 1]["period_end"])[:10])
+                        ).days
+                    except ValueError:
+                        gap_days = 0
+                    if result[i - 1].get("quarter_no") == expected_previous and 60 <= gap_days <= 130:
+                        previous_quarter = result[i - 1]
+                row["assessment"] = assess_quarter(
+                    row,
+                    previous_quarter,
+                    momentum_threshold_pct=QUARTER_MOMENTUM_THRESHOLD_PCT,
+                )
         # 重複period_end排除（実績と予想が被る場合は先勝ち＝実績側優先）。
         # ただし先勝ち行に欠けている値（dps・payout等）は後続の予想行から補完する
         seen: dict = {}
@@ -7510,8 +7655,50 @@ def _build_stock_page(code: str) -> str:
         return deduped
 
     _latest_te_raw = float(fin_annual_rows[-1][7]) if fin_annual_rows and fin_annual_rows[-1][7] is not None else None
+    _fiscal_end_month = None
+    if fin_annual_rows:
+        try:
+            _fiscal_end_month = date.fromisoformat(str(fin_annual_rows[-1][0])[:10]).month
+        except ValueError:
+            pass
     fin_annual_data    = _build_fin_rows(fin_annual_rows, fc_rows=forecast_rows, shares_cnt=shares, latest_te=_latest_te_raw)
-    fin_quarterly_data = _build_fin_rows(fin_quarterly_rows, shares_cnt=shares)
+    fin_quarterly_data = _build_fin_rows(
+        fin_quarterly_rows, shares_cnt=shares, is_quarterly=True,
+        fiscal_end_month=_fiscal_end_month,
+    )
+
+    # 最新四半期までの単独3か月値を累計し、同じ決算期の会社予想に対する
+    # 営業利益進捗率を付与する。Q4は本決算実績そのものなので進捗表示はしない。
+    if fin_quarterly_data and _fiscal_end_month:
+        _fc_op_by_fye = {
+            str(r[0])[:7]: _to_oku(r[2])
+            for r in forecast_rows if r[0] is not None and r[2] is not None
+        }
+        for _idx, _qrow in enumerate(fin_quarterly_data):
+            _qno = _qrow.get("quarter_no")
+            if _qno not in (1, 2, 3):
+                _qrow["op_progress"] = None
+                continue
+            try:
+                _qpe = date.fromisoformat(str(_qrow["period_end"])[:10])
+                _fye_year = _qpe.year + (1 if _qpe.month > _fiscal_end_month else 0)
+                _fye_key = f"{_fye_year:04d}-{_fiscal_end_month:02d}"
+                _fc_op = _fc_op_by_fye.get(_fye_key)
+                _same_fy_ops = [
+                    r.get("op") for r in fin_quarterly_data[:_idx + 1]
+                    if r.get("quarter_no") in range(1, _qno + 1)
+                    and r.get("op") is not None
+                    and date.fromisoformat(str(r["period_end"])[:10]).year
+                       + (1 if date.fromisoformat(str(r["period_end"])[:10]).month > _fiscal_end_month else 0)
+                       == _fye_year
+                ]
+                _qrow["op_progress"] = (
+                    round(sum(_same_fy_ops) / _fc_op * 100, 1)
+                    if _fc_op is not None and _fc_op > 0 and len(_same_fy_ops) == _qno
+                    else None
+                )
+            except (TypeError, ValueError):
+                _qrow["op_progress"] = None
 
     # 概要タブの詳細指標を fin_annual_data から一元導出（計算ロジックの単一化）
     # fin_annual_data と業績タブで完全に同じ値・同じ計算式を使う
@@ -8144,6 +8331,14 @@ function getData(){return currentFinType==='A'?FIN_ANNUAL:FIN_QUARTERLY;}
 
 function renderFinAll(){
   var d=getData();
+  var isQ=currentFinType==='Q';
+  document.querySelectorAll('[data-fin-scope="annual"]').forEach(function(el){el.hidden=isQ;});
+  document.getElementById('fin-rev-title').textContent=isQ?'売上高（単独3か月）& 前年同期比':'売上高 & 前年比';
+  document.getElementById('fin-op-title').textContent=isQ?'営業利益・経常利益（単独3か月）& 利益率':'営業利益・経常利益 & 各利益率';
+  document.getElementById('fin-net-title').textContent=isQ?'純利益（単独3か月）& 純利益率':'純利益 & 純利益率';
+  document.getElementById('fin-table-title').textContent=isQ?'四半期推移':'財務データ';
+  document.getElementById('fin-table-hint').hidden=!isQ;
+  renderQuarterSummary(isQ?d:[]);
   if(!d.length){
     ['fin-rev-chart','fin-op-chart','fin-net-chart','fin-eps-chart','fin-div-chart'].forEach(function(id){
       var el=document.getElementById(id);
@@ -8155,9 +8350,67 @@ function renderFinAll(){
   renderRevChart(d);
   renderOpChart(d);
   renderNetChart(d);
-  renderEpsChart(d);
-  renderDivChart(d);
+  if(!isQ){
+    renderEpsChart(d);
+    renderDivChart(d);
+  }
   renderFinTable(d);
+}
+
+function trendClass(v){
+  if(v==null||Math.abs(v)<0.05)return'flat';
+  return v>0?'up':'down';
+}
+function fmtSigned(v,suffix){
+  if(v==null)return'比較なし';
+  return(v>0?'+':'')+Number(v).toLocaleString('ja-JP',{minimumFractionDigits:1,maximumFractionDigits:1})+(suffix||'%');
+}
+function fmtOku(v){
+  if(v==null)return'—';
+  if(Math.abs(v)>=10000)return(Number(v)/10000).toLocaleString('ja-JP',{minimumFractionDigits:2,maximumFractionDigits:2})+'兆円';
+  return Number(v).toLocaleString('ja-JP',{maximumFractionDigits:1})+'億円';
+}
+function renderQuarterSummary(d){
+  var box=document.getElementById('fin-quarter-summary');
+  if(!d.length){box.hidden=true;box.innerHTML='';return;}
+  var r=d[d.length-1];
+  var assessment='';
+  if(r.assessment){
+    var momentum='';
+    if(r.assessment.momentum){
+      var delta=r.assessment.momentum_delta;
+      momentum='<span class="fin-momentum-badge">勢い '+r.assessment.momentum+
+        (delta==null?'':' ('+(delta>0?'+':'')+delta.toFixed(1)+'pt)')+'</span>';
+    }
+    assessment='<div class="fin-assessment">'+
+      '<span class="fin-assessment-badge '+r.assessment.tone+'">'+r.assessment.label+'</span>'+
+      '<span class="fin-assessment-text">'+r.assessment.description+'</span>'+
+      momentum+'</div>';
+  }
+  var cards=[
+    {label:'売上高',value:fmtOku(r.revenue),yoy:r.yoy_rev},
+    {label:'営業利益',value:fmtOku(r.op),yoy:r.yoy_op},
+    {label:'純利益',value:fmtOku(r.net),yoy:r.yoy_net},
+    {label:'営業利益率',value:r.op_mgn==null?'—':r.op_mgn.toFixed(1)+'%',
+     yoy:r.yoy_op_mgn_delta,suffix:'pt',prefix:'前年同期差 '},
+  ];
+  var progress='';
+  if(r.op_progress!=null){
+    var width=Math.max(0,Math.min(100,r.op_progress));
+    progress='<div class="fin-qsum-progress">'+
+      '<span class="fin-qsum-progress-label">通期会社予想への営業利益進捗</span>'+
+      '<div class="fin-qsum-progress-track"><div class="fin-qsum-progress-fill" style="width:'+width+'%"></div></div>'+
+      '<span class="fin-qsum-progress-value">'+r.op_progress.toFixed(1)+'%</span></div>';
+  }
+  box.innerHTML='<div class="fin-qsum-head"><span class="fin-qsum-title">最新 '+r.label+'</span>'+
+    '<span class="fin-qsum-note">単独3か月・前年同期比較</span></div>'+
+    assessment+'<div class="fin-qsum-grid">'+cards.map(function(c){
+      var prefix=c.prefix||'前年同期比 ';
+      return'<div class="fin-qsum-card"><div class="fin-qsum-label">'+c.label+'</div>'+
+        '<div class="fin-qsum-value">'+c.value+'</div>'+
+        '<div class="fin-qsum-yoy '+trendClass(c.yoy)+'">'+prefix+fmtSigned(c.yoy,c.suffix||'%')+'</div></div>';
+    }).join('')+'</div>'+progress;
+  box.hidden=false;
 }
 
 var DLAYOUT={paper_bgcolor:'#161b22',plot_bgcolor:'#161b22',
@@ -8177,7 +8430,8 @@ function mkLayout(extra){
 function fcShapes(data){
   var idx=data.findIndex(function(d){return d.is_forecast;});
   if(idx<0)return[];
-  return [{type:'line',xref:'x',yref:'paper',x0:data[idx].label,x1:data[idx].label,y0:0,y1:1,
+  var x=data[idx].chart_label||data[idx].label;
+  return [{type:'line',xref:'x',yref:'paper',x0:x,x1:x,y0:0,y1:1,
     line:{color:'#484f58',width:1,dash:'dot'}}];
 }
 
@@ -8185,12 +8439,12 @@ function mkBar(data,key,color,ttmpl){
   var acts=data.filter(function(d){return!d.is_forecast;});
   var fcs =data.filter(function(d){return d.is_forecast;});
   var traces=[{
-    type:'bar',x:acts.map(function(d){return d.label;}),y:acts.map(function(d){return d[key];}),
+    type:'bar',x:acts.map(function(d){return d.chart_label||d.label;}),y:acts.map(function(d){return d[key];}),
     marker:{color:color,opacity:0.85},showlegend:false,
     hovertemplate:(ttmpl||'%{y:.1f}億')+'<extra></extra>',
   }];
   if(fcs.length){
-    traces.push({type:'bar',x:fcs.map(function(d){return d.label;}),y:fcs.map(function(d){return d[key];}),
+    traces.push({type:'bar',x:fcs.map(function(d){return d.chart_label||d.label;}),y:fcs.map(function(d){return d[key];}),
       marker:{color:color,opacity:0.35},showlegend:false,
       hovertemplate:(ttmpl||'%{y:.1f}億（予）')+'<extra></extra>',
     });
@@ -8200,7 +8454,7 @@ function mkBar(data,key,color,ttmpl){
 
 function mkLine(data,key,color,sfx){
   return{type:'scatter',mode:'lines+markers',
-    x:data.map(function(d){return d.label;}),y:data.map(function(d){return d[key];}),
+    x:data.map(function(d){return d.chart_label||d.label;}),y:data.map(function(d){return d[key];}),
     line:{color:color,width:2},marker:{size:5,color:color},yaxis:'y2',showlegend:false,
     hovertemplate:'%{y:.1f}'+(sfx||'%')+'<extra></extra>'};
 }
@@ -8224,15 +8478,15 @@ function renderOpChart(d){
   var acts=d.filter(function(x){return!x.is_forecast;});
   var fcs =d.filter(function(x){return x.is_forecast;});
   var t=[
-    {type:'bar',name:'営業利益',x:acts.map(function(x){return x.label;}),y:acts.map(function(x){return x.op;}),
+    {type:'bar',name:'営業利益',x:acts.map(function(x){return x.chart_label||x.label;}),y:acts.map(function(x){return x.op;}),
      marker:{color:'#ffa657',opacity:0.85},showlegend:true,hovertemplate:'営業利益 %{y:.1f}億<extra></extra>'},
-    {type:'bar',name:'経常利益',x:acts.map(function(x){return x.label;}),y:acts.map(function(x){return x.ord;}),
+    {type:'bar',name:'経常利益',x:acts.map(function(x){return x.chart_label||x.label;}),y:acts.map(function(x){return x.ord;}),
      marker:{color:'#58a6ff',opacity:0.65},showlegend:true,hovertemplate:'経常利益 %{y:.1f}億<extra></extra>'},
   ];
   if(fcs.length){
-    t.push({type:'bar',name:'営業利益(P)',x:fcs.map(function(x){return x.label;}),y:fcs.map(function(x){return x.op;}),
+    t.push({type:'bar',name:'営業利益(P)',x:fcs.map(function(x){return x.chart_label||x.label;}),y:fcs.map(function(x){return x.op;}),
       marker:{color:'#ffa657',opacity:0.35},showlegend:false});
-    t.push({type:'bar',name:'経常利益(P)',x:fcs.map(function(x){return x.label;}),y:fcs.map(function(x){return x.ord;}),
+    t.push({type:'bar',name:'経常利益(P)',x:fcs.map(function(x){return x.chart_label||x.label;}),y:fcs.map(function(x){return x.ord;}),
       marker:{color:'#58a6ff',opacity:0.25},showlegend:false});
   }
   t.push(mkLine(d,'op_mgn','#E84040','%'));
@@ -8293,6 +8547,8 @@ function renderDivChart(d){
 
 function renderFinTable(d){
   var isA=currentFinType==='A';
+  if(!isA){renderQuarterTable(d);return;}
+  document.getElementById('fin-table').classList.remove('quarterly');
   var cols=isA?[
     {k:'revenue',  l:'売上高',    s:'億'},
     {k:'op',       l:'営業利益',  s:'億'},
@@ -8332,6 +8588,43 @@ function renderFinTable(d){
     return'<tr'+cls+'><td>'+r.label+'</td>'+cells+'</tr>';
   }).join('')+'</tbody>';
   document.getElementById('fin-table').innerHTML=thead+tbody;
+}
+
+function renderQuarterTable(d){
+  var table=document.getElementById('fin-table');
+  table.classList.add('quarterly');
+  var metrics=[
+    {k:'revenue',l:'売上高',s:'億円',kind:'value'},
+    {k:'yoy_rev',l:'前年同期比',s:'%',kind:'trend',sub:true},
+    {k:'op',l:'営業利益',s:'億円',kind:'value'},
+    {k:'yoy_op',l:'前年同期比',s:'%',kind:'trend',sub:true},
+    {k:'op_mgn',l:'営業利益率',s:'%',kind:'pct'},
+    {k:'ord',l:'経常利益',s:'億円',kind:'value'},
+    {k:'net',l:'純利益',s:'億円',kind:'value'},
+    {k:'yoy_net',l:'前年同期比',s:'%',kind:'trend',sub:true},
+    {k:'net_mgn',l:'純利益率',s:'%',kind:'pct'},
+    {k:'eps',l:'EPS',s:'円',kind:'value'},
+  ];
+  var thead='<thead><tr><th>指標</th>'+d.map(function(r){
+    var bits=r.label.split(' ');
+    return'<th class="fin-qhead">'+bits[0]+(bits[1]?'<br><small>'+bits[1]+'</small>':'')+'</th>';
+  }).join('')+'</tr></thead>';
+  var tbody='<tbody>'+metrics.map(function(m){
+    return'<tr'+(m.sub?' class="fin-subrow"':'')+'><td>'+m.l+(m.sub?'':'（'+m.s+'）')+'</td>'+
+      d.map(function(r){
+        var v=r[m.k];
+        if(v==null)return'<td><span style="color:#484f58">—</span></td>';
+        var cls=m.kind==='trend'?' class="fin-trend-'+(v>0?'up':v<0?'down':'flat')+'"':'';
+        var txt;
+        if(m.kind==='trend')txt=(v>0?'+':'')+v.toFixed(1)+'%';
+        else if(m.kind==='pct')txt=v.toFixed(1)+'%';
+        else txt=Number(v).toLocaleString('ja-JP',{maximumFractionDigits:1});
+        return'<td'+cls+'>'+txt+'</td>';
+      }).join('')+'</tr>';
+  }).join('')+'</tbody>';
+  table.innerHTML=thead+tbody;
+  var wrap=table.closest('.fin-table-wrap');
+  if(window.innerWidth<768)wrap.scrollLeft=wrap.scrollWidth;
 }
 
 })();
@@ -8409,36 +8702,38 @@ function renderFinTable(d){
   <span style="font-size:11px;color:#484f58">薄色 = 予想値</span>
 </div>
 
+<div class="fin-quarter-summary" id="fin-quarter-summary" hidden></div>
+
 <div class="fin-charts-grid">
   <div class="fin-chart-box">
     <div class="fin-chart-hd">
-      <span class="fin-chart-title">売上高 &amp; 前年比</span>
+      <span class="fin-chart-title" id="fin-rev-title">売上高 &amp; 前年比</span>
       <span class="fin-chart-unit">億円 ／ %</span>
     </div>
     <div id="fin-rev-chart" style="height:230px"></div>
   </div>
   <div class="fin-chart-box">
     <div class="fin-chart-hd">
-      <span class="fin-chart-title">営業利益・経常利益 &amp; 各利益率</span>
+      <span class="fin-chart-title" id="fin-op-title">営業利益・経常利益 &amp; 各利益率</span>
       <span class="fin-chart-unit">億円 ／ %</span>
     </div>
     <div id="fin-op-chart" style="height:230px"></div>
   </div>
   <div class="fin-chart-box">
     <div class="fin-chart-hd">
-      <span class="fin-chart-title">純利益 &amp; 純利益率</span>
+      <span class="fin-chart-title" id="fin-net-title">純利益 &amp; 純利益率</span>
       <span class="fin-chart-unit">億円 ／ %</span>
     </div>
     <div id="fin-net-chart" style="height:230px"></div>
   </div>
-  <div class="fin-chart-box">
+  <div class="fin-chart-box" data-fin-scope="annual">
     <div class="fin-chart-hd">
       <span class="fin-chart-title">EPS &amp; ROE</span>
       <span class="fin-chart-unit">円 ／ %</span>
     </div>
     <div id="fin-eps-chart" style="height:230px"></div>
   </div>
-  <div class="fin-chart-box full">
+  <div class="fin-chart-box full" data-fin-scope="annual">
     <div class="fin-chart-hd">
       <span class="fin-chart-title">配当金（DPS）&amp; 配当性向</span>
       <span class="fin-chart-unit">円 ／ %</span>
@@ -8447,7 +8742,8 @@ function renderFinTable(d){
   </div>
 </div>
 
-<p class="price-section-header" style="margin-top:8px">財務データ</p>
+<p class="price-section-header" id="fin-table-title" style="margin-top:8px">財務データ</p>
+<p class="fin-table-hint" id="fin-table-hint" hidden>横にスクロールできます（最新四半期を表示中）</p>
 <div class="fin-table-wrap">
   <table class="fin-table" id="fin-table"></table>
 </div>
