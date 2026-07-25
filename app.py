@@ -7464,12 +7464,19 @@ def _build_stock_page(code: str) -> str:
             # 期末が未来の行は「予想」として扱う（グラフの点線・(P)ラベル対象）
             is_future = period_end[:10] > _today
             quarter_no = None
+            fiscal_year_label = None
             if is_quarterly and fiscal_end_month:
                 try:
-                    _pm = date.fromisoformat(period_end[:10]).month
+                    _period_date = date.fromisoformat(period_end[:10])
+                    _pm = _period_date.month
+                    _fiscal_end_month = int(fiscal_end_month)
                     quarter_no = {3: 1, 6: 2, 9: 3, 0: 4}.get(
-                        (_pm - int(fiscal_end_month)) % 12
+                        (_pm - _fiscal_end_month) % 12
                     )
+                    # 四半期を所属する決算期にまとめる。
+                    # 3月期の2025/06(Q1)なら「2026/3期」。
+                    _fiscal_year = _period_date.year + (_pm > _fiscal_end_month)
+                    fiscal_year_label = f"{_fiscal_year}/{_fiscal_end_month}期"
                 except (TypeError, ValueError):
                     pass
             lbl = period_end[:7].replace("-", "/")
@@ -7541,7 +7548,7 @@ def _build_stock_page(code: str) -> str:
                 "dps": dps, "payout": payout_val,
                 "roe": roe_val, "roa": roa_val,
                 "eps": eps_val, "bps": bps_val_row,
-                "quarter_no": quarter_no,
+                "quarter_no": quarter_no, "fiscal_year_label": fiscal_year_label,
                 "is_forecast": is_future,
             })
         if fc_rows:
@@ -8419,12 +8426,30 @@ var DLAYOUT={paper_bgcolor:'#161b22',plot_bgcolor:'#161b22',
 function mkLayout(extra){
   var L=JSON.parse(JSON.stringify(DLAYOUT));
   L.height=extra.height||CH;
-  L.margin={l:52,r:52,t:8,b:36};
+  L.margin={l:52,r:52,t:8,b:currentFinType==='Q'?54:36};
   L.xaxis={color:'#8b949e',gridcolor:'#21262d',tickfont:{size:10}};
+  if(currentFinType==='Q'){
+    Object.assign(L.xaxis,{
+      type:'multicategory',tickangle:0,tickfont:{size:isMob?9:10},
+      showdividers:true,dividercolor:'#30363d',dividerwidth:1,
+    });
+  }
   L.yaxis=Object.assign({color:'#8b949e',gridcolor:'#21262d',tickfont:{size:10},side:'left'},extra.y1||{});
   L.yaxis2=Object.assign({color:'#888',overlaying:'y',side:'right',showgrid:false,zeroline:false,tickfont:{size:10},rangemode:'tozero'},extra.y2||{});
   if(extra.shapes)L.shapes=extra.shapes;
   return L;
+}
+
+function finX(data){
+  if(currentFinType==='Q'&&data.every(function(d){
+    return d.fiscal_year_label&&d.quarter_no;
+  })){
+    return[
+      data.map(function(d){return d.fiscal_year_label;}),
+      data.map(function(d){return'Q'+d.quarter_no;}),
+    ];
+  }
+  return data.map(function(d){return d.chart_label||d.label;});
 }
 
 function fcShapes(data){
@@ -8439,12 +8464,12 @@ function mkBar(data,key,color,ttmpl){
   var acts=data.filter(function(d){return!d.is_forecast;});
   var fcs =data.filter(function(d){return d.is_forecast;});
   var traces=[{
-    type:'bar',x:acts.map(function(d){return d.chart_label||d.label;}),y:acts.map(function(d){return d[key];}),
+    type:'bar',x:finX(acts),y:acts.map(function(d){return d[key];}),
     marker:{color:color,opacity:0.85},showlegend:false,
     hovertemplate:(ttmpl||'%{y:.1f}億')+'<extra></extra>',
   }];
   if(fcs.length){
-    traces.push({type:'bar',x:fcs.map(function(d){return d.chart_label||d.label;}),y:fcs.map(function(d){return d[key];}),
+    traces.push({type:'bar',x:finX(fcs),y:fcs.map(function(d){return d[key];}),
       marker:{color:color,opacity:0.35},showlegend:false,
       hovertemplate:(ttmpl||'%{y:.1f}億（予）')+'<extra></extra>',
     });
@@ -8454,7 +8479,7 @@ function mkBar(data,key,color,ttmpl){
 
 function mkLine(data,key,color,sfx){
   return{type:'scatter',mode:'lines+markers',
-    x:data.map(function(d){return d.chart_label||d.label;}),y:data.map(function(d){return d[key];}),
+    x:finX(data),y:data.map(function(d){return d[key];}),
     line:{color:color,width:2},marker:{size:5,color:color},yaxis:'y2',showlegend:false,
     hovertemplate:'%{y:.1f}'+(sfx||'%')+'<extra></extra>'};
 }
@@ -8478,15 +8503,15 @@ function renderOpChart(d){
   var acts=d.filter(function(x){return!x.is_forecast;});
   var fcs =d.filter(function(x){return x.is_forecast;});
   var t=[
-    {type:'bar',name:'営業利益',x:acts.map(function(x){return x.chart_label||x.label;}),y:acts.map(function(x){return x.op;}),
+    {type:'bar',name:'営業利益',x:finX(acts),y:acts.map(function(x){return x.op;}),
      marker:{color:'#ffa657',opacity:0.85},showlegend:true,hovertemplate:'営業利益 %{y:.1f}億<extra></extra>'},
-    {type:'bar',name:'経常利益',x:acts.map(function(x){return x.chart_label||x.label;}),y:acts.map(function(x){return x.ord;}),
+    {type:'bar',name:'経常利益',x:finX(acts),y:acts.map(function(x){return x.ord;}),
      marker:{color:'#58a6ff',opacity:0.65},showlegend:true,hovertemplate:'経常利益 %{y:.1f}億<extra></extra>'},
   ];
   if(fcs.length){
-    t.push({type:'bar',name:'営業利益(P)',x:fcs.map(function(x){return x.chart_label||x.label;}),y:fcs.map(function(x){return x.op;}),
+    t.push({type:'bar',name:'営業利益(P)',x:finX(fcs),y:fcs.map(function(x){return x.op;}),
       marker:{color:'#ffa657',opacity:0.35},showlegend:false});
-    t.push({type:'bar',name:'経常利益(P)',x:fcs.map(function(x){return x.chart_label||x.label;}),y:fcs.map(function(x){return x.ord;}),
+    t.push({type:'bar',name:'経常利益(P)',x:finX(fcs),y:fcs.map(function(x){return x.ord;}),
       marker:{color:'#58a6ff',opacity:0.25},showlegend:false});
   }
   t.push(mkLine(d,'op_mgn','#E84040','%'));
