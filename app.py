@@ -2458,6 +2458,13 @@ _SCREEN_CSS = """
   background:#161b22; border:1px solid #30363d; border-radius:10px;
   margin-bottom:12px; overflow:hidden;
 }
+.sc-quick-wrap { display:flex; align-items:center; gap:9px; margin-bottom:11px; flex-wrap:wrap; }
+.sc-quick-label { font-size:11px; color:#8b949e; font-weight:700; white-space:nowrap; }
+.sc-quick-row { display:flex; flex-wrap:wrap; gap:6px; }
+.sc-quick-chip { font-size:12.5px; padding:5px 14px; border-radius:16px; cursor:pointer;
+  background:#161b22; border:1px solid #30363d; color:#c9d1d9; white-space:nowrap; transition:all .12s; }
+.sc-quick-chip:hover { border-color:#484f58; }
+.sc-quick-chip.active { background:rgba(31,111,235,0.18); border-color:#1f6feb; color:#79c0ff; }
 .sc-cond-picker-tabs { display:flex; border-bottom:1px solid #30363d; overflow-x:auto; scrollbar-width:none; }
 .sc-cond-picker-tabs::-webkit-scrollbar { display:none; }
 .sc-cp-tab {
@@ -5264,6 +5271,10 @@ def _build_screen_page() -> str:
   </div>
 
   <div class="sc-cond-picker" id="scCondPicker" style="display:none">
+    <div class="sc-quick-wrap">
+      <span class="sc-quick-label">よく使う条件</span>
+      <div class="sc-quick-row" id="scQuickRow"></div>
+    </div>
     <div class="sc-cond-picker-tabs">
       <button class="sc-cp-tab active" data-cat="テクニカル">テクニカル</button>
       <button class="sc-cp-tab" data-cat="バリュー">バリュー</button>
@@ -6120,6 +6131,7 @@ def _build_screen_page() -> str:
       var cd=getCondDef(item.dataset.condId);
       if(cd)item.classList.toggle('active-cond',isCondActive(cd));
     }});
+    if(typeof syncQuickActive==='function')syncQuickActive();
   }}
 
   /* ── 条件ピッカー ── */
@@ -6152,6 +6164,46 @@ def _build_screen_page() -> str:
     }});
     renderChips();
   }}
+
+  /* ── よく使う条件（ワンタップで条件セット） ── */
+  var QUICKS=[
+    {{lbl:'大型株',   conds:[{{k:'min',id:'cap',v:3000}}]}},
+    {{lbl:'中小型株', conds:[{{k:'max',id:'cap',v:1000}}]}},
+    {{lbl:'高配当',   conds:[{{k:'min',id:'div',v:3.5}}]}},
+    {{lbl:'割安',     conds:[{{k:'max',id:'per',v:15}}]}},
+    {{lbl:'高ROE',    conds:[{{k:'min',id:'roe',v:15}}]}},
+    {{lbl:'増収増益', conds:[{{k:'min',id:'rev',v:10}},{{k:'min',id:'op',v:10}}]}},
+    {{lbl:'流動性',   conds:[{{k:'min',id:'turn',v:5}}]}}
+  ];
+  function quickActive(q){{
+    return q.conds.every(function(c){{
+      if(c.k==='flag')return !!_cflg[c.id];
+      if(c.k==='min')return _cmin[c.id]===c.v;
+      return _cmax[c.id]===c.v;
+    }});
+  }}
+  function syncQuickActive(){{
+    document.querySelectorAll('.sc-quick-chip').forEach(function(b,i){{
+      if(QUICKS[i])b.classList.toggle('active',quickActive(QUICKS[i]));
+    }});
+  }}
+  function toggleQuick(q){{
+    var on=quickActive(q);
+    q.conds.forEach(function(c){{
+      if(c.k==='flag'){{if(on)delete _cflg[c.id];else _cflg[c.id]=true;}}
+      else if(c.k==='min'){{if(on)delete _cmin[c.id];else _cmin[c.id]=c.v;}}
+      else{{if(on)delete _cmax[c.id];else _cmax[c.id]=c.v;}}
+    }});
+    renderChips();scheduleRender();
+  }}
+  (function initQuick(){{
+    var qr=document.getElementById('scQuickRow');if(!qr)return;
+    QUICKS.forEach(function(q){{
+      var b=document.createElement('button');b.className='sc-quick-chip';b.textContent=q.lbl;
+      b.addEventListener('click',function(){{toggleQuick(q);}});
+      qr.appendChild(b);
+    }});
+  }})();
 
   /* ── ヒストグラム ── */
   var HIST_BINS=30;
