@@ -93,6 +93,13 @@ jobs:
         if: ${{ github.event.schedule == '0 20 * * *' || inputs.job == 'consensus' }}
         run: python analyst_consensus.py
 
+      # 四半期アナリストコンセンサス取得（IFIS株予報・60件/日≒月1周）。四半期毎の経常利益
+      # コンセンサス累計(1Q/2Q/3Q/通期)を取得し、今期進捗の「四半期目安(SBIの赤三角相当)」に使う。
+      # みんかぶとは別ドメインだが負荷配慮で低頻度・間隔ランダム化。403検知で当日打ち切り。
+      - name: 四半期コンセンサス取得（IFIS株予報）
+        if: ${{ github.event.schedule == '0 20 * * *' || inputs.job == 'consensus' }}
+        run: python quarterly_consensus.py
+
       # 会社概要・kabutanテーマタグの定期メンテ（150件/日 ≒ 月次で全銘柄一巡）。
       # 市場時間と無関係なので夕方のメイン便ではなく夜間に実行する。
       - name: 会社概要・テーマタグ取得

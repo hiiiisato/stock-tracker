@@ -7401,6 +7401,22 @@ def _build_stock_page(code: str) -> str:
         except Exception as e:
             print(f"[app] 中間予想取得失敗: {code} / {e}")
 
+    # ─ 四半期アナリストコンセンサス（IFIS株予報・経常利益）─
+    # SBI等が出す「四半期毎の目安(赤三角)」に相当。1Q/2Q/3Q/通期の累積予想(百万円)。
+    qcons_row = None
+    if _prog_fy_end:
+        try:
+            cur.execute("""
+                SELECT cons_q1, cons_q2, cons_q3, cons_full
+                FROM quarterly_consensus
+                WHERE code = %s AND metric = 'ordinary' AND fiscal_year_end = %s
+            """, (code, _prog_fy_end))
+            _qc = cur.fetchone()
+            if _qc and any(v is not None for v in _qc):
+                qcons_row = _qc
+        except Exception as e:
+            print(f"[app] 四半期コンセンサス取得失敗: {code} / {e}")
+
     # ─ 配当全履歴（グラフ用） ─
     div_all_rows: list = []
     try:
@@ -7941,6 +7957,12 @@ def _build_stock_page(code: str) -> str:
                 # 2Q会社中間予想（見出し指標に対応、実データ）。無ければNone。
                 _h2_idx = {"rev": 1, "op": 2, "ord": 3, "net": 4}[_head["key"]]
                 _h2_plan = _to_oku(h2_forecast[_h2_idx]) if h2_forecast else None
+                # 四半期アナリストコンセンサス（IFIS・経常利益）。見出しが経常のときのみ整合。
+                # IFISは百万円 → 億円は ÷100。
+                _qcons = None
+                if _head["key"] == "ord" and qcons_row:
+                    _qcons = [round(v / 100.0, 1) if v is not None else None
+                              for v in qcons_row]   # [1Q, 2Q, 3Q, 通期]累積
                 # 各指標の中間予想（テーブル用）
                 for _m in _metrics:
                     _m["h2"] = (_to_oku(h2_forecast[{"rev": 1, "op": 2, "ord": 3,
@@ -7957,8 +7979,9 @@ def _build_stock_page(code: str) -> str:
                         "prev2": [_prog_cum("prev2", _qi_h, q) for q in (1, 2, 3, 4)],
                         "fc": _head["fc"],
                         "h2_plan": _h2_plan,
+                        "qcons": _qcons,
                         "prev_full": _to_oku(_prev_a[_ai_h]) if _prev_a else None,
-                        "cons": _cons_v,
+                        "cons": (_qcons[3] if _qcons and _qcons[3] is not None else _cons_v),
                         "cur_label": _fy_lbl(_fy_ends["cur"]),
                         "prev_label": _fy_lbl(_fy_ends["prev"]),
                         "prev2_label": _fy_lbl(_fy_ends["prev2"]),
@@ -8727,9 +8750,9 @@ function renderFinProgress(){
   renderProgTable(P);
   var notes='進捗率＝期首からの四半期累積実績÷通期会社予想（最新の会社計画）。'+
     '前期進捗率は前期通期実績に対する同時点の累積比率。';
-  if(P.chart&&P.chart.h2_plan!=null)notes+=' 2Qの▲は会社が短信で開示した中間(2Q累計)予想（実データ）。';
-  if(P.chart&&P.chart.cons!=null)notes+=' コンセンサスはアナリスト予想の通期値。';
-  notes+=' ※四半期毎のアナリスト予想は無料では取得できないため、四半期の目安は会社開示（2Q中間予想）と前年ペースで表示。';
+  if(P.chart&&P.chart.qcons)notes+=' ▲(赤)は四半期毎のアナリストコンセンサス累計（IFIS株予報・経常利益）。';
+  if(P.chart&&P.chart.h2_plan!=null)notes+=' ◆(橙)は会社が短信で開示した中間(2Q累計)予想。';
+  if(P.chart&&!P.chart.qcons&&P.chart.cons!=null)notes+=' コンセンサスはアナリスト予想の通期値。';
   document.getElementById('fin-progress-note').textContent=notes;
 }
 
@@ -8786,11 +8809,18 @@ function renderProgChart(P){
     marker:{color:'#8b949e'},hovertemplate:'%{y:,.1f}億<extra>'+c.prev_label+'</extra>'});
   t.push({type:'bar',name:c.cur_label,x:x,y:c.cur,
     marker:{color:'#58a6ff'},hovertemplate:'%{y:,.1f}億<extra>'+c.cur_label+'</extra>'});
-  // 2Q会社中間予想（実データ）を三角マーカーで表示（SBIの四半期目安に相当）
+  // 四半期アナリストコンセンサス(IFIS・経常利益)を各Qに▲で表示（SBIの赤三角に相当）
+  if(c.qcons){
+    var qx=[],qy=[];
+    c.qcons.forEach(function(v,i){if(v!=null){qx.push(x[i]);qy.push(v);}});
+    if(qx.length)t.push({type:'scatter',mode:'markers',name:'アナリスト予想(累計)',x:qx,y:qy,
+      marker:{symbol:'triangle-left',size:13,color:'#E84040',line:{color:'#0d1117',width:1}},
+      hovertemplate:'アナリスト予想 %{y:,.1f}億<extra></extra>'});
+  }
+  // 2Q会社中間予想（会社が短信で開示した2Q累計計画・実データ）
   if(c.h2_plan!=null){
     t.push({type:'scatter',mode:'markers',name:'会社中間予想(2Q)',x:['2Q'],y:[c.h2_plan],
-      marker:{symbol:'triangle-left',size:13,color:'#f778ba',
-        line:{color:'#0d1117',width:1}},
+      marker:{symbol:'diamond',size:10,color:'#ffa657',line:{color:'#0d1117',width:1}},
       hovertemplate:'会社中間予想 %{y:,.1f}億<extra></extra>'});
   }
   var shapes=[],annos=[];
@@ -8800,7 +8830,8 @@ function renderProgChart(P){
       xanchor:'right',yanchor:'bottom',font:{size:10,color:color}});
   }
   if(c.fc!=null)refLine(c.fc,'#ffa657','dash','会社予想');
-  if(c.cons!=null)refLine(c.cons,'#a371f7','dot','コンセンサス');
+  // 四半期コンセンサスがある時は通期の▲が兼ねるので通期コンセンサス線は引かない
+  if(c.cons!=null&&!c.qcons)refLine(c.cons,'#a371f7','dot','コンセンサス');
   var L=JSON.parse(JSON.stringify(DLAYOUT));
   L.height=240;
   L.margin={l:52,r:8,t:20,b:30};
@@ -8827,7 +8858,11 @@ function renderProgTable(P){
      '<td>—</td><td>'+fmtA(c.fc)+'</td></tr>';
   h+='<tr><th>'+c.cur_label+'累計</th>'+c.cur.map(function(v){return cell(v,c.fc);}).join('')+'</tr>';
   h+='<tr><th>'+c.prev_label+'累計</th>'+c.prev.map(function(v){return cell(v,c.prev_full);}).join('')+'</tr>';
-  if(c.cons!=null)h+='<tr><th>コンセンサス</th><td>—</td><td>—</td><td>—</td><td>'+fmtA(c.cons)+'</td></tr>';
+  if(c.qcons){
+    h+='<tr><th>アナリスト予想</th>'+c.qcons.map(function(v){return '<td>'+fmtA(v)+'</td>';}).join('')+'</tr>';
+  }else if(c.cons!=null){
+    h+='<tr><th>コンセンサス</th><td>—</td><td>—</td><td>—</td><td>'+fmtA(c.cons)+'</td></tr>';
+  }
   document.getElementById('fin-progress-table').innerHTML=h+'</tbody>';
 }
 

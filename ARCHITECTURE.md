@@ -121,6 +121,12 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   経常益/純益/EPS)を取得 → `analyst_consensus` テーブル。会社予想がコンセンサスを下回る
   ＝上方修正余地を定量化。時価総額大きい順に日次250件巡回(全体≒2週間で一巡・misc_batch)。
   UA判定あり(MINKABU_HEADERS)。取得失敗は既存維持。銘柄ページにコンセンサスカードを表示
+- `quarterly_consensus.py` — **四半期アナリストコンセンサス取得（2026-07新設・IFIS株予報）**。
+  index.php?sa=report&bcode=<code> の「経常利益四半期進ちょく」表から、今期の四半期毎コンセンサス
+  累計(1Q/2Q/3Q/通期・百万円)を取得 → `quarterly_consensus` テーブル(metric='ordinary')。
+  四半期毎のアナリスト予想を無料提供するのはIFISのみ(みんかぶ/Yahoo/株探は通期のみ)。銘柄ページの
+  今期進捗チャートに「四半期の目安(SBIの赤三角相当)」として表示。時価総額大きい順に日次60件巡回
+  (≒月1周・misc_batch consensus便)。robots.txt尊重・間隔ランダム化・403で当日打ち切り
 - `youtube_insights.py` — **YouTube株動画の週次巡回（2026-07新設）**。CHANNELS（ハンドル定義）→
   channel_id解決(HTMLのexternalId・DBキャッシュ) → 公式RSS(キー不要)で直近8日の新着 →
   **GeminiのYouTube動画理解**(URL直接渡し・無料枠の動画処理8h/日内)で各動画を構造化
