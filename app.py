@@ -2383,6 +2383,64 @@ _STOCK_CSS = """
 .fin-table tr:last-child td { border-bottom: none; }
 .fin-table tr:hover td { background: #1c2128; }
 .fin-forecast-row td { color: #ffa657 !important; }
+/* ── 今期進捗状況 ── */
+.fin-progress {
+  background: linear-gradient(135deg, rgba(31,111,235,0.10), rgba(22,27,34,0.96));
+  border: 1px solid #30363d; border-radius: 10px; padding: 14px;
+  margin-bottom: 12px;
+}
+.fin-progress[hidden] { display: none; }
+.fin-progress-hd {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; margin-bottom: 12px; flex-wrap: wrap;
+}
+.fin-progress-meta { color: #8b949e; font-size: 11px; }
+.fin-progress-main {
+  display: flex; align-items: center; gap: 18px; margin-bottom: 12px;
+}
+.fin-gauge { flex-shrink: 0; width: 170px; text-align: center; }
+.fin-gauge-svg { width: 150px; height: 90px; }
+.fin-gauge-prev { color: #6e7681; font-size: 10px; margin-top: 4px; }
+.fin-prog-badge {
+  display: inline-block; border-radius: 99px; padding: 3px 10px;
+  font-size: 11px; font-weight: 700; margin-top: 6px;
+}
+.fin-prog-badge.good { color: #ff7b72; background: rgba(248,81,73,0.12); }
+.fin-prog-badge.bad  { color: #79c0ff; background: rgba(56,139,253,0.12); }
+.fin-prog-badge.flat { color: #8b949e; background: #21262d; }
+.fin-progress-bars { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.fin-pb-row { display: flex; align-items: center; gap: 10px; }
+.fin-pb-label { flex-shrink: 0; width: 58px; color: #8b949e; font-size: 11px; }
+.fin-pb-track {
+  position: relative; flex: 1; height: 8px;
+  background: #21262d; border-radius: 99px;
+}
+.fin-pb-fill {
+  height: 100%; background: #58a6ff; border-radius: 99px;
+  transition: width .4s ease;
+}
+.fin-pb-fill.over { background: #ff7b72; }
+.fin-pb-tick {
+  position: absolute; top: -3px; width: 1.5px; height: 14px;
+  background: #e6edf3; opacity: 0.85;
+}
+.fin-pb-val {
+  flex-shrink: 0; min-width: 122px; text-align: right;
+  color: #c9d1d9; font-size: 11px; font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.fin-pb-val b { color: #e6edf3; font-size: 12.5px; margin-left: 6px; }
+.fin-prog-pct { display: block; color: #8b949e; font-size: 10px; }
+.fin-progress-note {
+  color: #6e7681; font-size: 10.5px; line-height: 1.6; margin: 8px 2px 0;
+}
+@media (max-width: 640px) {
+  .fin-progress-main { flex-direction: column; gap: 12px; }
+  .fin-gauge { width: 100%; }
+  .fin-pb-label { width: 48px; font-size: 10px; }
+  .fin-pb-val { min-width: 104px; font-size: 10px; }
+  .fin-pb-val b { font-size: 11.5px; }
+}
 .fin-quarter-summary {
   background: linear-gradient(135deg, rgba(31,111,235,0.10), rgba(22,27,34,0.96));
   border: 1px solid #30363d; border-radius: 10px; padding: 14px;
@@ -7190,7 +7248,7 @@ def _build_stock_page(code: str) -> str:
                    target_price_1w, target_price_1m, fc_period,
                    cons_revenue, cons_op, cons_net, cons_eps,
                    company_revenue, company_op, company_net, company_eps,
-                   cons_net_1w, cons_net_1m
+                   cons_net_1w, cons_net_1m, cons_ordinary
             FROM analyst_consensus WHERE code = %s AND target_price IS NOT NULL
         """, (code,))
         consensus = cur.fetchone()
@@ -7288,6 +7346,40 @@ def _build_stock_page(code: str) -> str:
         forecast_rows = cur.fetchall()
     except Exception as e:
         print(f"[app] financials_forecast取得失敗: {code} / {e}")
+
+    # ─ 今期進捗率用: 今期＋前期＋前々期の四半期実績（単独3か月値） ─
+    def _shift_years(d, dy: int):
+        try:
+            return d.replace(year=d.year + dy)
+        except ValueError:          # 2/29 起点
+            return d.replace(year=d.year + dy, day=28)
+
+    prog_q_rows: list = []
+    _prog_fy_end = None
+    if forecast_rows:
+        _fy_cands = [r[0] for r in forecast_rows if r[0] is not None]
+        _prog_fy_end = next((d for d in _fy_cands if d >= date.today()),
+                            _fy_cands[-1] if _fy_cands else None)
+    # 短信由来の予想が未取得の銘柄（IFRS大型株等）は、みんかぶの会社予想で代替。
+    # forecast行と同じ並び (fye, rev, op, ord, net, dps) に合わせる（経常・配当は無し）。
+    _prog_fc_fallback = None
+    if _prog_fy_end is None and consensus and consensus[12] is not None \
+            and consensus[12] >= date.today() \
+            and any(v is not None for v in (consensus[17], consensus[18], consensus[19])):
+        _prog_fy_end = consensus[12]
+        _prog_fc_fallback = (consensus[12], consensus[17], consensus[18],
+                             None, consensus[19], None)
+    if _prog_fy_end:
+        try:
+            cur.execute("""
+                SELECT period_end, revenue, operating_income, ordinary_income, net_income
+                FROM financials
+                WHERE code = %s AND period_type = 'Q' AND period_end > %s
+                ORDER BY period_end
+            """, (code, _shift_years(_prog_fy_end, -3)))
+            prog_q_rows = cur.fetchall()
+        except Exception as e:
+            print(f"[app] 進捗率用四半期取得失敗: {code} / {e}")
 
     # ─ 配当全履歴（グラフ用） ─
     div_all_rows: list = []
@@ -7747,8 +7839,106 @@ def _build_stock_page(code: str) -> str:
                 fc_eps  = _yef
                 per_fwd = _cand
 
+    # ─ 今期進捗状況（四半期累積 ÷ 通期会社予想） ─
+    # 今期＝最新announced_atの通期予想のうち期末が未来（決算跨ぎ直後は直近）の決算期。
+    # 累積はQ1から連続して揃う場合のみ算出し、欠損期があるときはNone（誤った進捗を出さない）。
+    fin_progress = None
+    _fc_prog = (next((r for r in forecast_rows if r[0] == _prog_fy_end), None)
+                if _prog_fy_end else None) or _prog_fc_fallback
+    if _fc_prog and prog_q_rows:
+        _fy_ends = {"cur": _prog_fy_end, "prev": _shift_years(_prog_fy_end, -1),
+                    "prev2": _shift_years(_prog_fy_end, -2)}
+        _fy_starts = {k: _shift_years(v, -1) for k, v in _fy_ends.items()}
+        _qmap: dict = {k: {} for k in _fy_ends}
+        for _r in prog_q_rows:
+            _pe = _r[0]
+            for _k, _fe in _fy_ends.items():
+                if _fy_starts[_k] < _pe <= _fe:
+                    _qno = 4 - ((_fe.month - _pe.month) % 12) // 3
+                    if 1 <= _qno <= 4:
+                        _qmap[_k][_qno] = _r
+                    break
+
+        def _annual_for(fy_end_d):
+            _key = str(fy_end_d)[:7]
+            return next((r for r in fin_annual_rows if str(r[0])[:7] == _key), None)
+
+        def _prog_cum(fy_key: str, qi: int, upto: int):
+            vals = []
+            for _q in range(1, upto + 1):
+                _row = _qmap[fy_key].get(_q)
+                _v = _row[qi] if _row else None
+                if _v is None:
+                    return None
+                vals.append(float(_v))
+            return round(sum(vals) / 1e8, 1)
+
+        _prev_a  = _annual_for(_fy_ends["prev"])
+        _cur_qn = max(_qmap["cur"], default=0)
+        if _cur_qn:
+            # (キー, 表示名, Q行index, forecast行index, 通期A行index)
+            _PROG_METRICS = [("rev", "売上高", 1, 1, 2), ("op", "営業利益", 2, 2, 3),
+                             ("ord", "経常利益", 3, 3, 4), ("net", "純利益", 4, 4, 5)]
+            _metrics = []
+            for _key, _lbl, _qi, _fi, _ai in _PROG_METRICS:
+                _fc_v   = _to_oku(_fc_prog[_fi])
+                _cum_v  = _prog_cum("cur", _qi, _cur_qn)
+                _pfull  = _to_oku(_prev_a[_ai]) if _prev_a else None
+                _pcum   = _prog_cum("prev", _qi, _cur_qn)
+                _metrics.append({
+                    "key": _key, "label": _lbl, "cum": _cum_v, "fc": _fc_v,
+                    "pct": round(_cum_v / _fc_v * 100, 1)
+                           if _cum_v is not None and _fc_v else None,
+                    "prev_pct": round(_pcum / _pfull * 100, 1)
+                                if _pcum is not None and _pfull else None,
+                })
+            # 見出し指標: 経常→営業→純→売上 の優先（SBI等の慣例に合わせ経常を主）
+            _head = next((m for k in ("ord", "op", "net", "rev")
+                          for m in _metrics if m["key"] == k and m["pct"] is not None), None)
+            if _head:
+                if _head["prev_pct"] is not None:
+                    _dpt = round(_head["pct"] - _head["prev_pct"], 1)
+                    _ref = "prev"
+                else:
+                    _dpt = round(_head["pct"] - _cur_qn * 25, 1)
+                    _ref = "guide"
+                _tone = "good" if _dpt >= 3 else ("bad" if _dpt <= -3 else "flat")
+                _assess = {"tone": _tone, "diff": _dpt, "ref": _ref,
+                           "label": {"good": "前年より速いペース", "bad": "前年より遅いペース",
+                                     "flat": "前年並みのペース"}[_tone]
+                           if _ref == "prev" else
+                           {"good": "目安を上回るペース", "bad": "目安を下回るペース",
+                            "flat": "目安並みのペース"}[_tone]}
+                _qi_h = {"rev": 1, "op": 2, "ord": 3, "net": 4}[_head["key"]]
+                _ai_h = {"rev": 2, "op": 3, "ord": 4, "net": 5}[_head["key"]]
+                # コンセンサス通期値（対象期が今期と一致する場合のみ）
+                _cons_v = None
+                if consensus and consensus[12] == _prog_fy_end:
+                    _cons_v = _to_oku({"rev": consensus[13], "op": consensus[14],
+                                       "ord": consensus[23], "net": consensus[15]}[_head["key"]])
+                def _fy_lbl(d):
+                    return f"{d.year}/{d.month}期"
+                fin_progress = {
+                    "fy_label": _fy_lbl(_prog_fy_end), "qn": _cur_qn,
+                    "asof": str(_qmap["cur"][_cur_qn][0])[:7].replace("-", "/"),
+                    "metrics": _metrics, "head": _head["key"], "assessment": _assess,
+                    "chart": {
+                        "label": _head["label"],
+                        "cur":   [_prog_cum("cur",   _qi_h, q) for q in (1, 2, 3, 4)],
+                        "prev":  [_prog_cum("prev",  _qi_h, q) for q in (1, 2, 3, 4)],
+                        "prev2": [_prog_cum("prev2", _qi_h, q) for q in (1, 2, 3, 4)],
+                        "fc": _head["fc"],
+                        "prev_full": _to_oku(_prev_a[_ai_h]) if _prev_a else None,
+                        "cons": _cons_v,
+                        "cur_label": _fy_lbl(_fy_ends["cur"]),
+                        "prev_label": _fy_lbl(_fy_ends["prev"]),
+                        "prev2_label": _fy_lbl(_fy_ends["prev2"]),
+                    },
+                }
+
     fin_annual_json    = _json.dumps(fin_annual_data,    ensure_ascii=False)
     fin_quarterly_json = _json.dumps(fin_quarterly_data, ensure_ascii=False)
+    fin_progress_json  = _json.dumps(fin_progress,       ensure_ascii=False)
 
     # ─ 表示ヘルパー ─
     def _fmtv(v, fmt="{:.1f}", sfx=""):
@@ -7842,7 +8032,7 @@ def _build_stock_page(code: str) -> str:
     if consensus:
         (c_tp, c_up, c_rating, c_rscore, c_sb, c_b, c_n, c_s, c_ss, c_na,
          c_tp1w, c_tp1m, c_fcp, c_rev, c_op, c_net, c_eps,
-         cc_rev, cc_op, cc_net, cc_eps, c_net1w, c_net1m) = consensus
+         cc_rev, cc_op, cc_net, cc_eps, c_net1w, c_net1m, c_ord) = consensus
         f = lambda v: float(v) if v is not None else None
         ci = []
         # 目標株価＋上昇余地＋直近の目標株価改定方向
@@ -8304,6 +8494,7 @@ def _build_stock_page(code: str) -> str:
     _fin_data_script = f"""<script>
 var FIN_ANNUAL    = {fin_annual_json};
 var FIN_QUARTERLY = {fin_quarterly_json};
+var FIN_PROGRESS  = {fin_progress_json};
 </script>"""
 
     _fin_logic_script = """<script>
@@ -8320,7 +8511,7 @@ document.querySelectorAll('.pg-tab').forEach(function(btn){
     btn.classList.add('active');
     document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
     if(btn.dataset.tab==='financials'&&!finRendered){
-      setTimeout(function(){renderFinAll();finRendered=true;},0);
+      setTimeout(function(){renderFinProgress();renderFinAll();finRendered=true;},0);
     }
   });
 });
@@ -8489,6 +8680,115 @@ function yoy(data,key){
     if(i===0||data[i-1][key]==null||d[key]==null||data[i-1][key]===0)return null;
     return Math.round((d[key]-data[i-1][key])/Math.abs(data[i-1][key])*1000)/10;
   });
+}
+
+/* ── 今期進捗状況 ────────────────────────────────────── */
+function renderFinProgress(){
+  var P=FIN_PROGRESS;
+  if(!P||!P.head)return;
+  var box=document.getElementById('fin-progress');
+  box.hidden=false;
+  document.getElementById('fin-progress-meta').textContent=
+    P.fy_label+'・第'+P.qn+'四半期時点（'+P.asof+'）';
+  var head=null;
+  P.metrics.forEach(function(m){if(m.key===P.head)head=m;});
+  renderProgGauge(head,P);
+  renderProgBars(P);
+  renderProgChart(P);
+  renderProgTable(P);
+  var notes='進捗率＝期首からの四半期累積実績÷通期会社予想（最新の会社計画）。'+
+    '前期進捗率は前期通期実績に対する同時点の累積比率。';
+  if(P.chart&&P.chart.cons!=null)notes+=' コンセンサスはアナリスト予想の通期値。';
+  document.getElementById('fin-progress-note').textContent=notes;
+}
+
+function renderProgGauge(head,P){
+  var pct=head.pct,a=P.assessment;
+  var color='#58a6ff';
+  var frac=Math.max(0,Math.min(pct,100))/100;
+  var LEN=Math.PI*60;
+  var svg='<svg viewBox="0 0 140 84" class="fin-gauge-svg">'+
+    '<path d="M10,74 A60,60 0 0,1 130,74" fill="none" stroke="#21262d" stroke-width="12" stroke-linecap="round"/>'+
+    '<path d="M10,74 A60,60 0 0,1 130,74" fill="none" stroke="'+color+'" stroke-width="12" stroke-linecap="round" '+
+      'stroke-dasharray="'+(LEN*frac)+' '+LEN+'"/>';
+  if(head.prev_pct!=null&&head.prev_pct<=100){
+    var ang=Math.PI*(1-head.prev_pct/100);
+    var x1=70+52*Math.cos(ang),y1=74-52*Math.sin(ang);
+    var x2=70+68*Math.cos(ang),y2=74-68*Math.sin(ang);
+    svg+='<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="#e6edf3" stroke-width="1.5" opacity="0.85"/>';
+  }
+  svg+='<text x="70" y="66" text-anchor="middle" font-size="21" font-weight="700" fill="#e6edf3">'+
+    pct.toFixed(1)+'%</text>'+
+    '<text x="70" y="81" text-anchor="middle" font-size="9.5" fill="#8b949e">'+head.label+'進捗率</text></svg>';
+  var badge=a?'<div class="fin-prog-badge '+a.tone+'">'+a.label+
+    (a.diff!=null?'（'+(a.diff>0?'+':'')+a.diff.toFixed(1)+'pt）':'')+'</div>':'';
+  var prevNote=head.prev_pct!=null
+    ?'<div class="fin-gauge-prev">前年同期時点 '+head.prev_pct.toFixed(1)+'%（白線）</div>'
+    :'<div class="fin-gauge-prev">単純目安 '+(P.qn*25)+'%（第'+P.qn+'四半期）</div>';
+  document.getElementById('fin-gauge').innerHTML=svg+badge+prevNote;
+}
+
+function renderProgBars(P){
+  var html='';
+  P.metrics.forEach(function(m){
+    if(m.fc==null)return;
+    var pct=m.pct,w=pct==null?0:Math.max(0,Math.min(pct,100));
+    var over=pct!=null&&pct>100;
+    var tick=(m.prev_pct!=null&&m.prev_pct<=100)
+      ?'<div class="fin-pb-tick" style="left:'+m.prev_pct+'%" title="前年同期時点 '+m.prev_pct.toFixed(1)+'%"></div>':'';
+    html+='<div class="fin-pb-row">'+
+      '<span class="fin-pb-label">'+m.label+'</span>'+
+      '<div class="fin-pb-track"><div class="fin-pb-fill'+(over?' over':'')+'" style="width:'+w+'%"></div>'+tick+'</div>'+
+      '<span class="fin-pb-val">'+(m.cum==null?'—':fmtOku(m.cum))+' / '+fmtOku(m.fc)+
+      '<b>'+(pct==null?'—':pct.toFixed(1)+'%')+'</b></span></div>';
+  });
+  document.getElementById('fin-progress-bars').innerHTML=html;
+}
+
+function renderProgChart(P){
+  var c=P.chart,x=['1Q','2Q','3Q','4Q'],t=[];
+  document.getElementById('fin-progress-chart-title').textContent='四半期累積の推移（'+c.label+'）';
+  function hasVal(arr){return arr.some(function(v){return v!=null;});}
+  if(hasVal(c.prev2))t.push({type:'bar',name:c.prev2_label,x:x,y:c.prev2,
+    marker:{color:'#30363d'},hovertemplate:'%{y:,.1f}億<extra>'+c.prev2_label+'</extra>'});
+  if(hasVal(c.prev))t.push({type:'bar',name:c.prev_label,x:x,y:c.prev,
+    marker:{color:'#8b949e'},hovertemplate:'%{y:,.1f}億<extra>'+c.prev_label+'</extra>'});
+  t.push({type:'bar',name:c.cur_label,x:x,y:c.cur,
+    marker:{color:'#58a6ff'},hovertemplate:'%{y:,.1f}億<extra>'+c.cur_label+'</extra>'});
+  var shapes=[],annos=[];
+  function refLine(y,color,dash,label){
+    shapes.push({type:'line',xref:'paper',x0:0,x1:1,y0:y,y1:y,line:{color:color,width:1.5,dash:dash}});
+    annos.push({xref:'paper',x:1,y:y,text:label+' '+fmtOku(y),showarrow:false,
+      xanchor:'right',yanchor:'bottom',font:{size:10,color:color}});
+  }
+  if(c.fc!=null)refLine(c.fc,'#ffa657','dash','会社予想');
+  if(c.cons!=null)refLine(c.cons,'#a371f7','dot','コンセンサス');
+  var L=JSON.parse(JSON.stringify(DLAYOUT));
+  L.height=240;
+  L.margin={l:52,r:8,t:20,b:30};
+  L.barmode='group';
+  L.xaxis={color:'#8b949e',tickfont:{size:11}};
+  L.yaxis={color:'#8b949e',gridcolor:'#21262d',tickfont:{size:10},ticksuffix:'億',rangemode:'tozero'};
+  L.shapes=shapes;L.annotations=annos;
+  L.showlegend=true;
+  L.legend={x:0,y:1.1,orientation:'h',font:{size:10,color:'#c9d1d9'},bgcolor:'rgba(0,0,0,0)'};
+  Plotly.react('fin-progress-chart',t,L,{responsive:true,displayModeBar:false});
+}
+
+function renderProgTable(P){
+  var c=P.chart;
+  function fmtA(v){return v==null?'—':Number(v).toLocaleString('ja-JP',{maximumFractionDigits:1});}
+  function cell(v,base){
+    if(v==null)return'<td>—</td>';
+    var p=(base!=null&&base>0)?'<span class="fin-prog-pct">'+(v/base*100).toFixed(1)+'%</span>':'';
+    return'<td>'+fmtA(v)+p+'</td>';
+  }
+  var h='<thead><tr><th>'+c.label+'(億円)</th><th>1Q</th><th>2Q</th><th>3Q</th><th>通期</th></tr></thead><tbody>';
+  h+='<tr><th>会社予想</th><td>—</td><td>—</td><td>—</td><td>'+fmtA(c.fc)+'</td></tr>';
+  h+='<tr><th>'+c.cur_label+'累計</th>'+c.cur.map(function(v){return cell(v,c.fc);}).join('')+'</tr>';
+  h+='<tr><th>'+c.prev_label+'累計</th>'+c.prev.map(function(v){return cell(v,c.prev_full);}).join('')+'</tr>';
+  if(c.cons!=null)h+='<tr><th>コンセンサス</th><td>—</td><td>—</td><td>—</td><td>'+fmtA(c.cons)+'</td></tr>';
+  document.getElementById('fin-progress-table').innerHTML=h+'</tbody>';
 }
 
 function renderRevChart(d){
@@ -8718,6 +9018,28 @@ function renderQuarterTable(d){
 </div><!-- /tab-overview -->
 
 <div id="tab-financials" class="pg-panel">
+
+<div class="fin-progress" id="fin-progress" hidden>
+  <div class="fin-progress-hd">
+    <span class="fin-chart-title">今期進捗状況</span>
+    <span class="fin-progress-meta" id="fin-progress-meta"></span>
+  </div>
+  <div class="fin-progress-main">
+    <div class="fin-gauge" id="fin-gauge"></div>
+    <div class="fin-progress-bars" id="fin-progress-bars"></div>
+  </div>
+  <div class="fin-chart-box full">
+    <div class="fin-chart-hd">
+      <span class="fin-chart-title" id="fin-progress-chart-title">四半期累積の推移</span>
+      <span class="fin-chart-unit">億円</span>
+    </div>
+    <div id="fin-progress-chart" style="height:240px"></div>
+  </div>
+  <div class="fin-table-wrap">
+    <table class="fin-table" id="fin-progress-table"></table>
+  </div>
+  <p class="fin-progress-note" id="fin-progress-note"></p>
+</div>
 
 <div class="fin-ctrl-bar">
   <div class="fin-type-btns">
