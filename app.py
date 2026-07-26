@@ -10355,6 +10355,42 @@ _PF_CSS = """
 .pf-mini{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:13px 14px;text-align:center}
 .pf-mini .k{font-size:11px;color:#8b949e;margin-bottom:5px}
 .pf-mini .v{font-size:19px;font-weight:700;color:#e6edf3}
+.pf-showcase{position:relative;overflow:hidden;background:linear-gradient(145deg,#161b22 0%,#111820 65%,#0d1d1c 100%);border:1px solid #30363d;border-radius:18px;padding:20px;margin:0 0 18px;box-shadow:0 14px 34px rgba(0,0,0,.18)}
+.pf-showcase::before{content:"";position:absolute;width:280px;height:280px;border-radius:50%;right:-130px;top:-165px;background:radial-gradient(circle,rgba(45,212,191,.13),rgba(45,212,191,0) 68%);pointer-events:none}
+.pf-showcase-head{position:relative;display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:15px}
+.pf-showcase-title{font-size:17px;font-weight:750;color:#f0f6fc;letter-spacing:.1px}
+.pf-showcase-sub{font-size:11.5px;color:#8b949e;margin-top:4px;line-height:1.5}
+.pf-viz-tabs{display:flex;gap:4px;padding:3px;background:#0d1117;border:1px solid #30363d;border-radius:10px;flex:0 0 auto}
+.pf-viz-tab{border:0;background:transparent;color:#8b949e;border-radius:7px;padding:6px 11px;font-size:11.5px;font-weight:650;cursor:pointer;white-space:nowrap}
+.pf-viz-tab:hover{color:#c9d1d9}.pf-viz-tab.active{background:#1f6f5f;color:#eafff8;box-shadow:0 3px 10px rgba(16,185,129,.16)}
+.pf-asset-metrics{position:relative;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+.pf-asset-metric{background:rgba(13,17,23,.62);border:1px solid #21262d;border-radius:10px;padding:10px 12px;min-width:0}
+.pf-asset-metric .k{font-size:10.5px;color:#8b949e;margin-bottom:4px}
+.pf-asset-metric .v{font-size:16px;color:#e6edf3;font-weight:720;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pf-asset-metric .v span{color:#8b949e;font-size:11px;font-weight:500;margin-left:4px}
+.pf-asset-chart{position:relative;height:390px;border-radius:13px;overflow:hidden;background:#0d1117;border:1px solid #21262d}
+.pf-heat-legend{display:flex;align-items:center;justify-content:flex-end;gap:8px;color:#6e7681;font-size:10.5px;margin-top:9px}
+.pf-heat-scale{width:130px;height:6px;border-radius:5px;background:linear-gradient(90deg,#a83c47,#3d4653 50%,#1f9d6a)}
+.pf-div-hero{position:relative;display:grid;grid-template-columns:minmax(240px,1.25fr) repeat(3,1fr);gap:10px;align-items:stretch;margin-bottom:14px}
+.pf-div-total{border:1px solid rgba(45,212,191,.26);background:linear-gradient(135deg,rgba(13,148,136,.2),rgba(13,17,23,.72));border-radius:14px;padding:17px 18px}
+.pf-div-total .k{font-size:11px;color:#7dd3c7;font-weight:650;margin-bottom:6px}
+.pf-div-total .v{font-size:32px;line-height:1;color:#f0fdfa;font-weight:800;letter-spacing:-.4px}
+.pf-div-total .s{font-size:11px;color:#8b949e;margin-top:7px}
+.pf-div-stat{background:rgba(13,17,23,.62);border:1px solid #21262d;border-radius:12px;padding:13px 14px;display:flex;flex-direction:column;justify-content:center}
+.pf-div-stat .k{font-size:10.5px;color:#8b949e;margin-bottom:5px}
+.pf-div-stat .v{font-size:20px;font-weight:750;color:#e6edf3}
+.pf-div-grid{position:relative;display:grid;grid-template-columns:1.35fr .9fr;gap:11px}
+.pf-div-card{background:#0d1117;border:1px solid #21262d;border-radius:13px;padding:11px 12px}
+.pf-div-card-h{font-size:11px;color:#8b949e;font-weight:650;margin:0 0 2px 3px}
+.pf-div-chart{height:265px}
+.pf-div-list{position:relative;margin-top:12px;border-top:1px solid #21262d;padding-top:5px}
+.pf-div-row{display:grid;grid-template-columns:30px minmax(0,1fr) minmax(100px,1.2fr) 92px;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid #171c22}
+.pf-div-row:last-child{border-bottom:0}
+.pf-div-rank{width:23px;height:23px;display:flex;align-items:center;justify-content:center;background:#21262d;border-radius:7px;color:#8b949e;font-size:10px;font-weight:750}
+.pf-div-name{min-width:0}.pf-div-name a{display:block;color:#e6edf3;text-decoration:none;font-size:12.5px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pf-div-name a:hover{color:#58a6ff}
+.pf-div-name span{font-size:10px;color:#6e7681}
+.pf-div-track{height:7px;border-radius:5px;background:#21262d;overflow:hidden}.pf-div-track i{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,#0f8f7c,#2dd4bf)}
+.pf-div-amt{text-align:right;color:#e6edf3;font-size:12.5px;font-weight:700}.pf-div-amt span{display:block;color:#6e7681;font-size:10px;font-weight:500;margin-top:2px}
 .pf-acct{margin-bottom:24px}
 .pf-acct-h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;padding:0 2px 7px;border-bottom:1px solid #21262d}
 .pf-acct-h .nm{font-size:14px;font-weight:700;color:#e6edf3;display:flex;align-items:center;gap:8px}
@@ -10447,6 +10483,21 @@ _PF_CSS = """
 .pf-fund{display:inline-block;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:4px 10px;margin:0 6px 6px 0;font-size:12px;color:#c9d1d9}
 @media(max-width:768px){
   .pf-hero{grid-template-columns:1fr 1fr}
+  .pf-showcase{padding:14px 12px;border-radius:15px;margin-bottom:14px}
+  .pf-showcase-head{display:block;margin-bottom:12px}
+  .pf-viz-tabs{margin-top:11px;width:max-content;max-width:100%;overflow-x:auto}
+  .pf-viz-tab{padding:6px 10px}
+  .pf-asset-metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+  .pf-asset-metric{padding:8px 7px}.pf-asset-metric .v{font-size:14px}.pf-asset-metric .v span{display:block;margin:2px 0 0}
+  .pf-asset-chart{height:330px}
+  .pf-heat-legend{justify-content:center}
+  .pf-div-hero{grid-template-columns:1fr 1fr;gap:7px}
+  .pf-div-total{grid-column:1/-1;padding:16px}.pf-div-total .v{font-size:29px}
+  .pf-div-stat{padding:11px}.pf-div-stat:last-child{grid-column:1/-1}
+  .pf-div-stat .v{font-size:18px}
+  .pf-div-grid{grid-template-columns:1fr}.pf-div-chart{height:245px}
+  .pf-div-row{grid-template-columns:28px minmax(0,1fr) 74px;gap:7px}
+  .pf-div-track{display:none}.pf-div-amt{font-size:12px}
   .pf-hz-wrap{grid-template-columns:1fr}
   .pf-2col{grid-template-columns:1fr}
   .pf-risk{grid-template-columns:repeat(2,1fr)}
@@ -10568,6 +10619,7 @@ def _build_portfolio_page() -> str:
         raw_series: dict = {}
         chart_series: dict = {}
         div_map: dict = {}
+        div_events: dict = {}
         if stock_codes:
             ph = ",".join(["%s"] * len(stock_codes))
             cur.execute(f"""SELECT dp.code, dp.close FROM daily_prices dp
@@ -10610,11 +10662,19 @@ def _build_portfolio_page() -> str:
                 raw_series.setdefault(code, []).append((d, float(adj)))
                 if cl is not None and code != "1306":
                     chart_series.setdefault(code, []).append((d, float(cl)))
-            # 配当（年間DPS・利回り）
-            cur.execute(f"""SELECT code, annual_dps, div_yield FROM stock_fundamentals
+            # 配当（会社/Yahoo予想DPSを優先・無ければ実績年間DPS）
+            cur.execute(f"""SELECT code, COALESCE(dividend_rate, annual_dps), div_yield
+                            FROM stock_fundamentals
                             WHERE code IN ({ph})""", stock_codes)
             for code, dps, dy in cur.fetchall():
                 div_map[code] = {"dps": _f(dps), "yield": _f(dy)}
+            # 月別表示は支払月を推測せず、直近の権利落ち実績パターンを使う。
+            div_cutoff = date.today() - timedelta(days=5 * 366)
+            cur.execute(f"""SELECT code, ex_date, amount FROM dividends
+                            WHERE code IN ({ph}) AND ex_date >= %s
+                            ORDER BY code, ex_date""", stock_codes + [div_cutoff])
+            for code, ex_date, amount in cur.fetchall():
+                div_events.setdefault(code, []).append((ex_date, _f(amount)))
 
     if not rows:
         return _pf_gate('<div class="pf-gate"><h2>データがありません</h2>'
@@ -10669,7 +10729,8 @@ def _build_portfolio_page() -> str:
 
     # ── Phase2 分析（集中度・ヘルスチェック・リスク） ──
     hlist = [{"code": r[0], "name": r[1], "account_type": r[2],
-              "asset_class": r[3], "sbi_value": curmap[id(r)][1]} for r in rows]
+              "asset_class": r[3], "qty": _f(r[4]),
+              "value": curmap[id(r)][1], "sbi_value": curmap[id(r)][1]} for r in rows]
     conc = pa.concentration(hlist, theme_primary, sector_map)
     health = pa.health_check(hlist, stats_map)
     ret_series: dict[str, dict] = {}
@@ -10695,28 +10756,90 @@ def _build_portfolio_page() -> str:
     beta = risk.get("beta") if risk else None
     stress = pa.stress_test(calendar, port_ret, beta) if calendar else []
 
-    # 配当（年間見込み・PF利回り）
-    annual_div = 0.0
-    for r in rows:
-        if r[3] == "stock" and r[4]:
-            d = div_map.get(r[0])
-            if d and d.get("dps"):
-                annual_div += d["dps"] * float(r[4])
-    annual_div = int(round(annual_div))
+    # 配当（年間見込み・権利月パターン・銘柄別寄与）
+    div_projection = pa.dividend_projection(
+        hlist,
+        {code: data.get("dps") for code, data in div_map.items()},
+        div_events,
+    )
+    annual_div = div_projection["annual_total"]
     pf_yield = (annual_div / total_value * 100) if total_value else 0.0
     yoc = (annual_div / total_cost * 100) if total_cost else 0.0   # 取得原価利回り
 
-    # 銘柄集約（保有チャート一覧用・口座横断）
+    # 銘柄集約（資産構成・保有チャート一覧用・口座横断）
+    allocation_agg: dict[str, dict] = {}
     agg: dict[str, dict] = {}
     for r in rows:
+        cp, val, pl = curmap[id(r)]
+        allocation = allocation_agg.setdefault(
+            r[0],
+            {
+                "code": r[0], "name": r[1], "asset": r[3],
+                "value": 0, "cost": 0, "pl": 0,
+            },
+        )
+        allocation["value"] += val
+        allocation["cost"] += r[6] or 0
+        allocation["pl"] += pl
         if r[3] != "stock":
             continue
-        cp, val, pl = curmap[id(r)]
         a = agg.setdefault(r[0], {"name": r[1], "qty": 0.0, "cost_amt": 0, "value": 0, "pl": 0, "price": cp})
         a["qty"] += float(r[4] or 0)
         a["cost_amt"] += r[6] or 0
         a["value"] += val
         a["pl"] += pl
+
+    allocation_items = []
+    for item in sorted(allocation_agg.values(), key=lambda x: -x["value"]):
+        weight = (item["value"] / total_value * 100) if total_value else 0.0
+        item_pl_pct = (item["pl"] / item["cost"] * 100) if item["cost"] else 0.0
+        allocation_items.append({
+            "code": item["code"],
+            "name": item["name"] or item["code"],
+            "asset": "国内株式" if item["asset"] == "stock" else "投資信託",
+            "value": item["value"],
+            "weight": round(weight, 2),
+            "pl": item["pl"],
+            "pl_pct": round(item_pl_pct, 2),
+        })
+    account_items = [
+        {
+            "label": account,
+            "value": accts[account]["value"],
+            "color": _PF_ACCT_COLORS.get(account, "#8b949e"),
+        }
+        for account in ordered
+    ]
+    sector_items = [
+        {"label": str(name), "value": value}
+        for name, value in conc["sector_alloc"]
+    ]
+    if conc["fund_value"]:
+        sector_items.append({"label": "投資信託", "value": conc["fund_value"]})
+    sector_items.sort(key=lambda item: -item["value"])
+    asset_payload = {
+        "total": total_value,
+        "holdings": allocation_items,
+        "accounts": account_items,
+        "sectors": sector_items,
+    }
+    dividend_payload = {
+        "annual": annual_div,
+        "monthly": div_projection["monthly"],
+        "undated": div_projection["undated"],
+        "contributors": [
+            {
+                "code": item["code"],
+                "name": item["name"],
+                "annual": int(round(item["annual"])),
+                "share": round(item["share"], 2),
+                "yield": round(item["yield"], 2) if item["yield"] is not None else None,
+            }
+            for item in div_projection["contributors"]
+        ],
+    }
+    asset_json = _json.dumps(asset_payload, ensure_ascii=False).replace("</", "<\\/")
+    dividend_json = _json.dumps(dividend_payload, ensure_ascii=False).replace("</", "<\\/")
 
     # ── ヘッダ ──
     parts = [f'''<div class="pf-head">
@@ -10747,13 +10870,70 @@ def _build_portfolio_page() -> str:
                      f'SBI明細の取込は {as_of} 時点（その時の評価額 ¥{_pf_yen(sbi_total)}）。'
                      f'随時CSVを取り込めば取得単価・保有銘柄が最新化されます。</div>')
 
+    # ── 資産構成 ──
+    largest = allocation_items[0] if allocation_items else None
+    largest_name = esc(str(largest["name"])) if largest else "—"
+    largest_weight = largest["weight"] if largest else 0.0
+    parts.append(f'''<section class="pf-showcase" aria-labelledby="pf-asset-title">
+  <div class="pf-showcase-head">
+    <div><div class="pf-showcase-title" id="pf-asset-title">資産構成</div>
+      <div class="pf-showcase-sub">面積＝評価額、色＝含み損益率。口座・業種の偏りも切り替えて確認できます。</div></div>
+    <div class="pf-viz-tabs" role="group" aria-label="資産構成の表示切替">
+      <button class="pf-viz-tab active" type="button" data-pf-view="holdings">銘柄別</button>
+      <button class="pf-viz-tab" type="button" data-pf-view="accounts">口座別</button>
+      <button class="pf-viz-tab" type="button" data-pf-view="sectors">業種別</button>
+    </div>
+  </div>
+  <div class="pf-asset-metrics">
+    <div class="pf-asset-metric"><div class="k">最大ポジション</div><div class="v">{largest_name}<span>{largest_weight:.1f}%</span></div></div>
+    <div class="pf-asset-metric"><div class="k">上位5銘柄</div><div class="v">{top5:.1f}%<span>集中度</span></div></div>
+    <div class="pf-asset-metric"><div class="k">分散スコア</div><div class="v">{conc["hhi_label"]}<span>HHI {conc["hhi"]:.0f}</span></div></div>
+  </div>
+  <div class="pf-asset-chart" id="pf-asset-chart" aria-label="資産構成チャート"></div>
+  <div class="pf-heat-legend"><span>損失</span><span class="pf-heat-scale"></span><span>利益</span></div>
+</section>''')
+
     # ── 配当 ──
     if annual_div > 0:
-        parts.append(f'''<div class="pf-conc">
-  <div class="pf-mini"><div class="k">年間配当見込み</div><div class="v">¥{_pf_yen(annual_div)}</div></div>
-  <div class="pf-mini"><div class="k">PF配当利回り<span class="pf-mini-s">対時価</span></div><div class="v">{pf_yield:.2f}%</div></div>
-  <div class="pf-mini"><div class="k">取得原価利回り<span class="pf-mini-s">YoC</span></div><div class="v">{yoc:.2f}%</div></div>
-</div>''')
+        div_rows = []
+        max_div = max((item["annual"] for item in div_projection["contributors"]), default=1) or 1
+        for rank, item in enumerate(div_projection["contributors"][:10], 1):
+            code = esc(str(item["code"]))
+            name = esc(str(item["name"]))
+            div_yield = f'{item["yield"]:.2f}%' if item["yield"] is not None else "—"
+            div_rows.append(
+                f'<div class="pf-div-row"><span class="pf-div-rank">{rank}</span>'
+                f'<div class="pf-div-name"><a href="/stock/{code}">{name}</a>'
+                f'<span>{code} ・ 保有利回り {div_yield}</span></div>'
+                f'<span class="pf-div-track"><i style="width:{item["annual"] / max_div * 100:.1f}%"></i></span>'
+                f'<div class="pf-div-amt">¥{_pf_yen(item["annual"])}'
+                f'<span>全体の {item["share"]:.1f}%</span></div></div>')
+        undated_note = (
+            f'　月未定 ¥{_pf_yen(div_projection["undated"])}を含みます。'
+            if div_projection["undated"] else ""
+        )
+        parts.append(f'''<section class="pf-showcase" aria-labelledby="pf-div-title">
+  <div class="pf-showcase-head">
+    <div><div class="pf-showcase-title" id="pf-div-title">配当</div>
+      <div class="pf-showcase-sub">現在の保有株数と予想年間DPSによる税引前の見込みです。</div></div>
+  </div>
+  <div class="pf-div-hero">
+    <div class="pf-div-total"><div class="k">年間配当見込み（税引前）</div>
+      <div class="v">¥{_pf_yen(annual_div)}</div>
+      <div class="s">月平均 ¥{_pf_yen(annual_div / 12)} ・ 国内株 {len(div_projection["contributors"])}銘柄</div></div>
+    <div class="pf-div-stat"><div class="k">PF配当利回り</div><div class="v">{pf_yield:.2f}%</div></div>
+    <div class="pf-div-stat"><div class="k">取得原価利回り</div><div class="v">{yoc:.2f}%</div></div>
+    <div class="pf-div-stat"><div class="k">最大配当月</div><div class="v" id="pf-div-peak">—</div></div>
+  </div>
+  <div class="pf-div-grid">
+    <div class="pf-div-card"><div class="pf-div-card-h">月別配当見込み <span class="pf-h3sub">権利月ベース</span></div>
+      <div class="pf-div-chart" id="pf-div-monthly" aria-label="月別配当見込みチャート"></div></div>
+    <div class="pf-div-card"><div class="pf-div-card-h">銘柄別 配当寄与度</div>
+      <div class="pf-div-chart" id="pf-div-donut" aria-label="銘柄別配当寄与度チャート"></div></div>
+  </div>
+  <div class="pf-div-list">{"".join(div_rows)}</div>
+  <div class="pf-note">月別見込みは予想年間DPSを直近の権利落ち実績パターンへ配分した概算です。支払月とは異なります。{undated_note}</div>
+</section>''')
 
     # ── ヘルスチェック（テクニカル×ファンダの2軸） ──
     _HZ = {3: ("撤退検討", "#f85149"), 2: ("注意", "#f0883e"),
@@ -10780,19 +10960,7 @@ def _build_portfolio_page() -> str:
             '<div class="pf-sec"><h3 class="pf-h3">🩺 ヘルスチェック</h3>'
             f'<div class="pf-note pf-pos">保有株 {len(health)} 銘柄すべて良好（テクニカル・F-scoreとも問題なし）。</div></div>')
 
-    # ── 口座別 資産配分バー ──
-    segs, legend = [], []
-    for a in ordered:
-        v = accts[a]["value"]
-        pct = (v / total_value * 100) if total_value else 0
-        col = _PF_ACCT_COLORS.get(a, "#8b949e")
-        segs.append(f'<div class="pf-seg" style="width:{pct:.3f}%;background:{col}" title="{a} {pct:.1f}%"></div>')
-        legend.append(f'<span><i style="background:{col}"></i>{a} <b>{pct:.0f}%</b> ¥{_pf_yen(v)}</span>')
-    parts.append(f'<div class="pf-alloc"><h3>口座別 資産配分</h3>'
-                 f'<div class="pf-bar">{"".join(segs)}</div>'
-                 f'<div class="pf-legend">{"".join(legend)}</div></div>')
-
-    # ── 集中度＆エクスポージャー ──
+    # ── テーマ・業種エクスポージャー ──
     def _expbar(items, denom, limit=6):
         denom = denom or 1
         out = []
@@ -10804,12 +10972,6 @@ def _build_portfolio_page() -> str:
                 f'<span class="pf-exp-p">{p:.0f}%</span></div>')
         return "".join(out) or '<div class="pf-note">データなし</div>'
 
-    conc_top1 = (conc["top"][0]["value"] / conc["total"] * 100) if conc["top"] else 0
-    parts.append(f'''<div class="pf-conc">
-  <div class="pf-mini"><div class="k">集中度 HHI</div><div class="v">{conc["hhi"]:.0f}<span class="pf-mini-s">{conc["hhi_label"]}</span></div></div>
-  <div class="pf-mini"><div class="k">最大銘柄</div><div class="v">{conc_top1:.1f}%</div></div>
-  <div class="pf-mini"><div class="k">上位5銘柄</div><div class="v">{top5:.1f}%</div></div>
-</div>''')
     parts.append(
         '<div class="pf-2col">'
         '<div class="pf-exp"><h4>テーマ別（株式スリーブ）</h4>'
@@ -10926,8 +11088,147 @@ def _build_portfolio_page() -> str:
             f'<div class="pf-trades">{recent}{rest_html}</div>'
             f'<div class="pf-note">実現損益は移動平均取得原価法での概算。{inc_note}</div></div>')
 
+    parts.append(f"""<script>
+var PF_ASSET_DATA={asset_json};
+var PF_DIVIDEND_DATA={dividend_json};
+</script>""")
+    parts.append("""<script>
+(function(){
+  if(typeof Plotly==='undefined')return;
+  var pfState={assetView:'holdings'};
+  var isMobile=window.innerWidth<768;
+  var chartConfig={responsive:true,displayModeBar:false,scrollZoom:false};
+  var paper='#0d1117',font='#c9d1d9',muted='#8b949e',grid='#21262d';
+  var palette=['#2dd4bf','#58a6ff','#a78bfa','#f59e0b','#f472b6','#fb923c','#3fb950','#d29922','#79c0ff','#8b949e'];
+  function yen(v){return '¥'+Math.round(v||0).toLocaleString('ja-JP');}
+  function chartHeight(){return isMobile?330:390;}
+  function donutItems(items,limit){
+    var sorted=items.slice().sort(function(a,b){return b.value-a.value;});
+    if(sorted.length<=limit)return sorted;
+    var kept=sorted.slice(0,limit);
+    var other=sorted.slice(limit).reduce(function(sum,x){return sum+x.value;},0);
+    kept.push({label:'その他',value:other,color:'#484f58'});
+    return kept;
+  }
+  function renderDonut(items,title,colors){
+    var data=donutItems(items,8);
+    var total=data.reduce(function(sum,x){return sum+x.value;},0);
+    Plotly.react('pf-asset-chart',[{
+      type:'pie',hole:.58,sort:false,
+      labels:data.map(function(x){return x.label;}),
+      values:data.map(function(x){return x.value;}),
+      marker:{colors:colors||data.map(function(x,i){return x.color||palette[i%palette.length];}),
+              line:{color:paper,width:2}},
+      textinfo:'label+percent',textposition:'inside',insidetextorientation:'horizontal',
+      textfont:{size:isMobile?10:11,color:'#f0f6fc'},
+      hovertemplate:'<b>%{label}</b><br>'+yen(0).slice(0,1)+'%{value:,.0f}<br>%{percent}<extra></extra>',
+    }],{
+      height:chartHeight(),paper_bgcolor:paper,plot_bgcolor:paper,
+      margin:{l:10,r:10,t:18,b:18},showlegend:false,
+      font:{family:'-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif',color:font},
+      annotations:[{text:'<span style="font-size:11px;color:'+muted+'">'+title+'</span><br><b>'+yen(total)+'</b>',
+                    x:.5,y:.5,showarrow:false,font:{size:isMobile?16:19,color:'#e6edf3'},align:'center'}],
+    },chartConfig);
+  }
+  function renderHoldings(){
+    var items=PF_ASSET_DATA.holdings;
+    Plotly.react('pf-asset-chart',[{
+      type:'treemap',
+      labels:items.map(function(x){return x.name;}),
+      parents:items.map(function(){return'';}),
+      values:items.map(function(x){return x.value;}),
+      customdata:items.map(function(x){return[x.code,x.pl_pct,x.weight,x.pl,x.asset];}),
+      branchvalues:'total',sort:false,
+      tiling:{pad:2,squarifyratio:1.15},
+      marker:{
+        colors:items.map(function(x){return Math.max(-20,Math.min(20,x.pl_pct));}),
+        colorscale:[[0,'#a83c47'],[.42,'#414956'],[.5,'#343b46'],[.58,'#246b54'],[1,'#1f9d6a']],
+        cmin:-20,cmax:20,cmid:0,showscale:false,
+        line:{color:'#0d1117',width:2},
+      },
+      texttemplate:'<b>%{label}</b><br><span style="font-size:10px">%{customdata[0]}　%{customdata[1]:+.1f}%</span>',
+      textfont:{size:isMobile?12:14,color:'#f0f6fc'},
+      hovertemplate:'<b>%{label}</b>（%{customdata[0]}）<br>評価額 ¥%{value:,.0f}<br>構成比 %{customdata[2]:.1f}%<br>含み損益 %{customdata[3]:+,.0f}円（%{customdata[1]:+.1f}%）<extra></extra>',
+      pathbar:{visible:false},
+    }],{
+      height:chartHeight(),paper_bgcolor:paper,plot_bgcolor:paper,
+      margin:{l:3,r:3,t:3,b:3},
+      font:{family:'-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif',color:font},
+    },chartConfig);
+  }
+  function renderAsset(){
+    if(pfState.assetView==='accounts'){
+      renderDonut(PF_ASSET_DATA.accounts,'口座別');
+    }else if(pfState.assetView==='sectors'){
+      renderDonut(PF_ASSET_DATA.sectors,'業種別',null);
+    }else{
+      renderHoldings();
+    }
+    var legend=document.querySelector('.pf-heat-legend');
+    if(legend)legend.style.visibility=pfState.assetView==='holdings'?'visible':'hidden';
+  }
+  document.querySelectorAll('.pf-viz-tab').forEach(function(button){
+    button.addEventListener('click',function(){
+      pfState.assetView=button.dataset.pfView;
+      document.querySelectorAll('.pf-viz-tab').forEach(function(x){
+        x.classList.toggle('active',x.dataset.pfView===pfState.assetView);
+      });
+      renderAsset();
+    });
+  });
+  function renderDividends(){
+    var months=['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+    var values=PF_DIVIDEND_DATA.monthly;
+    var peak=Math.max.apply(null,values);
+    var peakIndex=values.indexOf(peak);
+    var peakEl=document.getElementById('pf-div-peak');
+    if(peakEl&&peak>0)peakEl.textContent=months[peakIndex]+' '+yen(peak);
+    Plotly.react('pf-div-monthly',[{
+      type:'bar',x:months,y:values,
+      marker:{color:values.map(function(v){return v===peak&&peak>0?'#2dd4bf':'#2388d9';}),
+              line:{color:'rgba(255,255,255,.08)',width:1}},
+      text:values.map(function(v){return v>0?yen(v):'';}),
+      textposition:'outside',cliponaxis:false,textfont:{size:isMobile?8:10,color:muted},
+      hovertemplate:'<b>%{x}</b><br>見込み ¥%{y:,.0f}<extra></extra>',
+    }],{
+      height:isMobile?245:265,paper_bgcolor:paper,plot_bgcolor:paper,
+      margin:{l:isMobile?44:56,r:12,t:25,b:38},bargap:.28,showlegend:false,
+      font:{family:'-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif',color:font,size:10},
+      xaxis:{color:muted,gridcolor:'rgba(0,0,0,0)',tickfont:{size:isMobile?9:10},fixedrange:true},
+      yaxis:{color:muted,gridcolor:grid,zerolinecolor:grid,tickprefix:'¥',tickformat:',.0f',fixedrange:true},
+    },chartConfig);
+    var contributors=PF_DIVIDEND_DATA.contributors.slice(0,14);
+    if(PF_DIVIDEND_DATA.contributors.length>14){
+      contributors.push({
+        name:'その他',code:'',
+        annual:PF_DIVIDEND_DATA.contributors.slice(14).reduce(function(sum,x){return sum+x.annual;},0),
+      });
+    }
+    Plotly.react('pf-div-donut',[{
+      type:'pie',hole:.62,sort:false,
+      labels:contributors.map(function(x){return x.name;}),
+      values:contributors.map(function(x){return x.annual;}),
+      marker:{colors:contributors.map(function(x,i){return palette[i%palette.length];}),
+              line:{color:paper,width:2}},
+      textinfo:'percent',textposition:'inside',textfont:{size:10,color:'#f0f6fc'},
+      hovertemplate:'<b>%{label}</b><br>年間 ¥%{value:,.0f}<br>%{percent}<extra></extra>',
+    }],{
+      height:isMobile?245:265,paper_bgcolor:paper,plot_bgcolor:paper,
+      margin:{l:8,r:8,t:8,b:8},showlegend:false,
+      font:{family:'-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif',color:font},
+      annotations:[{text:'<span style="font-size:10px;color:'+muted+'">年間</span><br><b>'+yen(PF_DIVIDEND_DATA.annual)+'</b>',
+                    x:.5,y:.5,showarrow:false,font:{size:isMobile?14:16,color:'#e6edf3'},align:'center'}],
+    },chartConfig);
+  }
+  renderAsset();
+  if(document.getElementById('pf-div-monthly'))renderDividends();
+})();
+</script>""")
+
     return _page_html("ポートフォリオ", f'<div class="pf-wrap">{"".join(parts)}</div>',
-                      active="portfolio", extra_head=f"<style>{_PF_CSS}</style>")
+                      active="portfolio",
+                      extra_head=(f"<style>{_PF_CSS}</style>"
+                                  '<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>'))
 
 
 @app.route("/portfolio")

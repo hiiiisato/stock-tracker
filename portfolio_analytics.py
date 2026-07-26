@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from datetime import date, datetime
 
 # 主テーマ選定で除外する汎用ラベル（業種名・指数・属性系はエクスポージャーの主軸にしない）
 GENERIC_THEMES = {
@@ -21,6 +22,91 @@ GENERIC_THEMES = {
     "国際優良株", "輸出", "内需", "JPX日経400", "日経平均株価", "TOPIX Core30",
     "TOPIX100", "シャリア指数", "MSCI", "value", "大型株", "中型株", "小型株",
 }
+
+
+# ─── 配当見込み ──────────────────────────────────────────────────────────
+def dividend_projection(
+    holdings: list[dict],
+    annual_dps_by_code: dict[str, float | None],
+    dividend_events_by_code: dict[str, list[tuple[date, float]]],
+    schedule_days: int = 400,
+) -> dict:
+    """現在の保有株数×予想年間DPSから、年間・月別・銘柄別の配当見込みを作る。
+
+    月別配分は各銘柄の直近 ``schedule_days`` 日の権利落ち実績パターンを使う。
+    支払月を根拠なく推定せず、画面では「権利月ベース」と明示する。
+    投信は分配金データを保持していないため対象外。
+    """
+    by_code: dict[str, dict] = {}
+    for holding in holdings:
+        if holding.get("asset_class") != "stock":
+            continue
+        code = str(holding.get("code") or "")
+        if not code:
+            continue
+        item = by_code.setdefault(
+            code,
+            {
+                "code": code,
+                "name": holding.get("name") or code,
+                "qty": 0.0,
+                "value": 0.0,
+            },
+        )
+        item["qty"] += float(holding.get("qty") or 0)
+        item["value"] += float(holding.get("value") or 0)
+
+    monthly = [0.0] * 12
+    undated = 0.0
+    contributors = []
+    for code, item in by_code.items():
+        dps = annual_dps_by_code.get(code)
+        if dps is None or float(dps) <= 0 or item["qty"] <= 0:
+            continue
+        annual = float(dps) * item["qty"]
+        events = []
+        for event_date, amount in dividend_events_by_code.get(code, []):
+            if isinstance(event_date, datetime):
+                event_date = event_date.date()
+            if isinstance(event_date, date) and amount is not None and float(amount) > 0:
+                events.append((event_date, float(amount)))
+        if events:
+            anchor = max(event_date for event_date, _ in events)
+            recent = [
+                (event_date, amount)
+                for event_date, amount in events
+                if 0 <= (anchor - event_date).days <= schedule_days
+            ]
+            month_weights: dict[int, float] = {}
+            for event_date, amount in recent:
+                month_weights[event_date.month] = month_weights.get(event_date.month, 0.0) + amount
+            weight_total = sum(month_weights.values())
+            if weight_total > 0:
+                for month, weight in month_weights.items():
+                    monthly[month - 1] += annual * weight / weight_total
+            else:
+                undated += annual
+        else:
+            undated += annual
+        contributors.append(
+            {
+                **item,
+                "dps": float(dps),
+                "annual": annual,
+                "yield": (annual / item["value"] * 100) if item["value"] else None,
+            }
+        )
+
+    contributors.sort(key=lambda item: item["annual"], reverse=True)
+    annual_total = sum(item["annual"] for item in contributors)
+    for item in contributors:
+        item["share"] = (item["annual"] / annual_total * 100) if annual_total else 0.0
+    return {
+        "annual_total": int(round(annual_total)),
+        "monthly": [int(round(value)) for value in monthly],
+        "undated": int(round(undated)),
+        "contributors": contributors,
+    }
 
 
 # ─── 集中度・エクスポージャー ────────────────────────────────────────────
