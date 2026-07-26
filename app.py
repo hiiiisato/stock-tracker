@@ -2431,6 +2431,21 @@ _STOCK_CSS = """
 }
 .fin-pb-val b { color: #e6edf3; font-size: 12.5px; margin-left: 6px; }
 .fin-prog-pct { display: block; color: #8b949e; font-size: 10px; }
+/* 進捗テーブルは横スクロールせず幅内に収める（table-layout:fixed で均等割付） */
+.fin-prog-table { table-layout: fixed; width: 100%; }
+.fin-prog-table th, .fin-prog-table td {
+  padding: 7px 2px; font-size: 11px; text-align: right;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.fin-prog-table th:first-child, .fin-prog-table td:first-child {
+  width: 30%; text-align: left; font-size: 10.5px; white-space: normal;
+}
+.fin-prog-table .fin-prog-pct { font-size: 9px; }
+@media (max-width: 640px) {
+  .fin-prog-table th, .fin-prog-table td { padding: 6px 1px; font-size: 10px; }
+  .fin-prog-table th:first-child, .fin-prog-table td:first-child { font-size: 9.5px; }
+  .fin-prog-table .fin-prog-pct { font-size: 8.5px; }
+}
 .fin-progress-note {
   color: #6e7681; font-size: 10.5px; line-height: 1.6; margin: 8px 2px 0;
 }
@@ -8846,21 +8861,24 @@ function renderProgChart(P){
   var shapes=[],annos=[];
   function refLine(y,color,dash,label){
     shapes.push({type:'line',xref:'paper',x0:0,x1:1,y0:y,y1:y,line:{color:color,width:1.5,dash:dash}});
-    annos.push({xref:'paper',x:1,y:y,text:label+' '+fmtOku(y),showarrow:false,
-      xanchor:'right',yanchor:'bottom',font:{size:10,color:color}});
+    // ラベルは線の左上に置く（左端の棒は低いので重ならない。凡例は下に逃がす）
+    annos.push({xref:'paper',x:0.01,y:y,text:label+' '+fmtOku(y),showarrow:false,
+      xanchor:'left',yanchor:'bottom',font:{size:10,color:color}});
   }
   if(c.fc!=null)refLine(c.fc,'#ffa657','dash','会社予想');
   // 四半期コンセンサスがある時は通期の▲が兼ねるので通期コンセンサス線は引かない
   if(c.cons!=null&&!c.qcons)refLine(c.cons,'#a371f7','dot','コンセンサス');
   var L=JSON.parse(JSON.stringify(DLAYOUT));
-  L.height=240;
-  L.margin={l:52,r:8,t:20,b:30};
+  L.height=isMob?290:265;
+  L.margin={l:50,r:12,t:12,b:isMob?92:74};   // 凡例を下に置くので下余白を広く、上は詰める
   L.barmode='group';
   L.xaxis={color:'#8b949e',tickfont:{size:11}};
   L.yaxis={color:'#8b949e',gridcolor:'#21262d',tickfont:{size:10},ticksuffix:'億',rangemode:'tozero'};
   L.shapes=shapes;L.annotations=annos;
   L.showlegend=true;
-  L.legend={x:0,y:1.1,orientation:'h',font:{size:10,color:'#c9d1d9'},bgcolor:'rgba(0,0,0,0)'};
+  // 凡例はチャート下部・中央（上部の注記ラベルと重ならないよう分離）
+  L.legend={orientation:'h',x:0.5,xanchor:'center',y:-0.16,yanchor:'top',
+    font:{size:isMob?9:10,color:'#c9d1d9'},bgcolor:'rgba(0,0,0,0)'};
   Plotly.react('fin-progress-chart',t,L,{responsive:true,displayModeBar:false});
 }
 
@@ -9130,9 +9148,7 @@ function renderQuarterTable(d){
     </div>
     <div id="fin-progress-chart" style="height:240px"></div>
   </div>
-  <div class="fin-table-wrap">
-    <table class="fin-table" id="fin-progress-table"></table>
-  </div>
+  <table class="fin-table fin-prog-table" id="fin-progress-table"></table>
   <p class="fin-progress-note" id="fin-progress-note"></p>
 </div>
 
