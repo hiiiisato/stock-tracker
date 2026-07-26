@@ -2431,8 +2431,9 @@ _STOCK_CSS = """
 }
 .fin-pb-val b { color: #e6edf3; font-size: 12.5px; margin-left: 6px; }
 .fin-prog-pct { display: block; color: #8b949e; font-size: 10px; }
-/* 進捗テーブルは横スクロールせず幅内に収める（table-layout:fixed で均等割付） */
-.fin-prog-table { table-layout: fixed; width: 100%; }
+/* 進捗テーブルは横スクロールせず幅内に収める（table-layout:fixed で均等割付）。
+   fin-table本体の min-width:580px を打ち消さないと画面幅を超えるため min-width:0 で上書き。 */
+.fin-prog-table { table-layout: fixed; width: 100%; min-width: 0; }
 .fin-prog-table th, .fin-prog-table td {
   padding: 7px 2px; font-size: 11px; text-align: right;
   overflow: hidden; text-overflow: ellipsis;
