@@ -7384,17 +7384,19 @@ def _build_stock_page(code: str) -> str:
     # ─ 今期の中間(2Q累計)会社予想（決算短信XBRL由来の実データ・按分なし）─
     # 四半期毎のアナリストコンセンサスは無料では取得不可のため、会社が短信で開示する
     # 2Q累計予想を「2Q時点の目安」として使う。通期予想と同じ最新短信の 'H' 行。
-    # 中間予想の fiscal_year_end は短信XBRL上、通期と同じ決算期末で格納される
-    # （中間期末ではない）ため、今期通期と同じ fiscal_year_end で今期の2Q予想を引く。
+    # 中間予想の fiscal_year_end は短信XBRL上、通期期末で格納される銘柄と中間期末(通期の
+    # 約半年前)で格納される銘柄が混在する。今期の会計年度に属するH行を範囲で拾う
+    # （通期期末〜その約7か月前。来期の中間予想は除外される）。
     h2_forecast = None
     if _prog_fy_end:
         try:
             cur.execute("""
                 SELECT fiscal_year_end, revenue, operating_income, ordinary_income, net_income
                 FROM financials_forecast
-                WHERE code = %s AND period_type = 'H' AND fiscal_year_end = %s
+                WHERE code = %s AND period_type = 'H'
+                  AND fiscal_year_end BETWEEN %s AND %s
                 ORDER BY announced_at DESC LIMIT 1
-            """, (code, _prog_fy_end))
+            """, (code, _prog_fy_end - timedelta(days=215), _prog_fy_end))
             _h2 = cur.fetchone()
             if _h2 and any(v is not None for v in _h2[1:]):
                 h2_forecast = _h2
@@ -7900,6 +7902,8 @@ def _build_stock_page(code: str) -> str:
             return next((r for r in fin_annual_rows if str(r[0])[:7] == _key), None)
 
         def _prog_cum(fy_key: str, qi: int, upto: int):
+            if upto < 1:            # 今期未発表（Q1前）は累積なし
+                return None
             vals = []
             for _q in range(1, upto + 1):
                 _row = _qmap[fy_key].get(_q)
@@ -7910,8 +7914,8 @@ def _build_stock_page(code: str) -> str:
             return round(sum(vals) / 1e8, 1)
 
         _prev_a  = _annual_for(_fy_ends["prev"])
-        _cur_qn = max(_qmap["cur"], default=0)
-        if _cur_qn:
+        _cur_qn = max(_qmap["cur"], default=0)   # 今期の最新四半期（0=Q1未発表＝期初）
+        if True:
             # (キー, 表示名, Q行index, forecast行index, 通期A行index)
             _PROG_METRICS = [("rev", "売上高", 1, 1, 2), ("op", "営業利益", 2, 2, 3),
                              ("ord", "経常利益", 3, 3, 4), ("net", "純利益", 4, 4, 5)]
@@ -7928,23 +7932,27 @@ def _build_stock_page(code: str) -> str:
                     "prev_pct": round(_pcum / _pfull * 100, 1)
                                 if _pcum is not None and _pfull else None,
                 })
-            # 見出し指標: 経常→営業→純→売上 の優先（SBI等の慣例に合わせ経常を主）
+            # 見出し指標: 通期予想がある指標を 経常→営業→純→売上 で選ぶ
+            # （実績の有無に依存しない＝期初＝Q1未発表でも予想・前年ペースを表示するため）
             _head = next((m for k in ("ord", "op", "net", "rev")
-                          for m in _metrics if m["key"] == k and m["pct"] is not None), None)
+                          for m in _metrics if m["key"] == k and m["fc"] is not None), None)
             if _head:
-                if _head["prev_pct"] is not None:
-                    _dpt = round(_head["pct"] - _head["prev_pct"], 1)
-                    _ref = "prev"
-                else:
-                    _dpt = round(_head["pct"] - _cur_qn * 25, 1)
-                    _ref = "guide"
-                _tone = "good" if _dpt >= 3 else ("bad" if _dpt <= -3 else "flat")
-                _assess = {"tone": _tone, "diff": _dpt, "ref": _ref,
-                           "label": {"good": "前年より速いペース", "bad": "前年より遅いペース",
-                                     "flat": "前年並みのペース"}[_tone]
-                           if _ref == "prev" else
-                           {"good": "目安を上回るペース", "bad": "目安を下回るペース",
-                            "flat": "目安並みのペース"}[_tone]}
+                # ペース判定は今期実績があるときのみ（期初は None）
+                _assess = None
+                if _head["pct"] is not None:
+                    if _head["prev_pct"] is not None:
+                        _dpt = round(_head["pct"] - _head["prev_pct"], 1)
+                        _ref = "prev"
+                    else:
+                        _dpt = round(_head["pct"] - _cur_qn * 25, 1)
+                        _ref = "guide"
+                    _tone = "good" if _dpt >= 3 else ("bad" if _dpt <= -3 else "flat")
+                    _assess = {"tone": _tone, "diff": _dpt, "ref": _ref,
+                               "label": {"good": "前年より速いペース", "bad": "前年より遅いペース",
+                                         "flat": "前年並みのペース"}[_tone]
+                               if _ref == "prev" else
+                               {"good": "目安を上回るペース", "bad": "目安を下回るペース",
+                                "flat": "目安並みのペース"}[_tone]}
                 _qi_h = {"rev": 1, "op": 2, "ord": 3, "net": 4}[_head["key"]]
                 _ai_h = {"rev": 2, "op": 3, "ord": 4, "net": 5}[_head["key"]]
                 # コンセンサス通期値（対象期が今期と一致する場合のみ）
@@ -7969,7 +7977,8 @@ def _build_stock_page(code: str) -> str:
                                 "net": 4}[_m["key"]]]) if h2_forecast else None)
                 fin_progress = {
                     "fy_label": _fy_lbl(_prog_fy_end), "qn": _cur_qn,
-                    "asof": str(_qmap["cur"][_cur_qn][0])[:7].replace("-", "/"),
+                    "asof": (str(_qmap["cur"][_cur_qn][0])[:7].replace("-", "/")
+                             if _cur_qn else None),
                     "metrics": _metrics, "head": _head["key"], "assessment": _assess,
                     "has_h2": h2_forecast is not None,
                     "chart": {
@@ -8741,7 +8750,8 @@ function renderFinProgress(){
   var box=document.getElementById('fin-progress');
   box.hidden=false;
   document.getElementById('fin-progress-meta').textContent=
-    P.fy_label+'・第'+P.qn+'四半期時点（'+P.asof+'）';
+    P.qn?P.fy_label+'・第'+P.qn+'四半期時点（'+P.asof+'）'
+        :P.fy_label+'・今期開始前（予想と前年ペースを表示）';
   var head=null;
   P.metrics.forEach(function(m){if(m.key===P.head)head=m;});
   renderProgGauge(head,P);
@@ -8759,6 +8769,16 @@ function renderFinProgress(){
 function renderProgGauge(head,P){
   var pct=head.pct,a=P.assessment;
   var color='#58a6ff';
+  if(pct==null){   // 今期実績なし（Q1未発表）: 会社予想を示し、進捗率は発表後
+    var svg0='<svg viewBox="0 0 140 84" class="fin-gauge-svg">'+
+      '<path d="M10,74 A60,60 0 0,1 130,74" fill="none" stroke="#21262d" stroke-width="12" stroke-linecap="round"/>'+
+      '<text x="70" y="58" text-anchor="middle" font-size="13" font-weight="700" fill="#8b949e">今期開始前</text>'+
+      '<text x="70" y="77" text-anchor="middle" font-size="9" fill="#6e7681">'+
+        head.label+' 会社予想 '+(head.fc!=null?fmtOku(head.fc):'—')+'</text></svg>';
+    document.getElementById('fin-gauge').innerHTML=svg0+
+      '<div class="fin-gauge-prev">1Q決算の発表後に進捗率を表示</div>';
+    return;
+  }
   var frac=Math.max(0,Math.min(pct,100))/100;
   var LEN=Math.PI*60;
   var svg='<svg viewBox="0 0 140 84" class="fin-gauge-svg">'+
