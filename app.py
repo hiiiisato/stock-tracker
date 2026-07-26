@@ -7381,6 +7381,26 @@ def _build_stock_page(code: str) -> str:
         except Exception as e:
             print(f"[app] 進捗率用四半期取得失敗: {code} / {e}")
 
+    # ─ 今期の中間(2Q累計)会社予想（決算短信XBRL由来の実データ・按分なし）─
+    # 四半期毎のアナリストコンセンサスは無料では取得不可のため、会社が短信で開示する
+    # 2Q累計予想を「2Q時点の目安」として使う。通期予想と同じ最新短信の 'H' 行。
+    # 中間予想の fiscal_year_end は短信XBRL上、通期と同じ決算期末で格納される
+    # （中間期末ではない）ため、今期通期と同じ fiscal_year_end で今期の2Q予想を引く。
+    h2_forecast = None
+    if _prog_fy_end:
+        try:
+            cur.execute("""
+                SELECT fiscal_year_end, revenue, operating_income, ordinary_income, net_income
+                FROM financials_forecast
+                WHERE code = %s AND period_type = 'H' AND fiscal_year_end = %s
+                ORDER BY announced_at DESC LIMIT 1
+            """, (code, _prog_fy_end))
+            _h2 = cur.fetchone()
+            if _h2 and any(v is not None for v in _h2[1:]):
+                h2_forecast = _h2
+        except Exception as e:
+            print(f"[app] 中間予想取得失敗: {code} / {e}")
+
     # ─ 配当全履歴（グラフ用） ─
     div_all_rows: list = []
     try:
@@ -7918,16 +7938,25 @@ def _build_stock_page(code: str) -> str:
                                        "ord": consensus[23], "net": consensus[15]}[_head["key"]])
                 def _fy_lbl(d):
                     return f"{d.year}/{d.month}期"
+                # 2Q会社中間予想（見出し指標に対応、実データ）。無ければNone。
+                _h2_idx = {"rev": 1, "op": 2, "ord": 3, "net": 4}[_head["key"]]
+                _h2_plan = _to_oku(h2_forecast[_h2_idx]) if h2_forecast else None
+                # 各指標の中間予想（テーブル用）
+                for _m in _metrics:
+                    _m["h2"] = (_to_oku(h2_forecast[{"rev": 1, "op": 2, "ord": 3,
+                                "net": 4}[_m["key"]]]) if h2_forecast else None)
                 fin_progress = {
                     "fy_label": _fy_lbl(_prog_fy_end), "qn": _cur_qn,
                     "asof": str(_qmap["cur"][_cur_qn][0])[:7].replace("-", "/"),
                     "metrics": _metrics, "head": _head["key"], "assessment": _assess,
+                    "has_h2": h2_forecast is not None,
                     "chart": {
                         "label": _head["label"],
                         "cur":   [_prog_cum("cur",   _qi_h, q) for q in (1, 2, 3, 4)],
                         "prev":  [_prog_cum("prev",  _qi_h, q) for q in (1, 2, 3, 4)],
                         "prev2": [_prog_cum("prev2", _qi_h, q) for q in (1, 2, 3, 4)],
                         "fc": _head["fc"],
+                        "h2_plan": _h2_plan,
                         "prev_full": _to_oku(_prev_a[_ai_h]) if _prev_a else None,
                         "cons": _cons_v,
                         "cur_label": _fy_lbl(_fy_ends["cur"]),
@@ -8698,7 +8727,9 @@ function renderFinProgress(){
   renderProgTable(P);
   var notes='進捗率＝期首からの四半期累積実績÷通期会社予想（最新の会社計画）。'+
     '前期進捗率は前期通期実績に対する同時点の累積比率。';
+  if(P.chart&&P.chart.h2_plan!=null)notes+=' 2Qの▲は会社が短信で開示した中間(2Q累計)予想（実データ）。';
   if(P.chart&&P.chart.cons!=null)notes+=' コンセンサスはアナリスト予想の通期値。';
+  notes+=' ※四半期毎のアナリスト予想は無料では取得できないため、四半期の目安は会社開示（2Q中間予想）と前年ペースで表示。';
   document.getElementById('fin-progress-note').textContent=notes;
 }
 
@@ -8755,6 +8786,13 @@ function renderProgChart(P){
     marker:{color:'#8b949e'},hovertemplate:'%{y:,.1f}億<extra>'+c.prev_label+'</extra>'});
   t.push({type:'bar',name:c.cur_label,x:x,y:c.cur,
     marker:{color:'#58a6ff'},hovertemplate:'%{y:,.1f}億<extra>'+c.cur_label+'</extra>'});
+  // 2Q会社中間予想（実データ）を三角マーカーで表示（SBIの四半期目安に相当）
+  if(c.h2_plan!=null){
+    t.push({type:'scatter',mode:'markers',name:'会社中間予想(2Q)',x:['2Q'],y:[c.h2_plan],
+      marker:{symbol:'triangle-left',size:13,color:'#f778ba',
+        line:{color:'#0d1117',width:1}},
+      hovertemplate:'会社中間予想 %{y:,.1f}億<extra></extra>'});
+  }
   var shapes=[],annos=[];
   function refLine(y,color,dash,label){
     shapes.push({type:'line',xref:'paper',x0:0,x1:1,y0:y,y1:y,line:{color:color,width:1.5,dash:dash}});
@@ -8784,7 +8822,9 @@ function renderProgTable(P){
     return'<td>'+fmtA(v)+p+'</td>';
   }
   var h='<thead><tr><th>'+c.label+'(億円)</th><th>1Q</th><th>2Q</th><th>3Q</th><th>通期</th></tr></thead><tbody>';
-  h+='<tr><th>会社予想</th><td>—</td><td>—</td><td>—</td><td>'+fmtA(c.fc)+'</td></tr>';
+  h+='<tr><th>会社予想</th><td>—</td>'+
+     '<td>'+(c.h2_plan!=null?fmtA(c.h2_plan)+'<span class="fin-prog-pct">中間</span>':'—')+'</td>'+
+     '<td>—</td><td>'+fmtA(c.fc)+'</td></tr>';
   h+='<tr><th>'+c.cur_label+'累計</th>'+c.cur.map(function(v){return cell(v,c.fc);}).join('')+'</tr>';
   h+='<tr><th>'+c.prev_label+'累計</th>'+c.prev.map(function(v){return cell(v,c.prev_full);}).join('')+'</tr>';
   if(c.cons!=null)h+='<tr><th>コンセンサス</th><td>—</td><td>—</td><td>—</td><td>'+fmtA(c.cons)+'</td></tr>';
