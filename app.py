@@ -10334,16 +10334,29 @@ _PF_ACCT_COLORS = {
 _PF_CSS = """
 .pf-wrap{max-width:1080px;margin:0 auto}
 .pf-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:2px}
-.pf-title{font-size:20px;font-weight:700;color:#e6edf3}
+.pf-title{font-size:24px;font-weight:800;color:#f0f6fc;letter-spacing:-.35px}
 .pf-asof{font-size:12px;color:#8b949e;margin-top:3px}
-.pf-hero{display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:12px;margin:16px 0 10px}
-.pf-stat{background:linear-gradient(180deg,#171d26,#12161c);border:1px solid #30363d;border-radius:14px;padding:16px 18px}
+.pf-overview{position:relative;overflow:hidden;background:linear-gradient(145deg,#171d27 0%,#111820 58%,#0c1d1b 100%);border:1px solid #30363d;border-radius:18px;padding:14px;margin:16px 0;box-shadow:0 14px 36px rgba(0,0,0,.2)}
+.pf-overview::before{content:"";position:absolute;width:360px;height:360px;border-radius:50%;right:-180px;top:-235px;background:radial-gradient(circle,rgba(45,212,191,.16),rgba(45,212,191,0) 69%);pointer-events:none}
+.pf-hero{position:relative;display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:10px;margin:0}
+.pf-stat{background:rgba(13,17,23,.58);border:1px solid #2d3540;border-radius:13px;padding:15px 17px}
+.pf-stat.big{background:linear-gradient(135deg,rgba(31,111,95,.24),rgba(13,17,23,.64));border-color:rgba(45,212,191,.25)}
 .pf-stat .k{font-size:11px;color:#8b949e;letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px}
 .pf-stat .v{font-size:27px;font-weight:800;color:#e6edf3;line-height:1.05;letter-spacing:-.3px}
 .pf-stat.big .v{font-size:32px}
 .pf-stat .s{font-size:12px;color:#8b949e;margin-top:5px}
 .pf-pos{color:#3fb950}.pf-neg{color:#f85149}
-.pf-reval{font-size:12px;color:#8b949e;margin:0 0 18px 2px}
+.pf-reval{position:relative;font-size:11.5px;color:#8b949e;margin:11px 3px 0;padding-top:10px;border-top:1px solid rgba(48,54,61,.72);line-height:1.55}
+.pf-main-tabs-wrap{position:sticky;top:52px;z-index:80;margin:0 0 16px;padding:5px;background:rgba(13,17,23,.9);border:1px solid #30363d;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.2);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.pf-main-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
+.pf-main-tab{display:flex;align-items:center;justify-content:center;gap:8px;min-width:0;border:0;background:transparent;color:#8b949e;border-radius:10px;padding:10px 8px;font-size:12.5px;font-weight:700;cursor:pointer;transition:background .15s,color .15s,box-shadow .15s}
+.pf-main-tab:hover{color:#c9d1d9;background:#171d25}
+.pf-main-tab.active{color:#f0fdfa;background:linear-gradient(135deg,#176b5c,#1f7f6d);box-shadow:0 5px 14px rgba(13,148,136,.2)}
+.pf-main-tab-sub{color:inherit;opacity:.65;font-size:10px;font-weight:500;white-space:nowrap}
+.pf-main-panel{display:none}
+.pf-main-panel.active{display:block;animation:pf-panel-in .18s ease}
+.pf-main-panel[hidden]{display:none!important}
+@keyframes pf-panel-in{from{opacity:.25;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
 .pf-alloc{background:#161b22;border:1px solid #30363d;border-radius:14px;padding:15px 18px;margin-bottom:14px}
 .pf-alloc h3{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin:0 0 11px;font-weight:600}
 .pf-bar{display:flex;height:22px;border-radius:7px;overflow:hidden;background:#0d1117}
@@ -10368,7 +10381,7 @@ _PF_CSS = """
 .pf-asset-metric .k{font-size:10.5px;color:#8b949e;margin-bottom:4px}
 .pf-asset-metric .v{font-size:16px;color:#e6edf3;font-weight:720;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pf-asset-metric .v span{color:#8b949e;font-size:11px;font-weight:500;margin-left:4px}
-.pf-asset-chart{position:relative;height:390px;border-radius:13px;overflow:hidden;background:#0d1117;border:1px solid #21262d}
+.pf-asset-chart{position:relative;height:420px;border-radius:13px;overflow:hidden;background:#0d1117;border:1px solid #21262d}
 .pf-heat-legend{display:flex;align-items:center;justify-content:flex-end;gap:8px;color:#6e7681;font-size:10.5px;margin-top:9px}
 .pf-heat-scale{width:130px;height:6px;border-radius:5px;background:linear-gradient(90deg,#a83c47,#3d4653 50%,#1f9d6a)}
 .pf-div-hero{position:relative;display:grid;grid-template-columns:minmax(240px,1.25fr) repeat(3,1fr);gap:10px;align-items:stretch;margin-bottom:14px}
@@ -10483,13 +10496,18 @@ _PF_CSS = """
 .pf-fund{display:inline-block;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:4px 10px;margin:0 6px 6px 0;font-size:12px;color:#c9d1d9}
 @media(max-width:768px){
   .pf-hero{grid-template-columns:1fr 1fr}
+  .pf-stat:last-child{grid-column:1/-1}
+  .pf-overview{padding:10px;border-radius:15px;margin:12px 0}
+  .pf-main-tabs-wrap{top:94px;margin-bottom:13px;padding:4px;border-radius:12px}
+  .pf-main-tab{padding:9px 3px;font-size:11px}
+  .pf-main-tab-sub{display:none}
   .pf-showcase{padding:14px 12px;border-radius:15px;margin-bottom:14px}
   .pf-showcase-head{display:block;margin-bottom:12px}
   .pf-viz-tabs{margin-top:11px;width:max-content;max-width:100%;overflow-x:auto}
   .pf-viz-tab{padding:6px 10px}
   .pf-asset-metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
   .pf-asset-metric{padding:8px 7px}.pf-asset-metric .v{font-size:14px}.pf-asset-metric .v span{display:block;margin:2px 0 0}
-  .pf-asset-chart{height:330px}
+  .pf-asset-chart{height:380px}
   .pf-heat-legend{justify-content:center}
   .pf-div-hero{grid-template-columns:1fr 1fr;gap:7px}
   .pf-div-total{grid-column:1/-1;padding:16px}.pf-div-total .v{font-size:29px}
@@ -10545,6 +10563,20 @@ def _pf_price(n) -> str:
         return "—"
     n = float(n)
     return f"{n:,.0f}" if abs(n - round(n)) < 1e-9 else f"{n:,.1f}"
+
+
+def _pf_display_name(name: str | None, asset_class: str) -> str:
+    """狭い可視化内だけで使う短縮名。正式名称はペイロードに残す。"""
+    label = str(name or "")
+    normalized = label.replace("　", " ").lower()
+    if asset_class == "fund":
+        if "全世界株式" in label and (
+            "オール" in label or "all country" in normalized or "オルカン" in label
+        ):
+            return "オルカン"
+        if "ゴールド" in label:
+            return "SBIゴールド"
+    return label
 
 
 def _pf_cls(n) -> str:
@@ -10796,6 +10828,7 @@ def _build_portfolio_page() -> str:
         allocation_items.append({
             "code": item["code"],
             "name": item["name"] or item["code"],
+            "display_name": _pf_display_name(item["name"] or item["code"], item["asset"]),
             "asset": "国内株式" if item["asset"] == "stock" else "投資信託",
             "value": item["value"],
             "weight": round(weight, 2),
@@ -10852,7 +10885,7 @@ def _build_portfolio_page() -> str:
     cls = _pf_cls(total_pl)
     rcls = _pf_cls(realized)
     tot_ret = total_pl + realized
-    parts.append(f'''<div class="pf-hero">
+    parts.append(f'''<section class="pf-overview" aria-label="ポートフォリオ概要"><div class="pf-hero">
   <div class="pf-stat big"><div class="k">総資産</div><div class="v">¥{_pf_yen(total_value)}</div>
     <div class="s">取得原価 ¥{_pf_yen(total_cost)}</div></div>
   <div class="pf-stat"><div class="k">含み損益</div>
@@ -10869,10 +10902,21 @@ def _build_portfolio_page() -> str:
         parts.append(f'<div class="pf-reval">評価額・含み損益は<b>当社の日次終値（{latest_pd}）基準で毎日自動更新</b>。'
                      f'SBI明細の取込は {as_of} 時点（その時の評価額 ¥{_pf_yen(sbi_total)}）。'
                      f'随時CSVを取り込めば取得単価・保有銘柄が最新化されます。</div>')
+    parts.append('</section>')
+
+    parts.append('''<nav class="pf-main-tabs-wrap" aria-label="ポートフォリオ表示">
+  <div class="pf-main-tabs" role="tablist">
+    <button class="pf-main-tab active" type="button" role="tab" aria-selected="true" data-pf-main="overview">資産・配当<span class="pf-main-tab-sub">構成と収入</span></button>
+    <button class="pf-main-tab" type="button" role="tab" aria-selected="false" data-pf-main="analysis">診断・リスク<span class="pf-main-tab-sub">健全性</span></button>
+    <button class="pf-main-tab" type="button" role="tab" aria-selected="false" data-pf-main="holdings">保有銘柄<span class="pf-main-tab-sub">チャート</span></button>
+    <button class="pf-main-tab" type="button" role="tab" aria-selected="false" data-pf-main="trades">取引履歴<span class="pf-main-tab-sub">売買と損益</span></button>
+  </div>
+</nav>
+<div class="pf-main-panel active" data-pf-panel="overview" role="tabpanel">''')
 
     # ── 資産構成 ──
     largest = allocation_items[0] if allocation_items else None
-    largest_name = esc(str(largest["name"])) if largest else "—"
+    largest_name = esc(str(largest["display_name"])) if largest else "—"
     largest_weight = largest["weight"] if largest else 0.0
     parts.append(f'''<section class="pf-showcase" aria-labelledby="pf-asset-title">
   <div class="pf-showcase-head">
@@ -10936,6 +10980,7 @@ def _build_portfolio_page() -> str:
 </section>''')
 
     # ── ヘルスチェック（テクニカル×ファンダの2軸） ──
+    parts.append('</div><div class="pf-main-panel" data-pf-panel="analysis" role="tabpanel" hidden>')
     _HZ = {3: ("撤退検討", "#f85149"), 2: ("注意", "#f0883e"),
            1: ("早期警告", "#d29922"), 0: ("良好", "#3fb950")}
     alerts = [h for h in health if h["severity"] >= 1]
@@ -11010,6 +11055,7 @@ def _build_portfolio_page() -> str:
             'ヒストリカルは現保有比率を過去に当てはめた再現値、β連動（TOPIX−10/−20%）は仮説です。</div></div>')
 
     # ── 保有チャート一覧（銘柄集約・点線=平均取得単価） ──
+    parts.append('</div><div class="pf-main-panel" data-pf-panel="holdings" role="tabpanel" hidden>')
     ch_cards = []
     for code, a in sorted(agg.items(), key=lambda x: -x[1]["value"]):
         avg_cost = (a["cost_amt"] / a["qty"]) if a["qty"] else None
@@ -11041,6 +11087,7 @@ def _build_portfolio_page() -> str:
         parts.append(f'<div class="pf-sec"><div class="pf-note">投信 {" ".join(fchips)}</div></div>')
 
     # ── 取引履歴＆実現損益 ──
+    parts.append('</div><div class="pf-main-panel" data-pf-panel="trades" role="tabpanel" hidden>')
     if trades:
         def _trade_row(t):
             buy = t["side"] == "buy"
@@ -11087,6 +11134,9 @@ def _build_portfolio_page() -> str:
             f'{rb_html}'
             f'<div class="pf-trades">{recent}{rest_html}</div>'
             f'<div class="pf-note">実現損益は移動平均取得原価法での概算。{inc_note}</div></div>')
+    else:
+        parts.append('<div class="pf-sec"><div class="pf-note">取引履歴はまだありません。</div></div>')
+    parts.append('</div>')
 
     parts.append(f"""<script>
 var PF_ASSET_DATA={asset_json};
@@ -11095,13 +11145,13 @@ var PF_DIVIDEND_DATA={dividend_json};
     parts.append("""<script>
 (function(){
   if(typeof Plotly==='undefined')return;
-  var pfState={assetView:'holdings'};
+  var pfState={assetView:'holdings',mainView:'overview'};
   var isMobile=window.innerWidth<768;
   var chartConfig={responsive:true,displayModeBar:false,scrollZoom:false};
   var paper='#0d1117',font='#c9d1d9',muted='#8b949e',grid='#21262d';
   var palette=['#2dd4bf','#58a6ff','#a78bfa','#f59e0b','#f472b6','#fb923c','#3fb950','#d29922','#79c0ff','#8b949e'];
   function yen(v){return '¥'+Math.round(v||0).toLocaleString('ja-JP');}
-  function chartHeight(){return isMobile?330:390;}
+  function chartHeight(){return isMobile?380:420;}
   function donutItems(items,limit){
     var sorted=items.slice().sort(function(a,b){return b.value-a.value;});
     if(sorted.length<=limit)return sorted;
@@ -11134,10 +11184,12 @@ var PF_DIVIDEND_DATA={dividend_json};
     var items=PF_ASSET_DATA.holdings;
     Plotly.react('pf-asset-chart',[{
       type:'treemap',
-      labels:items.map(function(x){return x.name;}),
+      labels:items.map(function(x){return x.display_name||x.name;}),
       parents:items.map(function(){return'';}),
       values:items.map(function(x){return x.value;}),
-      customdata:items.map(function(x){return[x.code,x.pl_pct,x.weight,x.pl,x.asset];}),
+      customdata:items.map(function(x){
+        return[x.code,x.pl_pct,x.weight,x.pl,x.asset,x.name,x.asset==='投資信託'?'投資信託':x.code];
+      }),
       branchvalues:'total',sort:false,
       tiling:{pad:2,squarifyratio:1.15},
       marker:{
@@ -11146,9 +11198,9 @@ var PF_DIVIDEND_DATA={dividend_json};
         cmin:-20,cmax:20,cmid:0,showscale:false,
         line:{color:'#0d1117',width:2},
       },
-      texttemplate:'<b>%{label}</b><br><span style="font-size:10px">%{customdata[0]}　%{customdata[1]:+.1f}%</span>',
-      textfont:{size:isMobile?12:14,color:'#f0f6fc'},
-      hovertemplate:'<b>%{label}</b>（%{customdata[0]}）<br>評価額 ¥%{value:,.0f}<br>構成比 %{customdata[2]:.1f}%<br>含み損益 %{customdata[3]:+,.0f}円（%{customdata[1]:+.1f}%）<extra></extra>',
+      texttemplate:'<b>%{label}</b><br><span style="font-size:10px">%{customdata[6]}　%{customdata[1]:+.1f}%</span>',
+      textfont:{size:isMobile?15:17,color:'#f0f6fc'},
+      hovertemplate:'<b>%{customdata[5]}</b>（%{customdata[6]}）<br>評価額 ¥%{value:,.0f}<br>構成比 %{customdata[2]:.1f}%<br>含み損益 %{customdata[3]:+,.0f}円（%{customdata[1]:+.1f}%）<extra></extra>',
       pathbar:{visible:false},
     }],{
       height:chartHeight(),paper_bgcolor:paper,plot_bgcolor:paper,
@@ -11174,6 +11226,37 @@ var PF_DIVIDEND_DATA={dividend_json};
         x.classList.toggle('active',x.dataset.pfView===pfState.assetView);
       });
       renderAsset();
+    });
+  });
+  function setMainView(view,updateHash){
+    var allowed=['overview','analysis','holdings','trades'];
+    if(allowed.indexOf(view)<0)view='overview';
+    pfState.mainView=view;
+    document.querySelectorAll('.pf-main-tab').forEach(function(button){
+      var active=button.dataset.pfMain===view;
+      button.classList.toggle('active',active);
+      button.setAttribute('aria-selected',active?'true':'false');
+    });
+    document.querySelectorAll('.pf-main-panel').forEach(function(panel){
+      var active=panel.dataset.pfPanel===view;
+      panel.classList.toggle('active',active);
+      panel.hidden=!active;
+    });
+    if(updateHash&&window.history&&window.history.replaceState){
+      window.history.replaceState(null,'','#'+view);
+    }
+    if(view==='overview'){
+      window.setTimeout(function(){
+        ['pf-asset-chart','pf-div-monthly','pf-div-donut'].forEach(function(id){
+          var el=document.getElementById(id);
+          if(el&&el.data)Plotly.Plots.resize(el);
+        });
+      },0);
+    }
+  }
+  document.querySelectorAll('.pf-main-tab').forEach(function(button){
+    button.addEventListener('click',function(){
+      setMainView(button.dataset.pfMain,true);
     });
   });
   function renderDividends(){
@@ -11222,6 +11305,7 @@ var PF_DIVIDEND_DATA={dividend_json};
   }
   renderAsset();
   if(document.getElementById('pf-div-monthly'))renderDividends();
+  setMainView(window.location.hash.slice(1)||'overview',false);
 })();
 </script>""")
 
