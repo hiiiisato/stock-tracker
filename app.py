@@ -10661,7 +10661,9 @@ def api_chart_grid():
 
 @app.route("/api/perf_grid")
 def api_perf_grid():
-    """業績カードビュー用: 指定銘柄の年次業績時系列（EDINET公式）を返す。
+    """業績カードビュー用: 指定銘柄の年次業績時系列を返す。
+    EDINET公式(financials_edinet_annual)を優先し、未取得の銘柄は Yahoo timeseries由来の
+    financials(通期)でフォールバックする（EDINETは日次で順次充填されるため）。
     スクリーニング結果の「業績」ビューが表示中ページの銘柄だけを取りに来る。"""
     codes = [c.strip() for c in request.args.get("codes", "").split(",") if c.strip()]
     if not codes or len(codes) > 200:
@@ -10677,6 +10679,27 @@ def api_perf_grid():
         ORDER BY fa.code, fa.fiscal_year
     """, (*codes,))
     fin_rows = cur.fetchall()
+    _edinet_codes = {r[0] for r in fin_rows}
+
+    # EDINET未取得の銘柄は Yahoo(financials・timeseries由来)でフォールバック
+    _missing = [c for c in codes if c not in _edinet_codes]
+    yahoo_rows: list = []
+    shares_map: dict = {}
+    if _missing:
+        mph = ",".join(["%s"] * len(_missing))
+        # period_end <= 今日 で実績のみ（financialsの'A'には未来期末=会社予想が混在するため除外）
+        cur.execute(f"""
+            SELECT code, period_end, revenue, operating_income, net_income, total_equity
+            FROM financials
+            WHERE code IN ({mph}) AND period_type = 'A' AND revenue IS NOT NULL
+              AND period_end <= CURDATE()
+            ORDER BY code, period_end
+        """, (*_missing,))
+        yahoo_rows = cur.fetchall()
+        cur.execute(f"SELECT code, shares_outstanding FROM stock_fundamentals "
+                    f"WHERE code IN ({mph})", (*_missing,))
+        shares_map = {r[0]: r[1] for r in cur.fetchall()}
+
     cur.execute(f"""SELECT s.code, s.name, sec.name FROM stocks s
                     LEFT JOIN sectors sec ON s.sector_id = sec.id
                     WHERE s.code IN ({ph})""", (*codes,))
@@ -10693,7 +10716,7 @@ def api_perf_grid():
     def _pct(a, b):
         return round(float(a) / float(b) * 100, 1) if a is not None and b else None
 
-    for code, fy, rev, op, net, roe, eps in fin_rows:
+    def _add(code, fy, rev, op, net, roe_pct, eps):
         d = series[code]
         d["years"].append(fy)
         d["revenue"].append(_oku(rev))
@@ -10701,8 +10724,20 @@ def api_perf_grid():
         d["net"].append(_oku(net))
         d["op_margin"].append(_pct(op, rev))
         d["net_margin"].append(_pct(net, rev))
-        d["roe"].append(round(float(roe) * 100, 1) if roe is not None else None)
-        d["eps"].append(float(eps) if eps is not None else None)
+        d["roe"].append(roe_pct)
+        d["eps"].append(eps)
+
+    # EDINET公式（詳細・最大15年）
+    for code, fy, rev, op, net, roe, eps in fin_rows:
+        _add(code, fy, rev, op, net,
+             round(float(roe) * 100, 1) if roe is not None else None,
+             float(eps) if eps is not None else None)
+    # Yahooフォールバック（ROE=純利益÷自己資本、EPS=純利益÷株式数の簡易算出）
+    for code, pe, rev, op, net, te in yahoo_rows:
+        _sh = shares_map.get(code)
+        _add(code, int(str(pe)[:4]), rev, op, net,
+             _pct(net, te),
+             round(float(net) / float(_sh), 1) if net is not None and _sh else None)
 
     result = []
     for code in codes:
