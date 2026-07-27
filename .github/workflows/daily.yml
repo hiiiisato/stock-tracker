@@ -64,6 +64,9 @@ jobs:
             python -c "import daily_report; daily_report.save_report()"
           elif [ "${{ github.event.schedule }}" = "30 11 * * 1-5" ] || [ "${{ inputs.mode }}" = "evening" ]; then
             python daily_run.py --evening
+            # 19:00便のYouTube集約がGemini 503等で失敗していたら救済（解析済み動画から集約のみ再試行）
+            python youtube_insights.py --aggregate-only
+            python -c "import daily_report; daily_report.save_report()"
           else
             python daily_run.py
           fi

@@ -351,8 +351,10 @@ def _verify_codes(cur, stocks: list[dict]) -> list[dict]:
     return out
 
 
-def _gen_with_retry(client, contents, retries: int = 2):
-    """Gemini呼び出し。429(無料枠の分間トークン制限)は毎分リセットされるため70秒待ちで再試行。"""
+def _gen_with_retry(client, contents, retries: int = 3):
+    """Gemini呼び出し。429(無料枠の分間トークン制限)は毎分リセットのため70秒待ち、
+    503/500(モデル一時過負荷=UNAVAILABLE/overloaded)は指数バックオフで再試行する。
+    503を放置すると日次集約が丸ごと欠落するため（実障害あり）、必ずリトライする。"""
     from google.genai import types
     cfg = types.GenerateContentConfig(
         # 動画トークンを約1/4に削減（内容・音声の分析品質には影響小。無料枠のTPM対策）
@@ -362,10 +364,18 @@ def _gen_with_retry(client, contents, retries: int = 2):
         try:
             return client.models.generate_content(model=GEMINI_MODEL, contents=contents, config=cfg)
         except Exception as e:  # noqa: BLE001
-            if "429" in str(e) and attempt < retries:
-                print(f"  レート制限(429)・70秒待って再試行 ({attempt + 1}/{retries})")
-                time.sleep(70)
-                continue
+            es = str(e)
+            if attempt < retries:
+                if "429" in es:
+                    print(f"  レート制限(429)・70秒待って再試行 ({attempt + 1}/{retries})")
+                    time.sleep(70)
+                    continue
+                if any(k in es for k in ("503", "500", "UNAVAILABLE", "overloaded",
+                                          "timeout", "Timeout", "deadline")):
+                    wait = 8 * (attempt + 1)
+                    print(f"  一時エラー({es[:40]})・{wait}秒待って再試行 ({attempt + 1}/{retries})")
+                    time.sleep(wait)
+                    continue
             raise
 
 
@@ -651,11 +661,39 @@ def run_daily(max_analyze: int = DAILY_MAX_ANALYZE, verbose: bool = True) -> dic
     return stats
 
 
+def aggregate_only(day: date | None = None, verbose: bool = True) -> bool:
+    """当日の日次集約が未生成なら、既に解析済みの動画から集約だけ再試行する（救済）。
+    19:00便でGemini 503等により集約が失敗しても、イブニング便(20:30)からこれを呼べば
+    当日分を復旧できる。動画の巡回・解析はやり直さない（解析済みを使うのでコスト最小）。"""
+    if not GEMINI_API_KEY:
+        print("GEMINI_API_KEY未設定のためスキップ")
+        return False
+    day = day or date.today()
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        ensure_tables(cur); conn.commit()
+        cur.execute("SELECT 1 FROM youtube_daily WHERE report_date=%s", (day,))
+        if cur.fetchone():
+            if verbose:
+                print(f"  youtube_daily {day} は生成済み・救済不要")
+            return False
+        ok = aggregate_daily(cur, _gemini(), day)
+        if ok:
+            conn.commit()
+            if verbose:
+                print(f"  youtube_daily {day} を救済生成しました")
+        return ok
+    finally:
+        cur.close(); conn.close()
+
+
 if __name__ == "__main__":
     limit = None
     if "--limit" in sys.argv:
         limit = int(sys.argv[sys.argv.index("--limit") + 1])
-    if "--daily" in sys.argv:
+    if "--aggregate-only" in sys.argv:
+        aggregate_only()
+    elif "--daily" in sys.argv:
         run_daily(max_analyze=limit or DAILY_MAX_ANALYZE)
     else:
         run_weekly(max_analyze=limit or MAX_ANALYZE)
