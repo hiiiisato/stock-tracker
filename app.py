@@ -5541,9 +5541,9 @@ def _build_screen_page() -> str:
         </span>
       </span>
       <select id="sc-perf-metric" class="cg-sort-select" style="display:none">
-        <option value="rev_op">売上高＋営業利益</option>
+        <option value="rev_op">売上高＋利益</option>
         <option value="net">純利益</option>
-        <option value="op_margin">営業利益率</option>
+        <option value="op_margin">利益率</option>
         <option value="net_margin">純利益率</option>
         <option value="roe">ROE</option>
         <option value="eps">EPS</option>
@@ -6698,6 +6698,7 @@ def _build_screen_page() -> str:
   var allScPerfData=null,lastScPerfOrder=[],SC_PERF_METRIC='rev_op';
   function scStockMap(){{var m={{}};stocks.forEach(function(s){{m[s.code]=s;}});return m;}}
   function pfLast(a){{if(!a)return null;for(var i=a.length-1;i>=0;i--){{if(a[i]!=null)return a[i];}}return null;}}
+  function pfLastActual(ser,key){{if(!ser||!ser[key])return null;var f=ser.is_forecast||[];for(var i=ser[key].length-1;i>=0;i--){{if(!f[i]&&ser[key][i]!=null)return ser[key][i];}}return null;}}
   function pfNum(v,unit){{
     if(v==null)return '—';
     if(unit==='億')return Math.round(v).toLocaleString('ja-JP')+'億';
@@ -6731,8 +6732,8 @@ def _build_screen_page() -> str:
         '<div><div class="cg-name">'+escHtml(item.name)+'</div><div class="cg-code-label">'+item.code+(item.sector?' / '+escHtml(item.sector):'')+'</div></div>'+
         '<div style="text-align:right">'+badge+'</div></div>'+plot+
         '<div class="cg-metrics sp-metrics">'+
-          pfStat('売上',ser&&pfLast(ser.revenue),'億')+pfStat('営業益',ser&&pfLast(ser.op),'億')+
-          pfStat('営利率',ser&&pfLast(ser.op_margin),'%')+pfStat('EPS成長',s.eps_growth,'%')+
+          pfStat('売上',pfLastActual(ser,'revenue'),'億')+pfStat((ser&&ser.profit_label)||'利益',pfLastActual(ser,'profit'),'億')+
+          pfStat('利益率',pfLastActual(ser,'profit_margin'),'%')+pfStat('EPS成長',s.eps_growth,'%')+
           pfStat('RSI',s.rsi14,'')+
         '</div>';
       card.querySelector('.cg-card-hd').addEventListener('click',function(){{window.location.href='/stock/'+item.code;}});
@@ -6742,25 +6743,28 @@ def _build_screen_page() -> str:
   }}
   function drawPerfChart(id,ser){{
     if(typeof Plotly==='undefined')return;
-    var yrs=ser.years.map(String),m=SC_PERF_METRIC,traces=[];
+    var isF=ser.is_forecast||[],m=SC_PERF_METRIC,traces=[];
+    var yrs=ser.years.map(function(y,i){{return String(y)+(isF[i]?'(予)':'');}});
+    // 予想の棒は半透明(末尾に59=α)にして実績と区別する
+    function bc(base){{return isF.map(function(f){{return f?base+'59':base;}});}}
     var layout={{paper_bgcolor:'#161b22',plot_bgcolor:'#161b22',height:150,margin:{{l:4,r:42,t:6,b:20}},
       showlegend:false,barmode:'group',bargap:0.25,
       xaxis:{{type:'category',tickfont:{{size:9}},color:'#6e7681',showgrid:false}},
       yaxis:{{tickfont:{{size:9}},color:'#6e7681',gridcolor:'#21262d',side:'right',automargin:true}}}};
     var y2={{overlaying:'y',side:'left',tickfont:{{size:9}},color:'#f0883e',showgrid:false,ticksuffix:'%',zeroline:false}};
     if(m==='rev_op'){{
-      traces.push({{type:'bar',x:yrs,y:ser.revenue,marker:{{color:'#3b82f6'}}}});
-      traces.push({{type:'bar',x:yrs,y:ser.op,marker:{{color:'#3fb950'}}}});
-      traces.push({{type:'scatter',mode:'lines+markers',x:yrs,y:ser.op_margin,yaxis:'y2',line:{{color:'#f0883e',width:2}},marker:{{size:4}}}});
+      traces.push({{type:'bar',x:yrs,y:ser.revenue,marker:{{color:bc('#3b82f6')}}}});
+      traces.push({{type:'bar',x:yrs,y:ser.profit,marker:{{color:bc('#3fb950')}}}});
+      traces.push({{type:'scatter',mode:'lines+markers',x:yrs,y:ser.profit_margin,yaxis:'y2',line:{{color:'#f0883e',width:2}},marker:{{size:4}}}});
       layout.yaxis2=y2;
     }}else if(m==='net'){{
-      traces.push({{type:'bar',x:yrs,y:ser.net,marker:{{color:ser.net.map(function(v){{return v>=0?'#3b82f6':'#f85149';}})}}}});
+      traces.push({{type:'bar',x:yrs,y:ser.net,marker:{{color:isF.map(function(f,i){{var b=ser.net[i]>=0?'#3b82f6':'#f85149';return f?b+'59':b;}})}}}});
       traces.push({{type:'scatter',mode:'lines+markers',x:yrs,y:ser.net_margin,yaxis:'y2',line:{{color:'#f0883e',width:2}},marker:{{size:4}}}});
       layout.yaxis2=y2;
     }}else{{
-      var map={{op_margin:ser.op_margin,net_margin:ser.net_margin,roe:ser.roe,eps:ser.eps}};
+      var map={{op_margin:ser.profit_margin,net_margin:ser.net_margin,roe:ser.roe,eps:ser.eps}};
       var suffix=(m==='eps')?'':'%';
-      traces.push({{type:'bar',x:yrs,y:map[m],marker:{{color:'#3b82f6'}}}});
+      traces.push({{type:'bar',x:yrs,y:map[m],marker:{{color:bc('#3b82f6')}}}});
       layout.yaxis.ticksuffix=suffix;
     }}
     Plotly.react(id,traces,layout,{{responsive:true,displayModeBar:false}});
@@ -10669,9 +10673,10 @@ def api_perf_grid():
     if not codes or len(codes) > 200:
         return _json.dumps({"error": "invalid"}), 400
 
-    from financials_view import annual_performance
+    from financials_view import annual_performance, annual_forecast
     conn = get_conn(); cur = conn.cursor()
     perf = annual_performance(codes, cur=cur)
+    fcmap = annual_forecast(codes, cur=cur)
     ph = ",".join(["%s"] * len(codes))
     cur.execute(f"""SELECT s.code, s.name, sec.name FROM stocks s
                     LEFT JOIN sectors sec ON s.sector_id = sec.id
@@ -10685,18 +10690,38 @@ def api_perf_grid():
     def _pct(a, b):
         return round(float(a) / float(b) * 100, 1) if a is not None and b else None
 
-    def _series(rows):
-        d = {"years": [], "revenue": [], "op": [], "net": [],
-             "op_margin": [], "net_margin": [], "roe": [], "eps": []}
-        for r in rows:
+    _PK = [("operating_income", "営業益"), ("ordinary_income", "経常益"),
+           ("net_income", "純益")]
+
+    def _series(rows, fc):
+        # 本業利益の種別を「営業益→経常益→純益」の優先で決定。銀行/保険/IFRSは営業益が無いので
+        # 経常益や純益になる。実績と予想でバーの意味を揃えるため、会社予想がある場合は
+        # 予想側にも存在する種別を優先する（例: 予想が純益のみの会社は実績も純益で表示）。
+        last = rows[-1]
+        pk, plabel = next(
+            ((k, l) for k, l in _PK
+             if last.get(k) is not None and (not fc or fc.get(k) is not None)),
+            next(((k, l) for k, l in _PK if last.get(k) is not None),
+                 ("net_income", "純益")))
+        d = {"years": [], "revenue": [], "net": [], "net_margin": [], "roe": [], "eps": [],
+             "profit": [], "profit_margin": [], "profit_label": plabel, "is_forecast": []}
+
+        def _push(r, is_fc):
             d["years"].append(r["fiscal_year"])
-            d["revenue"].append(_oku(r["revenue"]))
-            d["op"].append(_oku(r["operating_income"]))
-            d["net"].append(_oku(r["net_income"]))
-            d["op_margin"].append(_pct(r["operating_income"], r["revenue"]))
-            d["net_margin"].append(_pct(r["net_income"], r["revenue"]))
-            d["roe"].append(round(r["roe_official"] * 100, 1) if r["roe_official"] is not None else None)
-            d["eps"].append(round(r["eps"], 1) if r["eps"] is not None else None)
+            d["revenue"].append(_oku(r.get("revenue")))
+            d["net"].append(_oku(r.get("net_income")))
+            d["net_margin"].append(_pct(r.get("net_income"), r.get("revenue")))
+            d["profit"].append(_oku(r.get(pk)))
+            d["profit_margin"].append(_pct(r.get(pk), r.get("revenue")))
+            d["roe"].append(round(r["roe_official"] * 100, 1) if r.get("roe_official") is not None else None)
+            d["eps"].append(round(r["eps"], 1) if r.get("eps") is not None else None)
+            d["is_forecast"].append(is_fc)
+
+        for r in rows:
+            _push(r, False)
+        # 今期通期の会社予想（実績最新より後の期）を (予) として追加
+        if fc and fc.get("fiscal_year") and fc["fiscal_year"] > rows[-1]["fiscal_year"]:
+            _push(fc, True)
         return d
 
     result = []
@@ -10705,7 +10730,7 @@ def api_perf_grid():
         rows = perf.get(code)
         result.append({"code": code, "name": (m.get("name") or code),
                        "sector": (m.get("sector") or ""),
-                       "series": (_series(rows) if rows else None)})
+                       "series": (_series(rows, fcmap.get(code)) if rows else None)})
     return _json.dumps(result, ensure_ascii=False, default=str)
 
 
