@@ -10662,53 +10662,22 @@ def api_chart_grid():
 @app.route("/api/perf_grid")
 def api_perf_grid():
     """業績カードビュー用: 指定銘柄の年次業績時系列を返す。
-    EDINET公式(financials_edinet_annual)を優先し、未取得の銘柄は Yahoo timeseries由来の
-    financials(通期)でフォールバックする（EDINETは日次で順次充填されるため）。
+    業績データは統一アクセス層(financials_view.annual_performance)を通す＝EDINET公式を優先し、
+    未取得の銘柄は Yahoo財務で補完（EDINETバックフィルが進めば自動的に公式・長期へ切替）。
     スクリーニング結果の「業績」ビューが表示中ページの銘柄だけを取りに来る。"""
     codes = [c.strip() for c in request.args.get("codes", "").split(",") if c.strip()]
     if not codes or len(codes) > 200:
         return _json.dumps({"error": "invalid"}), 400
 
+    from financials_view import annual_performance
     conn = get_conn(); cur = conn.cursor()
+    perf = annual_performance(codes, cur=cur)
     ph = ",".join(["%s"] * len(codes))
-    cur.execute(f"""
-        SELECT fa.code, fa.fiscal_year, fa.revenue, fa.operating_income, fa.net_income,
-               fa.roe_official, fa.eps
-        FROM financials_edinet_annual fa
-        WHERE fa.code IN ({ph})
-        ORDER BY fa.code, fa.fiscal_year
-    """, (*codes,))
-    fin_rows = cur.fetchall()
-    _edinet_codes = {r[0] for r in fin_rows}
-
-    # EDINET未取得の銘柄は Yahoo(financials・timeseries由来)でフォールバック
-    _missing = [c for c in codes if c not in _edinet_codes]
-    yahoo_rows: list = []
-    shares_map: dict = {}
-    if _missing:
-        mph = ",".join(["%s"] * len(_missing))
-        # period_end <= 今日 で実績のみ（financialsの'A'には未来期末=会社予想が混在するため除外）
-        cur.execute(f"""
-            SELECT code, period_end, revenue, operating_income, net_income, total_equity
-            FROM financials
-            WHERE code IN ({mph}) AND period_type = 'A' AND revenue IS NOT NULL
-              AND period_end <= CURDATE()
-            ORDER BY code, period_end
-        """, (*_missing,))
-        yahoo_rows = cur.fetchall()
-        cur.execute(f"SELECT code, shares_outstanding FROM stock_fundamentals "
-                    f"WHERE code IN ({mph})", (*_missing,))
-        shares_map = {r[0]: r[1] for r in cur.fetchall()}
-
     cur.execute(f"""SELECT s.code, s.name, sec.name FROM stocks s
                     LEFT JOIN sectors sec ON s.sector_id = sec.id
                     WHERE s.code IN ({ph})""", (*codes,))
     meta = {r[0]: {"name": r[1], "sector": r[2]} for r in cur.fetchall()}
     cur.close(); conn.close()
-
-    from collections import defaultdict as _dd
-    series = _dd(lambda: {"years": [], "revenue": [], "op": [], "net": [],
-                          "op_margin": [], "net_margin": [], "roe": [], "eps": []})
 
     def _oku(v):
         return round(float(v) / 1e8, 1) if v is not None else None
@@ -10716,36 +10685,27 @@ def api_perf_grid():
     def _pct(a, b):
         return round(float(a) / float(b) * 100, 1) if a is not None and b else None
 
-    def _add(code, fy, rev, op, net, roe_pct, eps):
-        d = series[code]
-        d["years"].append(fy)
-        d["revenue"].append(_oku(rev))
-        d["op"].append(_oku(op))
-        d["net"].append(_oku(net))
-        d["op_margin"].append(_pct(op, rev))
-        d["net_margin"].append(_pct(net, rev))
-        d["roe"].append(roe_pct)
-        d["eps"].append(eps)
-
-    # EDINET公式（詳細・最大15年）
-    for code, fy, rev, op, net, roe, eps in fin_rows:
-        _add(code, fy, rev, op, net,
-             round(float(roe) * 100, 1) if roe is not None else None,
-             float(eps) if eps is not None else None)
-    # Yahooフォールバック（ROE=純利益÷自己資本、EPS=純利益÷株式数の簡易算出）
-    for code, pe, rev, op, net, te in yahoo_rows:
-        _sh = shares_map.get(code)
-        _add(code, int(str(pe)[:4]), rev, op, net,
-             _pct(net, te),
-             round(float(net) / float(_sh), 1) if net is not None and _sh else None)
+    def _series(rows):
+        d = {"years": [], "revenue": [], "op": [], "net": [],
+             "op_margin": [], "net_margin": [], "roe": [], "eps": []}
+        for r in rows:
+            d["years"].append(r["fiscal_year"])
+            d["revenue"].append(_oku(r["revenue"]))
+            d["op"].append(_oku(r["operating_income"]))
+            d["net"].append(_oku(r["net_income"]))
+            d["op_margin"].append(_pct(r["operating_income"], r["revenue"]))
+            d["net_margin"].append(_pct(r["net_income"], r["revenue"]))
+            d["roe"].append(round(r["roe_official"] * 100, 1) if r["roe_official"] is not None else None)
+            d["eps"].append(round(r["eps"], 1) if r["eps"] is not None else None)
+        return d
 
     result = []
     for code in codes:
         m = meta.get(code, {})
-        d = series.get(code)
+        rows = perf.get(code)
         result.append({"code": code, "name": (m.get("name") or code),
                        "sector": (m.get("sector") or ""),
-                       "series": (dict(d) if d else None)})
+                       "series": (_series(rows) if rows else None)})
     return _json.dumps(result, ensure_ascii=False, default=str)
 
 

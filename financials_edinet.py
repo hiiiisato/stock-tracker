@@ -1,11 +1,13 @@
 """EDINET(edinetdb.jp)の有価証券報告書XBRLから過去業績を取得する。2つの役割を1コールで担う:
-  (1) financials の欠損(operating_income等)を穴埋め(fill-only・百万丸め)
-  (2) 同じレスポンスで返る豊富な有報データ(損益内訳・CF・資本配分・従業員・ガバナンス等)を
-      financials_edinet_annual にそのまま保存(将来の分析・スクリーニング用・生値精密)
+  (1) financials_edinet_annual に有報の年次業績(最大15年)をそのまま保存。これが全画面の
+      業績時系列の「長期の正」。Yahoo timeseriesは日本株4年が上限のため、長期はEDINETのみ。
+  (2) 同レスポンスの豊富な有報データ(損益内訳・CF・資本配分・従業員・ガバナンス等)も保存し、
+      financials の欠損(operating_income等)を穴埋め(fill-only・百万丸め)する副次効果も持つ。
 
 背景・設計方針:
-- kabutan/Yahoo経由で埋まらなかった過去の営業利益(operating_income)等の欠損を、
-  公式EDINET(有報)ベースの構造化データで埋める。値はLLM非使用のXBRL抽出で信頼できる。
+- **全銘柄に長期業績(有報15年)を行き渡らせる**のが主目的。edinet_code保有率99%なので、
+  未取得銘柄を時価総額の大きい順に少しずつ取得し、業績データの分断(EDINET有=長期／無=Yahoo4年)を
+  根本解消する。値はLLM非使用のXBRL抽出で信頼できる。
 - **穴埋め(fill-only)専用**。既存の値(TDnet短信=権威データ)は絶対に上書きしない。
   config.bulk_upsert(fill_only_cols=...) の `COALESCE(col, VALUES(col))` を使い、NULLの列だけ埋める。
 - EDINETの生値は円単位。TDnet由来の既存データが百万円単位(端数ゼロ)で入っているため、
@@ -17,8 +19,9 @@
 
 メンテナンス(データ最新化)方針:
 - 直近の期はTDnet(financials_tdnet.py)が短信ベースで自動更新するため、本モジュールは
-  「過去の穴埋め」が主目的。daily_run に組込み、op がNULLの銘柄を優先度順(直近欠損DESC)に
-  少しずつ取得する。有報は年1回更新なので、一度取得した銘柄は REFRESH_DAYS 再取得しない。
+  「過去の長期業績整備」が主目的。daily_run に組込み、EDINET年次が未取得の銘柄を時価総額
+  大きい順に少しずつ取得する(無料枠 日100/月3100で全銘柄≒5-6週間)。有報は年1回更新なので、
+  一度取得した銘柄は REFRESH_DAYS 再取得しない。
 
 CLI:
     python financials_edinet.py                 # daily_limit までバックフィル
@@ -294,10 +297,12 @@ def _fetch(edinet_code: str, period: str = "annual") -> list[dict]:
 def _targets(cur, limit: int, only_codes: list[str] | None, force: bool) -> list[tuple[str, str, str]]:
     """取得タスクを (code, edinet_code, kind) で優先度順に返す。kind: 'A'=年次 / 'Q'=四半期。
     優先度:
-      ① 年次のop欠損(穴埋め最優先・直近欠損が新しい順)
-      ② 四半期のop欠損/ゼロ(穴埋め)
-      ③ 年次の未取得銘柄(付随データの全体カバレッジ)
-    各期種の meta で REFRESH_DAYS 以内取得済みは除外。上限まで①→②→③の順で詰める。"""
+      ① 年次の未取得銘柄(全銘柄の長期業績整備＝最優先・時価総額の大きい順)
+      ② 年次のop欠損(既存の穴埋め・直近欠損が新しい順)
+      ③ 四半期のop欠損/ゼロ(穴埋め)
+    Yahooは日本株4年が上限のため、長期(最大15年)業績はEDINETでしか得られない。全銘柄に
+    EDINET年次を行き渡らせることが業績データ分断の根本解消。各期種の meta で REFRESH_DAYS
+    以内取得済みは除外。上限まで①→②→③の順で詰める。"""
     stale = _dt.datetime.now() - _dt.timedelta(days=REFRESH_DAYS)
 
     if only_codes:
@@ -327,7 +332,23 @@ def _targets(cur, limit: int, only_codes: list[str] | None, force: bool) -> list
     fresh = "" if force else "AND (m.last_fetched IS NULL OR m.last_fetched < %s)"
     sp = [] if force else [stale]
 
-    # ① 年次op欠損（穴埋め最優先）
+    # ① 年次未取得（EDINET年次を全銘柄に整備＝最優先）。時価総額の大きい順に埋め、
+    #    主要銘柄ほど早く公式・長期(最大15年)データを持たせる。Yahooは4年上限なので長期は
+    #    EDINETでしか得られず、これが業績データの分断を根本解消する主軸。
+    cur.execute(f"""
+        SELECT s.code, s.edinet_code
+        FROM stocks s
+        LEFT JOIN financials_edinet_meta m ON m.code=s.code
+        LEFT JOIN stock_fundamentals sf ON sf.code=s.code
+        WHERE s.is_active=1 AND s.edinet_code IS NOT NULL AND s.edinet_code<>''
+          AND NOT EXISTS (SELECT 1 FROM financials_edinet_annual e WHERE e.code=s.code)
+          {fresh}
+        ORDER BY sf.market_cap IS NULL, sf.market_cap DESC LIMIT %s
+    """, sp + [limit])
+    if _add([(r[0], r[1]) for r in cur.fetchall()], "A"):
+        return tasks
+
+    # ② 年次op欠損（既存の穴埋め。EDINET年次はあるがfinancialsのopがNULLな銘柄）
     cur.execute(f"""
         SELECT f.code, s.edinet_code, MAX(f.period_end) AS mx
         FROM financials f JOIN stocks s ON s.code=f.code
@@ -339,7 +360,7 @@ def _targets(cur, limit: int, only_codes: list[str] | None, force: bool) -> list
     if _add([(r[0], r[1]) for r in cur.fetchall()], "A"):
         return tasks
 
-    # ② 四半期op欠損（穴埋め）
+    # ③ 四半期op欠損（穴埋め）
     cur.execute(f"""
         SELECT f.code, s.edinet_code, MAX(f.period_end) AS mx
         FROM financials f JOIN stocks s ON s.code=f.code
@@ -348,17 +369,7 @@ def _targets(cur, limit: int, only_codes: list[str] | None, force: bool) -> list
           AND s.edinet_code IS NOT NULL AND s.edinet_code<>'' {fresh}
         GROUP BY f.code, s.edinet_code ORDER BY mx DESC LIMIT %s
     """, sp + [limit])
-    if _add([(r[0], r[1]) for r in cur.fetchall()], "Q"):
-        return tasks
-
-    # ③ 年次の未取得（付随データの全体カバレッジ）
-    cur.execute(f"""
-        SELECT s.code, s.edinet_code
-        FROM stocks s LEFT JOIN financials_edinet_meta m ON m.code=s.code
-        WHERE s.edinet_code IS NOT NULL AND s.edinet_code<>'' {fresh}
-        ORDER BY s.code LIMIT %s
-    """, sp + [limit])
-    _add([(r[0], r[1]) for r in cur.fetchall()], "A")
+    _add([(r[0], r[1]) for r in cur.fetchall()], "Q")
     return tasks
 
 

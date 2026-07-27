@@ -31,7 +31,7 @@ J-Quants 無料枠・EDINET）のみで構成。
 | daily.yml | 平日20:30 イブニング便 | `python daily_run.py --evening` | 夜間の適時開示回収→市況考察→日次レポート確定版を上書き保存→**確定版をLINE通知**→AIファンド意思決定 |
 | misc_batch.yml | ~~毎日23:45~~ **一時停止中** | `python edinet_texts.py --all` | EDINET本文ドリップ（`if:false`。財務キャッチアップ中は枠譲渡） |
 | misc_batch.yml | ~~毎日23:45~~ **一時停止中** | `python edinet_segments.py --all` | 事業セグメント時系列（`if:false`。同上） |
-| misc_batch.yml | 毎日**00:30 JST** | `python financials_edinet.py` | 過去業績(op等)欠損の穴埋め＋有報年次/四半期データ蓄積（EDINET）。**枠リセット(00:00 JST)直後**に走らせフレッシュな100/日を使い切る。自動停止 |
+| misc_batch.yml | 毎日**00:30 JST** | `python financials_edinet.py` | 全銘柄の長期業績整備（有報年次・時価総額大きい順に未取得を取得）＋op欠損穴埋め（EDINET）。**枠リセット(00:00 JST)直後**に走らせフレッシュな100/日を使い切る。自動停止 |
 | misc_batch.yml | 5/15/25日 6:00 | `python fund_watch.py` | ファンド月次レポート取込 |
 | misc_batch.yml | 土曜 7:00 | `python youtube_insights.py` | YouTube株動画の週次巡回（Gemini動画理解→構造化→週次サマリー→/youtube） |
 
@@ -98,8 +98,14 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   ガバナンス・持合い・TSR等（約60項目）を `financials_edinet_annual`（生値精密・EDINET権威データで全更新）へ。
   **年次・四半期の両対応**（`period=annual`/`quarterly_standalone`）。四半期は period_end 列が無いため
   `(会計年度, 四半期, 決算月)` から四半期末日を導出（`_q_end`）して既存Q行に対応。
-  取得タスクの優先度: **①年次op欠損 →②四半期op欠損 →③未取得銘柄の付随データ**。
+  取得タスクの優先度（2026-07改）: **①年次未取得を時価総額大きい順（全銘柄の長期業績整備＝主目的）
+  →②年次op欠損（穴埋め）→③四半期op欠損**。Yahooは日本株4年上限のため長期(15年)はEDINETのみ。
   edinetdb.jp無料枠100件/日の残数ヘッダで自動停止 → 期種別メタ（`financials_edinet_meta`/`_qmeta`）に取得済記録（90日周期で再取得）。
+- `financials_view.py` — **業績時系列の統一アクセス層（2026-07新設）**。`annual_performance(codes)` が
+  「EDINET(有報・最大15年)優先 → 未取得はYahoo財務(最大4年)で補完」を一手に引き受け、全画面
+  （業績カード=`/api/perf_grid`、CAGR等の指標算出=`fundamentals_ext`）がこれを通す。画面ごとにテーブルを
+  直読みしていた従来の分断（同じ業績が画面により見えたり「—」になったり）を構造的に解消。EDINETが
+  揃えば `source` が 'yahoo'→'edinet' に自動で切り替わる。
   **枠集中のため edinet_texts/segments は一時停止中**（misc_batch.yml の `if: false`。キャッチアップ後に再開）
 - `earnings_calendar_jpx.py` — JPX公式「決算発表予定日」Excelを取込 → `earnings_schedule`（決算跨ぎ管理）
 - `fundamentals.py` — PER/PBR/時価総額等 → `stock_fundamentals`

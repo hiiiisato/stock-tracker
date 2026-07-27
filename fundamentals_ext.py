@@ -6,9 +6,10 @@
   売上/純利益CAGR5年 ・ 連続増収/増益/増配年数 ・ ROE/ROA/営業利益率の5年平均 ・
   最高益フラグ ・ ROE 3年差(pt) ・ ROEデュポン分解の主導因子(利益率/回転率/レバレッジ)
 
-【データ源】EDINET公式年次 financials_edinet_annual（XBRL・充足率99%・最大15年）を正とする。
-  Yahoo由来の financials は年で不整合が出るため使わない（品質優先）。
-  EDINET未取得の銘柄は metrics=NULL（financials_edinet.py の日次バックフィルで順次充填される）。
+【データ源】統一アクセス層 financials_view.annual_performance（EDINET公式=最大15年を正とし、
+  未取得の銘柄は Yahoo財務=最大4年で暫定補完）を通す。全画面(業績カード等)と同じ源を見るため
+  分断が起きない。Yahoo補完銘柄は年数が短いぶん長期指標(CAGR5年等)は取れる範囲で算出され、
+  EDINETバックフィル(financials_edinet.py)が進めば自動的に長期・公式データへ切り替わる。
 
 【継続更新】daily_run.py から日次実行。決算が出れば翌日以降に自動で反映される。
 【保守】計算は本ファイルに集約。列を足すときは COLS と _compute() だけ触ればよい。
@@ -155,29 +156,18 @@ def _compute(rows: list[dict]) -> dict | None:
 
 # ─── 実行 ────────────────────────────────────────────────────────────────
 def run(codes: list[str] | None = None, verbose: bool = True) -> int:
+    from financials_view import annual_performance
     conn = get_conn(); cur = conn.cursor()
     ensure_table(cur); conn.commit()
 
-    where = ""
-    params: tuple = ()
+    # 統一アクセス層で業績時系列を取得（EDINET優先＋Yahoo補完）。EDINET未取得の銘柄も
+    # Yahoo(最大4年)で暫定的に指標を算出でき、EDINETバックフィルが進めば自動的に長期・公式へ。
     if codes:
-        ph = ",".join(["%s"] * len(codes))
-        where = f"WHERE code IN ({ph})"
-        params = tuple(codes)
-    cur.execute(f"""
-        SELECT code, fiscal_year, revenue, operating_income, net_income,
-               total_assets, net_assets, roe_official, dividend_per_share
-        FROM financials_edinet_annual {where}
-        ORDER BY code, fiscal_year
-    """, params)
-
-    by_code: dict[str, list[dict]] = {}
-    for r in cur.fetchall():
-        by_code.setdefault(r[0], []).append({
-            "fiscal_year": r[1], "revenue": _f(r[2]), "operating_income": _f(r[3]),
-            "net_income": _f(r[4]), "total_assets": _f(r[5]), "net_assets": _f(r[6]),
-            "roe_official": _f(r[7]), "dividend_per_share": _f(r[8]),
-        })
+        target = list(codes)
+    else:
+        cur.execute("SELECT code FROM stocks WHERE is_active=1 AND market_id IN (2,3,4)")
+        target = [r[0] for r in cur.fetchall()]
+    by_code = annual_performance(target, cur=cur)
 
     now = datetime.now()
     data = []
