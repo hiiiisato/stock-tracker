@@ -33,7 +33,8 @@ J-Quants 無料枠・EDINET）のみで構成。
 | misc_batch.yml | ~~毎日23:45~~ **一時停止中** | `python edinet_segments.py --all` | 事業セグメント時系列（`if:false`。同上） |
 | misc_batch.yml | 毎日**00:30 JST** | `python financials_edinet.py` | 全銘柄の長期業績整備（有報年次・時価総額大きい順に未取得を取得）＋op欠損穴埋め（EDINET）。**枠リセット(00:00 JST)直後**に走らせフレッシュな100/日を使い切る。自動停止 |
 | misc_batch.yml | 5/15/25日 6:00 | `python fund_watch.py` | ファンド月次レポート取込 |
-| misc_batch.yml | 土曜 7:00 | `python youtube_insights.py` | YouTube株動画の週次巡回（Gemini動画理解→構造化→週次サマリー→/youtube） |
+| misc_batch.yml | 日曜 22:00 | `python youtube_insights.py` | YouTube株動画の週次巡回（Gemini動画理解→構造化→週次サマリー→/youtube→LINE） |
+| misc_batch.yml | 月曜 5:30 | `python youtube_insights.py --weekly-recovery` | 週報の生成/LINE送信漏れを自動救済。`notified_at` により二重通知なし |
 
 **GitHub Actions cron の注意**: 発火は数十分〜数時間遅延することがある（実測で2時間超）。
 このため「メイン+リトライ」の2本立て+`timeout-minutes: 60`+イブニング便で確定、という設計にしている。
@@ -139,7 +140,9 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
   (マーケット/テーマ/言及銘柄+強弱/相場観) → 銘柄コードはstocksテーブルで検証 →
   週次サマリー(共通見解・複数言及銘柄・注目テーマ)を横断生成。
   → `youtube_channels`/`youtube_videos`/`youtube_weekly`。/youtube ページで表示。
-  土曜7時JST週次(misc_batch.yml)。ライブ配信等はタイトルで除外。1回の分析上限 MAX_ANALYZE=10本
+  日曜22時JST週次(misc_batch.yml)。ライブ配信等はタイトルで除外。1回の分析上限 MAX_ANALYZE=12本。
+  週次集約はJSON MIME固定＋形式不正時の再生成、LINEは一時エラー再試行。
+  生成または送信失敗は非ゼロ終了でActionsに可視化し、月曜5:30に自動救済する。
 - `fund_watch.py` — ファンド月次レポートPDF取込＋Gemini構造化抽出 → `fund_master`/`fund_reports`。FUND_DEFSの `url_mode` (template/scrape/direct) と `page_range` で各運用会社の方式差を吸収
 - `disclosures.py` — TDnet適時開示の蓄積・分析 → `disclosures`/`market_summary`。タイトルからカテゴリ・ポジネガをルール分類（APIコストゼロ）。好材料（上方修正・増配等）はPDF本文をGeminiで読み修正理由＋関連テーマを抽出、テーマ経由で関連銘柄をサジェスト。業種・テーマ・開示動向から日次市況コメントも生成。**TDnetは約1ヶ月で消えるため毎日蓄積が必須**
 

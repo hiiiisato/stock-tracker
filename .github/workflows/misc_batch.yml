@@ -10,12 +10,13 @@ on:
                                 #   テーマ同期と時間帯を分け、みんかぶへの同時多発アクセス(403)を回避
     - cron: '0 21 4,14,24 * *'  # 5,15,25日 6:00 JST: ファンド月次レポート取込
     - cron: '0 13 * * 0'        # 日曜 22:00 JST: YouTube株動画の週次巡回(youtube_insights)
+    - cron: '30 20 * * 0'       # 月曜 05:30 JST: 週報の生成/送信漏れ救済（二重送信防止付き）
   workflow_dispatch:
     inputs:
       job:
         description: '実行ジョブ'
         type: choice
-        options: [edinet_texts, fund_watch, youtube, consensus]
+        options: [edinet_texts, fund_watch, youtube, youtube_recovery, consensus]
         default: edinet_texts
 
 jobs:
@@ -106,8 +107,14 @@ jobs:
         if: ${{ github.event.schedule == '30 15 * * *' || inputs.job == 'edinet_texts' }}
         run: python company_profile.py
 
-      # YouTube株動画の週次巡回（日曜23時JST）。Gemini動画理解で各動画を構造化し、
+      # YouTube株動画の週次巡回（日曜22時JST）。Gemini動画理解で各動画を構造化し、
       # 全チャンネルを集約した1本の週次レポートを生成 → /youtube で表示・LINE通知
       - name: YouTube株動画 週次巡回
         if: ${{ github.event.schedule == '0 13 * * 0' || inputs.job == 'youtube' }}
         run: python youtube_insights.py
+
+      # 本便のGemini集約やLINE APIが一時失敗しても、解析済み動画から再集約。
+      # youtube_weekly.notified_at を見るため、本便成功時は何も送らず安全に終了する。
+      - name: YouTube週報 生成・送信漏れ救済
+        if: ${{ github.event.schedule == '30 20 * * 0' || inputs.job == 'youtube_recovery' }}
+        run: python youtube_insights.py --weekly-recovery

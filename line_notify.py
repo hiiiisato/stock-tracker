@@ -24,6 +24,7 @@ LINE Notify は2025年3月に廃止されたため、Messaging API の push メ�
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -62,14 +63,34 @@ def push_text(text: str, *, label: str = "LINE") -> bool:
         },
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            print(f"  [{label}] 送信完了 HTTP {resp.status}")
-            return True
-    except urllib.error.HTTPError as e:
-        body = e.read().decode(errors="replace")
-        print(f"  [{label}] HTTP エラー {e.code}: {body}")
-        return False
-    except Exception as e:
-        print(f"  [{label}] エラー: {e}")
-        return False
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                print(f"  [{label}] 送信完了 HTTP {resp.status}")
+                return True
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            transient = e.code == 429 or e.code >= 500
+            if transient and attempt < 2:
+                retry_after = e.headers.get("Retry-After", "")
+                wait = int(retry_after) if retry_after.isdigit() else 5 * (2 ** attempt)
+                wait = min(wait, 60)
+                print(f"  [{label}] HTTP {e.code}・{wait}秒後に再試行 "
+                      f"({attempt + 1}/2)")
+                time.sleep(wait)
+                continue
+            print(f"  [{label}] HTTP エラー {e.code}: {body}")
+            return False
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt < 2:
+                wait = 5 * (2 ** attempt)
+                print(f"  [{label}] 通信エラー・{wait}秒後に再試行 "
+                      f"({attempt + 1}/2): {e}")
+                time.sleep(wait)
+                continue
+            print(f"  [{label}] 通信エラー: {e}")
+            return False
+        except Exception as e:  # noqa: BLE001
+            print(f"  [{label}] エラー: {e}")
+            return False
+    return False

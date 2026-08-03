@@ -214,6 +214,9 @@ def ensure_tables(cur) -> None:
             themes_json TEXT,             -- [{theme, note}]
             stocks_json TEXT,             -- [{name, code, note}]
             report_md   TEXT,             -- 週次レポート本文(Markdown・全動画を集約した1本のレポート)
+            notified_at DATETIME,          -- LINE送信成功時刻（二重送信防止）
+            notify_attempts INT NOT NULL DEFAULT 0,
+            notify_error VARCHAR(500),
             created_at  DATETIME
         )
     """)
@@ -232,7 +235,10 @@ def ensure_tables(cur) -> None:
     """)
     # 旧スキーマからの移行（列が無ければ追加）
     for tbl, ddl in [("youtube_videos", "ADD COLUMN notes_json TEXT"),
-                     ("youtube_weekly", "ADD COLUMN report_md TEXT")]:
+                     ("youtube_weekly", "ADD COLUMN report_md TEXT"),
+                     ("youtube_weekly", "ADD COLUMN notified_at DATETIME"),
+                     ("youtube_weekly", "ADD COLUMN notify_attempts INT NOT NULL DEFAULT 0"),
+                     ("youtube_weekly", "ADD COLUMN notify_error VARCHAR(500)")]:
         try:
             cur.execute(f"ALTER TABLE {tbl} {ddl}")
         except Exception:  # noqa: BLE001  既に存在
@@ -351,15 +357,20 @@ def _verify_codes(cur, stocks: list[dict]) -> list[dict]:
     return out
 
 
-def _gen_with_retry(client, contents, retries: int = 3):
+def _gen_with_retry(client, contents, retries: int = 3, *, json_mode: bool = False):
     """Gemini呼び出し。429(無料枠の分間トークン制限)は毎分リセットのため70秒待ち、
     503/500(モデル一時過負荷=UNAVAILABLE/overloaded)は指数バックオフで再試行する。
     503を放置すると日次集約が丸ごと欠落するため（実障害あり）、必ずリトライする。"""
     from google.genai import types
-    cfg = types.GenerateContentConfig(
+    cfg_kwargs = {
         # 動画トークンを約1/4に削減（内容・音声の分析品質には影響小。無料枠のTPM対策）
-        media_resolution=types.MediaResolution.MEDIA_RESOLUTION_LOW,
-    )
+        "media_resolution": types.MediaResolution.MEDIA_RESOLUTION_LOW,
+    }
+    if json_mode:
+        # 集約はMarkdownをJSON文字列に入れるため崩れやすい。MIMEを固定して
+        # 「正常応答だがJSONとして解釈不能」の無言欠落を防ぐ。
+        cfg_kwargs["response_mime_type"] = "application/json"
+    cfg = types.GenerateContentConfig(**cfg_kwargs)
     for attempt in range(retries + 1):
         try:
             return client.models.generate_content(model=GEMINI_MODEL, contents=contents, config=cfg)
@@ -377,6 +388,25 @@ def _gen_with_retry(client, contents, retries: int = 3):
                     time.sleep(wait)
                     continue
             raise
+
+
+def _generate_json_with_retry(client, contents, *, label: str,
+                              parse_retries: int = 2) -> dict | None:
+    """Gemini応答をJSONとして検証し、形式不正も再試行対象にする。
+
+    API上の429/503は `_gen_with_retry` が扱うが、従来はHTTP 200で壊れたJSONが
+    返るとそのままFalseで終了し、GitHub Actionsが成功扱いになっていた。
+    """
+    for attempt in range(parse_retries + 1):
+        resp = _gen_with_retry(client, contents, json_mode=True)
+        parsed = _parse_json(resp.text)
+        if parsed:
+            return parsed
+        print(f"  [{label}] JSON形式不正・再生成 "
+              f"({attempt + 1}/{parse_retries + 1}, {len(resp.text or '')}文字)")
+        if attempt < parse_retries:
+            time.sleep(5 * (attempt + 1))
+    return None
 
 
 def analyze_video(cur, client, video: dict) -> bool:
@@ -445,12 +475,12 @@ def aggregate_weekly(cur, client, week_end: date) -> bool:
     prompt = WEEKLY_PROMPT.replace("{n}", str(len(digest))).replace(
         "{videos}", json.dumps(digest, ensure_ascii=False))
     try:
-        resp = _gen_with_retry(client, prompt)
-        d = _parse_json(resp.text)
+        d = _generate_json_with_retry(client, prompt, label="週次集約")
     except Exception as e:  # noqa: BLE001
         print(f"  週次集約失敗: {str(e)[:80]}")
         return False
     if not d:
+        print("  週次集約失敗: JSON形式不正が解消しませんでした")
         return False
     hot_stocks = _verify_codes(cur, [
         {"name": s.get("name"), "code": s.get("code"), "view": "", "reason": s.get("note")}
@@ -497,12 +527,12 @@ def aggregate_daily(cur, client, day: date) -> bool:
     prompt = DAILY_PROMPT.replace("{n}", str(len(digest))).replace(
         "{videos}", json.dumps(digest, ensure_ascii=False))
     try:
-        resp = _gen_with_retry(client, prompt)
-        d = _parse_json(resp.text)
+        d = _generate_json_with_retry(client, prompt, label="日次集約")
     except Exception as e:  # noqa: BLE001
         print(f"  日次集約失敗: {str(e)[:80]}")
         return False
     if not d:
+        print("  日次集約失敗: JSON形式不正が解消しませんでした")
         return False
     hot_stocks = _verify_codes(cur, [
         {"name": s.get("name"), "code": s.get("code"), "view": "", "reason": s.get("note")}
@@ -528,19 +558,22 @@ def aggregate_daily(cur, client, day: date) -> bool:
 
 def notify_weekly(cur, week_end: date) -> bool:
     """週次サマリーをLINEに通知（日次レポートと同じトランスポート・要点＋リンク）。
-    LINE未設定なら送信スキップ（例外を出さない）。"""
+    送信成功時刻をDBへ保存し、救済ジョブの二重送信を防ぐ。"""
     from line_notify import is_configured, push_text
     if not is_configured():
         print("  [YouTube週報LINE] LINE未設定のためスキップ")
         return False
     cur.execute("""
-        SELECT n_videos, summary, consensus, themes_json, stocks_json
+        SELECT n_videos, summary, consensus, themes_json, stocks_json, notified_at
         FROM youtube_weekly WHERE week_end = %s
     """, (week_end,))
     row = cur.fetchone()
     if not row:
         return False
-    n_videos, summary, consensus, tj, sj = row
+    n_videos, summary, consensus, tj, sj, notified_at = row
+    if notified_at:
+        print(f"  [YouTube週報LINE] {week_end} は送信済み ({notified_at})")
+        return True
     themes = [t.get("theme") for t in json.loads(tj or "[]") if t.get("theme")][:5]
     stocks = [s.get("name") for s in json.loads(sj or "[]") if s.get("name")][:6]
     from daily_report import _report_base_url
@@ -553,7 +586,15 @@ def notify_weekly(cur, week_end: date) -> bool:
     if stocks:
         lines += [f"👀 銘柄: {'、'.join(stocks)}"]
     lines += ["", f"▶ 詳細\n{_report_base_url()}/youtube"]
-    return push_text("\n".join(lines), label="YouTube週報LINE")
+    sent = push_text("\n".join(lines), label="YouTube週報LINE")
+    cur.execute("""
+        UPDATE youtube_weekly
+        SET notify_attempts=COALESCE(notify_attempts, 0)+1,
+            notified_at=CASE WHEN %s THEN NOW() ELSE notified_at END,
+            notify_error=CASE WHEN %s THEN NULL ELSE 'LINE Messaging API push failed' END
+        WHERE week_end=%s
+    """, (sent, sent, week_end))
+    return sent
 
 
 # ═══════════════════════════════════════════════════════════
@@ -613,7 +654,8 @@ def _crawl_and_analyze(cur, conn, client, channels: list[dict], lookback_days: i
 def run_weekly(max_analyze: int = MAX_ANALYZE, verbose: bool = True) -> dict:
     if not GEMINI_API_KEY:
         print("GEMINI_API_KEY未設定のためスキップ")
-        return {"videos_found": 0, "analyzed": 0, "failed": 0, "skipped": 0}
+        return {"videos_found": 0, "analyzed": 0, "failed": 0, "skipped": 0,
+                "report_generated": False, "notified": False}
     conn = get_conn()
     cur = conn.cursor()
     ensure_tables(cur)
@@ -621,20 +663,69 @@ def run_weekly(max_analyze: int = MAX_ANALYZE, verbose: bool = True) -> dict:
     client = _gemini()
     stats = _crawl_and_analyze(cur, conn, client, CHANNELS, LOOKBACK_DAYS,
                                MAX_PER_CHANNEL, max_analyze, verbose)
-    # 週次集約 → LINE通知（集約成功時のみ）
-    if aggregate_weekly(cur, client, date.today()):
+    # 週次集約 → LINE通知。どちらかが失敗した場合は呼び出し元が
+    # 非ゼロ終了にし、GitHub Actionsの緑成功への誤検知を防ぐ。
+    report_generated = aggregate_weekly(cur, client, date.today())
+    notified = False
+    if report_generated:
         conn.commit()
         try:
-            notify_weekly(cur, date.today())
-        except Exception as e:  # noqa: BLE001  通知失敗で本体を落とさない
+            notified = notify_weekly(cur, date.today())
+        except Exception as e:  # noqa: BLE001
             print(f"  [YouTube週報LINE] 送信失敗: {str(e)[:60]}")
+    stats["report_generated"] = report_generated
+    stats["notified"] = notified
     conn.commit()
     cur.close()
     conn.close()
     if verbose:
         print(f"完了: 発見{stats['videos_found']} 分析{stats['analyzed']}"
-              f" 失敗{stats['failed']} 除外{stats['skipped']}")
+              f" 失敗{stats['failed']} 除外{stats['skipped']}"
+              f" 週報={'生成' if report_generated else '失敗'}"
+              f" LINE={'送信' if notified else '未送信'}")
     return stats
+
+
+def _latest_sunday(day: date) -> date:
+    """指定日以前の直近日曜日（指定日が日曜なら当日）。"""
+    return day - timedelta(days=(day.weekday() + 1) % 7)
+
+
+def recover_weekly(week_end: date | None = None, verbose: bool = True) -> bool:
+    """直近週報の生成またはLINE送信が欠けている場合だけ救済する。
+
+    動画の巡回・個別分析はやり直さず、DBの解析済み素材を再集約する。
+    `notified_at` があれば何も送らないため、毎週実行しても二重通知しない。
+    """
+    if not GEMINI_API_KEY:
+        print("GEMINI_API_KEY未設定のため週報救済失敗")
+        return False
+    week_end = week_end or _latest_sunday(date.today())
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        ensure_tables(cur)
+        conn.commit()
+        cur.execute("SELECT 1 FROM youtube_weekly WHERE week_end=%s", (week_end,))
+        report_generated = bool(cur.fetchone())
+        if report_generated:
+            if verbose:
+                print(f"  youtube_weekly {week_end} は生成済み")
+        else:
+            report_generated = aggregate_weekly(cur, _gemini(), week_end)
+            if report_generated:
+                conn.commit()
+                if verbose:
+                    print(f"  youtube_weekly {week_end} を救済生成しました")
+        notified = notify_weekly(cur, week_end) if report_generated else False
+        conn.commit()
+        if verbose:
+            print(f"  週報救済: 週報={'OK' if report_generated else 'NG'} / "
+                  f"LINE={'OK' if notified else 'NG'}")
+        return report_generated and notified
+    finally:
+        cur.close()
+        conn.close()
 
 
 def run_daily(max_analyze: int = DAILY_MAX_ANALYZE, verbose: bool = True) -> dict:
@@ -691,9 +782,14 @@ if __name__ == "__main__":
     limit = None
     if "--limit" in sys.argv:
         limit = int(sys.argv[sys.argv.index("--limit") + 1])
-    if "--aggregate-only" in sys.argv:
+    if "--weekly-recovery" in sys.argv:
+        if not recover_weekly():
+            sys.exit(1)
+    elif "--aggregate-only" in sys.argv:
         aggregate_only()
     elif "--daily" in sys.argv:
         run_daily(max_analyze=limit or DAILY_MAX_ANALYZE)
     else:
-        run_weekly(max_analyze=limit or MAX_ANALYZE)
+        result = run_weekly(max_analyze=limit or MAX_ANALYZE)
+        if not result.get("report_generated") or not result.get("notified"):
+            sys.exit(1)
