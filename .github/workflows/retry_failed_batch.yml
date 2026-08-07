@@ -1,0 +1,40 @@
+name: 失敗バッチの自動リトライ
+
+# GitHub Actions 側の都合でジョブが1ステップも実行されずに落ちることがある
+#   例: "The job was not acquired by Runner of type hosted even after multiple attempts"
+#       （ホストランナーの割当に失敗 → 待機のままキャンセル。2026-08-07 00:30 JST便で発生）
+# この場合ログすら残らず、その日の巡回枠（EDINET 100件/日・会社概要 150件/日・
+# コンセンサス 140件/日 等）が丸ごと失われる。cron を増やす方式は正常日にも二重実行して
+# みんかぶ/IFIS へ余計なアクセスをかけるため、**失敗した時だけ**再実行する方式にする。
+#
+# gh run rerun --failed は元のイベントペイロード（github.event.schedule）を保持して
+# 再実行するため、どの便が落ちたかに応じた正しいステップだけが走る。
+on:
+  workflow_run:
+    workflows:
+      - その他の定期バッチ（EDINETテキスト・ファンドウォッチ）
+      - 日次市場データ更新
+    types: [completed]
+
+permissions:
+  actions: write        # gh run rerun（rerun-failed-jobs API）に必要
+  contents: read
+
+jobs:
+  rerun:
+    # run_attempt == 1 の時だけ再実行する。再実行(attempt 2)がまた失敗しても
+    # ここは発火しないので、無限リトライにはならない（1回だけ救済）。
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'failure'
+          && github.event.workflow_run.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 失敗ジョブを再実行
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID:   ${{ github.event.workflow_run.id }}
+          RUN_NAME: ${{ github.event.workflow_run.name }}
+        run: |
+          echo "リトライ対象: $RUN_NAME (run_id=$RUN_ID)"
+          gh run rerun "$RUN_ID" --failed --repo "$GITHUB_REPOSITORY"
