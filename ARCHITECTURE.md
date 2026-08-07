@@ -12,7 +12,7 @@ J-Quants 無料枠・EDINET）のみで構成。
 [Yahoo/kabutan/J-Quants/EDINET/ファンド各社PDF]
         │  (cronバッチが毎日/毎週/毎月取得)
         ▼
-   TiDB Cloud (stock_tracker DB, 29テーブル)
+   TiDB Cloud (stock_tracker DB)
         │
         ▼
    app.py (Flask・単一ファイル) ── Render.com Web Service
@@ -35,18 +35,27 @@ J-Quants 無料枠・EDINET）のみで構成。
 | misc_batch.yml | 5/15/25日 6:00 | `python fund_watch.py` | ファンド月次レポート取込 |
 | misc_batch.yml | 日曜 22:00 | `python youtube_insights.py` | YouTube株動画の週次巡回（Gemini動画理解→構造化→週次サマリー→/youtube→LINE） |
 | misc_batch.yml | 月曜 5:30 | `python youtube_insights.py --weekly-recovery` | 週報の生成/LINE送信漏れを自動救済。`notified_at` により二重通知なし |
+| retry_failed_batch.yml | （上記2つの失敗時に自動発火） | `gh run rerun --failed` | **ランナー割当失敗などでジョブが1ステップも走らずに落ちた時の救済**。`run_attempt==1` の時だけ再実行するので無限リトライにならない |
 
 **GitHub Actions cron の注意**: 発火は数十分〜数時間遅延することがある（実測で2時間超）。
 このため「メイン+リトライ」の2本立て+`timeout-minutes: 60`+イブニング便で確定、という設計にしている。
 daily_run.py には (a)重複実行ガード（当日daily_report完了済みならスキップ）と
 (b)休場日ガード（当日価格が0件なら後段をスキップ）が入っている。
 
+**ジョブがそもそも起動しない失敗**: `The job was not acquired by Runner of type hosted even after
+multiple attempts`（GitHub側のホストランナー割当失敗）は、ログすら残らず全ジョブが cancelled になる。
+misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日・コンセンサス 140件/日）なので
+1回落ちるとその日の枠が丸ごと消える。cron を増やす方式は正常日にも二重実行してみんかぶ/IFISへ
+余計なアクセスをかけるため、**失敗時のみ発火する `retry_failed_batch.yml`** で救済する。
+`gh run rerun --failed` は元のイベントペイロード（`github.event.schedule`）を保持するため、
+落ちた便に対応する正しいステップだけが再実行される。
+
 ## 日次バッチのパイプライン順序（daily_run.py）
 
 依存関係があるので順序を崩さないこと:
 
 1. 主要指数更新 (`market_indices`)
-2. 銘柄マスタ・取引カレンダー (`master`)
+2. 銘柄マスタ・取引カレンダー (`master`) → 直後に**銘柄名の名寄せインデックス** (`stock_aliases`) を張り直す
 3. 価格取得 Yahoo差分 (`prices_yahoo`) — adj_close含む
 4. **分割対応** (`splits`) — J-Quants公式AdjFactor/AdjCが正。価格急変ヒューリスティックは誤判定するため廃止済み
 5. 【月曜のみ】配当 (`dividends`)・財務 (`financials`)・ファンダ (`fundamentals`)・TDnet短信の広域取込 (`financials_tdnet` 過去30日)
@@ -72,6 +81,16 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 
 ### データ取得
 - `master.py` — 銘柄マスタ・取引カレンダー（J-Quants）
+- `stock_aliases.py` — **銘柄名の名寄せインデックス（2026-07新設）**。マスタの正式表記は英字社名が
+  全角（例: 7735=ＳＣＲＥＥＮホールディングス）だが、AI要約・ニュース・YouTube書き起こしは
+  読み（スクリーンホールディングス）や略称（スクリーンHD）で書くため、字面一致では社名→コードが
+  解決できずリンクが張られなかった。**EDINETコードリスト（金融庁・公式ZIP／キー不要）の
+  「提出者名（ヨミ）」を一次ソース**に、正式名・英語名も加えて `stock_aliases` を構築する。
+  正規化: NFKC（全角英数→半角）→大文字化→法人格除去→記号・長音除去。tier1=正式名/読み、
+  tier2=接尾辞（ホールディングス/グループ等）省略形。**引く側は一意に定まる時だけ採用**し
+  「フジ」等の曖昧な別名では誤リンクさせない。更新は**追記型**（社名変更後も旧社名で引ける。
+  正規化ルールを変えた時のみ `python stock_aliases.py --rebuild`）。
+  利用側: `youtube_insights._resolve_code` / `/api/search`
 - `prices_yahoo.py` — 日次価格（Yahoo Finance chart API・並列・差分）
 - `splits.py` — 株式分割・併合。CRSP等の業界標準（生値＋調整係数分離・イベントは公式コーポレートアクション由来）に倣った多層防御:
   1. **J-Quants公式**(AdjFactor/AdjC)が正（12週遅延）。AdjC採用日には係数を重ねない
@@ -137,12 +156,18 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 - `youtube_insights.py` — **YouTube株動画の週次巡回（2026-07新設）**。CHANNELS（ハンドル定義）→
   channel_id解決(HTMLのexternalId・DBキャッシュ) → 公式RSS(キー不要)で直近8日の新着 →
   **GeminiのYouTube動画理解**(URL直接渡し・無料枠の動画処理8h/日内)で各動画を構造化
-  (マーケット/テーマ/言及銘柄+強弱/相場観) → 銘柄コードはstocksテーブルで検証 →
+  (マーケット/テーマ/言及銘柄+強弱/相場観) → 銘柄コードを `_resolve_code` で厳格解決 →
   週次サマリー(共通見解・複数言及銘柄・注目テーマ)を横断生成。
   → `youtube_channels`/`youtube_videos`/`youtube_weekly`。/youtube ページで表示。
   日曜22時JST週次(misc_batch.yml)。ライブ配信等はタイトルで除外。1回の分析上限 MAX_ANALYZE=12本。
   週次集約はJSON MIME固定＋形式不正時の再生成、LINEは一時エラー再試行。
   生成または送信失敗は非ゼロ終了でActionsに可視化し、月曜5:30に自動救済する。
+  - **`_resolve_code` の解決順**: ①名寄せ(`stock_aliases`。読み・略称に対応) →②Geminiのコードを
+    正規化比較で検証 →③同じ集約対象の動画で解決済みのコード（集約AIのコード欠落を補う）
+    →④社名の完全/前方一致 →⑤空（リンクなし）。**一意に定まらない時は必ず空**にして誤リンクを防ぐ
+  - `python youtube_insights.py --reresolve` — 保存済み要約の社名→コードを現行ロジックで解き直す
+    （Gemini不要）。名寄せ改善やマスタ社名変更を過去分へ反映する保守用。**解決済みコードを空に戻さない**
+    （旧社名でのみ解けていたリンクを落とさないため）
 - `fund_watch.py` — ファンド月次レポートPDF取込＋Gemini構造化抽出 → `fund_master`/`fund_reports`。FUND_DEFSの `url_mode` (template/scrape/direct) と `page_range` で各運用会社の方式差を吸収
 - `disclosures.py` — TDnet適時開示の蓄積・分析 → `disclosures`/`market_summary`。タイトルからカテゴリ・ポジネガをルール分類（APIコストゼロ）。好材料（上方修正・増配等）はPDF本文をGeminiで読み修正理由＋関連テーマを抽出、テーマ経由で関連銘柄をサジェスト。業種・テーマ・開示動向から日次市況コメントも生成。**TDnetは約1ヶ月で消えるため毎日蓄積が必須**
 
@@ -253,11 +278,12 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | `/portfolio` (+ `/portfolio/login` `/portfolio/logout`) | ポートフォリオ（SBI証券の保有/約定を取込表示）。概要サマリーを常時表示し、**資産・配当／診断・リスク／保有銘柄／取引履歴**の4ビューで既存情報を整理。総資産・含み損益・**実現損益（取引履歴から）**・銘柄別ヒートマップ/口座別/業種別の切替式資産構成・年間/月別/銘柄別の配当見込み・集中度HHI・テーマ/業種エクスポージャー・2軸ヘルスチェック・リスク指標/ストレステスト・**取引履歴＆実現損益**。ヒートマップ内は文字サイズを拡大し、投信は短縮表示（正式名はホバー）を使用。月別配当は予想年間DPSを直近の権利落ち実績パターンへ配分（支払月とは区別）。**評価額は当社の日次終値ベースで毎日自動更新**（SBI明細は取得単価・保有構成の取込元＝随時でOK。投信のみSBI値）。**個人情報のため `PORTFOLIO_PASSCODE`(env) の簡易Cookie認証で保護**、未設定時OFF。データ投入は `import_sbi.py`（ローカル手動）、分析は `portfolio_analytics.py` |
 | `/api/chart_grid` `/api/search` `/health` | 補助API |
 
-## DBテーブル（stock_tracker・27テーブル）
+## DBテーブル（stock_tracker）
 
 | 分類 | テーブル | 内容・更新元 |
 |---|---|---|
 | マスタ | `stocks` `markets` `sectors` `trading_calendar` | master.py |
+| マスタ | `stock_aliases` | stock_aliases.py（社名の読み・別名→コード。EDINET公式コードリストの「提出者名（ヨミ）」＋正式名/英語名。日次バッチのマスタ更新直後に追記更新） |
 | 価格 | `daily_prices` | prices_yahoo.py（adj_close=分割調整済。splits.pyが再計算） |
 | 価格 | `stock_splits` | splits.py（分割イベント。J-Quants公式が正） |
 | 価格 | `market_index_prices` | market_indices.py |
@@ -281,7 +307,7 @@ daily_run.py には (a)重複実行ガード（当日daily_report完了済みな
 | 会社情報 | `stocks.business_summary/website`（カラム） | company_profile.py（簡単な事業内容=kabutan概要） |
 | 会社情報 | `stocks.business_description`（カラム） | edinet_business.py / edinet_texts.py（詳細=有報「事業の内容」） |
 | ファンド | `fund_master` `fund_reports` | fund_watch.py |
-| YouTube | `youtube_channels` `youtube_videos` `youtube_weekly` | youtube_insights.py（週次AI巡回・動画分析・横断サマリー） |
+| YouTube | `youtube_channels` `youtube_videos` `youtube_weekly` `youtube_daily` | youtube_insights.py（週次AI巡回・動画分析・横断サマリー。日次は大引け解説を集約し日次レポートへ差し込む） |
 | コンセンサス | `analyst_consensus` | analyst_consensus.py（みんかぶ・目標株価/レーティング/会社予想vsコンセンサス） |
 | アプリ | `watchlist` `stock_memos` `fetch_logs` | app.py / daily_run.py |
 | ポートフォリオ | `my_holdings` `my_trades` | import_sbi.py（SBI証券CSVをローカル手動取込・保有は全置換／約定はrow_hashで冪等）。/portfolio で表示 |

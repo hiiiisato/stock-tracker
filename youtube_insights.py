@@ -36,6 +36,7 @@ from datetime import date, datetime, timedelta
 
 import requests
 
+import stock_aliases
 from config import get_conn, GEMINI_API_KEY
 
 # ── 巡回チャンネル（ハンドルは実在検証済み。追加はここに1行足すだけ）──────────
@@ -313,25 +314,40 @@ _SECTOR_WORDS = {"銀行", "不動産", "証券", "保険", "半導体", "自動
                  "Jリート", "REIT", "リート", "グロース", "バリュー", "高配当"}
 
 
-def _resolve_code(cur, code: str, name: str) -> str:
-    """銘柄コードを厳格に解決する。誤リンク（東京エレクトロン→東エレデバイス等）を避けるため、
-    ①Geminiのコードが実在し社名も名前と整合すれば採用 ②不整合なら社名の完全/前方一致でのみ
-    再解決（部分一致の曖昧マッチはしない）③解決できなければ空（リンクなし）。"""
+def _resolve_code(cur, code: str, name: str, known: dict[str, str] | None = None) -> str:
+    """銘柄コードを厳格に解決する。誤リンク（東京エレクトロン→東エレデバイス等）を避けつつ、
+    表記ゆれでリンクを落とさないため下記の順に解く。
+
+    ① 名寄せインデックス（`stock_aliases`）で社名→コード。読み（EDINET公式の提出者名ヨミ）を
+       含むので「スクリーンホールディングス」→7735 のようにマスタの正式表記（ＳＣＲＥＥＮ〜）と
+       字面が違っても解決できる。**表示名と一致するコードなので最優先**
+    ② Geminiが出したコードを検証（社名の整合は正規化して比較。全角/半角・長音の違いで
+       正しいコードを捨てない）
+    ③ 動画レベルで解決済みのコード（known）— 集約時にGeminiがコードを落としても拾い直す
+    ④ 社名の完全一致 → 前方一致（曖昧な部分一致は誤リンクの元なので使わない）
+    ⑤ 解決できなければ空（リンクなし）
+    """
     name = (name or "").strip()
     if name in _SECTOR_WORDS:      # セクター名はETFに誤マッチするので個別リンクしない
         return ""
-    # ① Geminiのコードを検証（社名の整合も見る）
+    # ① 名寄せインデックス（読み・別名・接尾辞省略形。一意に定まる時だけ返る）
+    if alias_code := stock_aliases.resolve(cur, name):
+        return alias_code
+    # ② Geminiのコードを検証（社名の整合も見る）
     if re.match(r"^[0-9][0-9A-Z]{3}$", code or ""):
         cur.execute("SELECT name FROM stocks WHERE code=%s", (code,))
         row = cur.fetchone()
         if row:
-            db = row[0] or ""
+            db = stock_aliases.normalize(row[0] or "")
+            nm = stock_aliases.normalize(name)
             # 社名が前方一致（どちらかが他方の先頭）なら整合とみなす
-            key = name[:4]
-            if key and (db.startswith(name[:6]) or name.startswith(db[:6]) or key in db):
+            if nm and db and (db.startswith(nm[:6]) or nm.startswith(db[:6]) or nm[:4] in db):
                 return code
             # コードは実在するが社名が食い違う → 誤コードの可能性。名前解決に回す
-    # ② 社名の完全一致 → 前方一致（曖昧な部分一致は誤リンクの元なので使わない）
+    # ③ 同じ集約対象の動画で既に解決済みなら流用（集約AIのコード欠落を補う）
+    if known and (k := known.get(stock_aliases.normalize(name))):
+        return k
+    # ④ 社名の完全一致 → 前方一致（曖昧な部分一致は誤リンクの元なので使わない）
     for cond, arg in [("name=%s", name), ("name LIKE %s", f"{name[:8]}%")]:
         if len(name) < 2:
             break
@@ -343,18 +359,32 @@ def _resolve_code(cur, code: str, name: str) -> str:
     return ""
 
 
-def _verify_codes(cur, stocks: list[dict]) -> list[dict]:
-    """Geminiが出した銘柄を検証。コードは厳格解決（誤リンク防止）。"""
+def _verify_codes(cur, stocks: list[dict], known: dict[str, str] | None = None) -> list[dict]:
+    """Geminiが出した銘柄を検証。コードは厳格解決（誤リンク防止）。
+    known: 正規化社名→コード。集約時に動画レベルの解決結果を引き継ぐために渡す。"""
     out = []
     for s in stocks or []:
         name = str(s.get("name") or "").strip()
         if not name:
             continue
         out.append({"name": name[:40],
-                    "code": _resolve_code(cur, str(s.get("code") or "").strip(), name),
+                    "code": _resolve_code(cur, str(s.get("code") or "").strip(), name, known),
                     "view": str(s.get("view") or "中立")[:4],
                     "reason": str(s.get("reason") or "")[:150]})
     return out
+
+
+def _known_codes(digest: list[dict]) -> dict[str, str]:
+    """集約対象の動画で解決済みの「正規化社名 → コード」を作る。
+    集約AIが銘柄名だけ返してコードを落とすケースの取りこぼしを防ぐ。"""
+    known: dict[str, str] = {}
+    for v in digest:
+        for s in v.get("stocks") or []:
+            code = str(s.get("code") or "").strip()
+            if code:
+                known.setdefault(stock_aliases.normalize(str(s.get("name") or "")), code)
+    known.pop("", None)
+    return known
 
 
 def _gen_with_retry(client, contents, retries: int = 3, *, json_mode: bool = False):
@@ -484,7 +514,7 @@ def aggregate_weekly(cur, client, week_end: date) -> bool:
         return False
     hot_stocks = _verify_codes(cur, [
         {"name": s.get("name"), "code": s.get("code"), "view": "", "reason": s.get("note")}
-        for s in (d.get("hot_stocks") or [])])
+        for s in (d.get("hot_stocks") or [])], _known_codes(digest))
     # _verify_codesの出力を hot_stocks 形式に戻す
     hot_stocks = [{"name": s["name"], "code": s["code"], "note": s["reason"]} for s in hot_stocks]
     cur.execute("""
@@ -536,7 +566,7 @@ def aggregate_daily(cur, client, day: date) -> bool:
         return False
     hot_stocks = _verify_codes(cur, [
         {"name": s.get("name"), "code": s.get("code"), "view": "", "reason": s.get("note")}
-        for s in (d.get("hot_stocks") or [])])
+        for s in (d.get("hot_stocks") or [])], _known_codes(digest))
     hot_stocks = [{"name": s["name"], "code": s["code"], "note": s["reason"]} for s in hot_stocks]
     cur.execute("""
         INSERT INTO youtube_daily
@@ -778,11 +808,55 @@ def aggregate_only(day: date | None = None, verbose: bool = True) -> bool:
         cur.close(); conn.close()
 
 
+def reresolve_codes(verbose: bool = True) -> int:
+    """保存済みの言及銘柄について、社名→コードを現在のロジックで解き直す（Gemini不要）。
+
+    名寄せインデックス（`stock_aliases`）の改善・銘柄マスタの社名変更を、過去に保存した
+    要約へ遡って反映するための保守用。リンク切れの復旧と誤リンクの是正の両方に効く。
+
+    解決済みのコードを空に戻すことはしない（セクター語を除く）。当時のマスタでのみ解けた
+    旧社名（例: 日本ガイシ→現ＮＧＫ）のリンクを、後年の再実行で落とさないため。
+    """
+    updated = 0
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        for table, key in (("youtube_videos", "video_id"),
+                           ("youtube_weekly", "week_end"),
+                           ("youtube_daily", "report_date")):
+            cur.execute(f"SELECT {key}, stocks_json FROM {table}")
+            for pk, sj in cur.fetchall():
+                stocks = json.loads(sj or "[]")
+                changed = False
+                for s in stocks:
+                    old = str(s.get("code") or "")
+                    name = str(s.get("name") or "")
+                    new = _resolve_code(cur, old, name)
+                    if not new and old and name not in _SECTOR_WORDS:
+                        continue          # 解けなくなった＝旧社名の可能性。既存リンクは温存
+                    if new != old:
+                        if verbose:
+                            print(f"  {table} {pk}: {s.get('name')} {old or '—'} → {new or '—'}")
+                        s["code"] = new
+                        changed = True
+                if changed:
+                    cur.execute(f"UPDATE {table} SET stocks_json=%s WHERE {key}=%s",
+                                (json.dumps(stocks, ensure_ascii=False), pk))
+                    updated += 1
+        conn.commit()
+    finally:
+        cur.close(); conn.close()
+    if verbose:
+        print(f"再解決: {updated} レコード更新")
+    return updated
+
+
 if __name__ == "__main__":
     limit = None
     if "--limit" in sys.argv:
         limit = int(sys.argv[sys.argv.index("--limit") + 1])
-    if "--weekly-recovery" in sys.argv:
+    if "--reresolve" in sys.argv:
+        reresolve_codes()
+    elif "--weekly-recovery" in sys.argv:
         if not recover_weekly():
             sys.exit(1)
     elif "--aggregate-only" in sys.argv:

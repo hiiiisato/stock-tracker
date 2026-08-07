@@ -176,6 +176,18 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
             print(f"  エラー: {e}")
             _log("master", "failed", error=str(e))
 
+        # 1.5 銘柄名の名寄せインデックス（読み・別名 → コード）
+        #     マスタ更新の直後に張り直す。AI要約・検索の社名解決がこれに依存する
+        print("\n[1.5/4] 銘柄名の名寄せインデックス更新...")
+        try:
+            from stock_aliases import refresh as refresh_aliases
+            n = refresh_aliases()
+            print(f"  完了: {n:,} 別名")
+            _log("stock_aliases", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("stock_aliases", "failed", error=str(e))
+
         # 2. 取引カレンダー更新
         print("\n[2/4] 取引カレンダー更新...")
         try:

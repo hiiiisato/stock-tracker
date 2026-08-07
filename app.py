@@ -9760,17 +9760,22 @@ def api_search():
         return jsonify([])
     conn = get_conn()
     cur  = conn.cursor()
-    cur.execute("""
+    # 正式表記(ＳＣＲＥＥＮ〜)だけでは読み・略称(スクリーンHD)で引けないため、
+    # 名寄せインデックス(stock_aliases)にもヒットさせる
+    import stock_aliases
+    alias_codes = stock_aliases.matches(cur, q)
+    ph = ",".join(["%s"] * len(alias_codes)) if alias_codes else "NULL"
+    cur.execute(f"""
         SELECT s.code, s.name
         FROM stocks s
         WHERE s.is_active = TRUE
-          AND (s.code LIKE %s OR s.name LIKE %s)
+          AND (s.code LIKE %s OR s.name LIKE %s OR s.code IN ({ph}))
         ORDER BY
           CASE WHEN s.code = %s THEN 0
                WHEN s.code LIKE %s THEN 1
                ELSE 2 END, s.code
         LIMIT 12
-    """, (f"{q}%", f"%{q}%", q, f"{q}%"))
+    """, (f"{q}%", f"%{q}%", *alias_codes, q, f"{q}%"))
     rows = cur.fetchall()
     cur.close(); conn.close()
     results = [{"code": r[0], "name": r[1] or ""} for r in rows]

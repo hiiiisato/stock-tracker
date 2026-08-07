@@ -8,11 +8,16 @@ from unittest.mock import patch
 def _import_youtube_insights():
     """外部API/DB設定を読まずに純粋な再試行ロジックだけをテストする。"""
     previous_config = sys.modules.get("config")
+    previous_aliases = sys.modules.get("stock_aliases")
     previous_requests = sys.modules.get("requests")
     config_stub = types.ModuleType("config")
     config_stub.get_conn = None
     config_stub.GEMINI_API_KEY = "test"
+    aliases_stub = types.ModuleType("stock_aliases")
+    aliases_stub.normalize = lambda value: str(value or "")
+    aliases_stub.resolve = lambda _cur, _name: ""
     sys.modules["config"] = config_stub
+    sys.modules["stock_aliases"] = aliases_stub
     sys.modules["requests"] = types.ModuleType("requests")
     try:
         import youtube_insights
@@ -22,6 +27,10 @@ def _import_youtube_insights():
             sys.modules.pop("config", None)
         else:
             sys.modules["config"] = previous_config
+        if previous_aliases is None:
+            sys.modules.pop("stock_aliases", None)
+        else:
+            sys.modules["stock_aliases"] = previous_aliases
         if previous_requests is None:
             sys.modules.pop("requests", None)
         else:
