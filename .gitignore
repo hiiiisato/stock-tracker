@@ -11,3 +11,7 @@ __pycache__/
 SBI明細/
 *_sbi_*.csv
 my_portfolio*.csv
+# バッチ処理の中間生成物（business_overviews のバッチ結果等）。
+# ルートに数百件たまり git status が埋まって差分が読めなくなるため除外する。
+# ファイル自体は消さないので、必要なものは明示的に git add -f すること。
+tmp_*.json
