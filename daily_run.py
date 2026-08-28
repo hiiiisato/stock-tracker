@@ -3,7 +3,7 @@
 実行順: 銘柄マスタ → カレンダー → 価格データ → テーマスコア → ランキング
 
 スケジューラは GitHub Actions（.github/workflows/daily.yml）:
-  16:00 JST メイン / 17:00 JST リトライ（完了済みならスキップ） / 20:30 JST イブニング便
+  16:17 JST メイン / 17:17 JST リトライ（完了済みならスキップ） / 20:47 JST イブニング便
 
 使い方:
   python daily_run.py              # 通常の日次更新（当日完了済みならスキップ）
@@ -148,7 +148,7 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
     print(f"日次更新開始: {start.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*50}")
 
-    # 重複実行ガード: 16:00メインが完走済みなら17:00リトライは何もしない
+    # 重複実行ガード: 16:17メインが完走済みなら17:17リトライは何もしない
     if not (force or init or rankings_only) and _already_done_today("daily_report"):
         print("本日の日次更新は完了済み（リトライ実行をスキップ）。再実行は --force")
         return

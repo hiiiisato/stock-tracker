@@ -1,14 +1,14 @@
 name: 日次市場データ更新
 
-# GitHub Actions の cron は数十分〜数時間遅延することがあるため:
-#  - 16:00 メイン + 17:00 リトライの2本立て（daily_run.py 側の重複ガードで二重実行は防止）
-#  - 20:30 イブニング便で夜間の適時開示を回収し、市況考察・日次レポートを確定版に更新
+# GitHub Actions は毎時0分に負荷が集中するため、公式推奨に従い実行分をずらす。
+#  - 16:17 メイン + 17:17 リトライの2本立て（daily_run.py 側の重複ガードで二重実行は防止）
+#  - 20:47 イブニング便で夜間の適時開示を回収し、市況考察・日次レポートを確定版に更新
 on:
   schedule:
-    - cron: '0 7 * * 1-5'    # 16:00 JST メイン
-    - cron: '0 8 * * 1-5'    # 17:00 JST リトライ（完了済みならスキップ）
-    - cron: '0 10 * * 1-5'   # 19:00 JST YouTube日次巡回→日次レポート再生成（本編は遅らせない）
-    - cron: '30 11 * * 1-5'  # 20:30 JST イブニング便（開示完全版+レポート確定）
+    - cron: '17 7 * * 1-5'   # 16:17 JST メイン
+    - cron: '17 8 * * 1-5'   # 17:17 JST リトライ（完了済みならスキップ）
+    - cron: '17 10 * * 1-5'  # 19:17 JST YouTube日次巡回→日次レポート再生成（本編は遅らせない）
+    - cron: '47 11 * * 1-5'  # 20:47 JST イブニング便（開示完全版+レポート確定）
   workflow_dispatch:
     inputs:
       mode:
@@ -58,11 +58,11 @@ jobs:
         run: |
           if [ "${{ inputs.mode }}" = "notify_test" ]; then
             python daily_report.py --notify
-          elif [ "${{ github.event.schedule }}" = "0 10 * * 1-5" ] || [ "${{ inputs.mode }}" = "youtube_daily" ]; then
+          elif [ "${{ github.event.schedule }}" = "17 10 * * 1-5" ] || [ "${{ inputs.mode }}" = "youtube_daily" ]; then
             # YouTube日次巡回 → 日次レポートを再生成して要約を反映（本編バッチは遅らせない）
             python youtube_insights.py --daily
             python -c "import daily_report; daily_report.save_report()"
-          elif [ "${{ github.event.schedule }}" = "30 11 * * 1-5" ] || [ "${{ inputs.mode }}" = "evening" ]; then
+          elif [ "${{ github.event.schedule }}" = "47 11 * * 1-5" ] || [ "${{ inputs.mode }}" = "evening" ]; then
             python daily_run.py --evening
             # 19:00便のYouTube集約がGemini 503等で失敗していたら救済（解析済み動画から集約のみ再試行）
             python youtube_insights.py --aggregate-only
