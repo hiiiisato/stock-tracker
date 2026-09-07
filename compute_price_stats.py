@@ -238,7 +238,9 @@ def _ensure_table():
         ("nikkei_rel_1m",  "DECIMAL(8,2)"),
         # --- 財務追加 ---
         ("equity_ratio",   "DECIMAL(8,2)"),
-        ("ord_margin",     "DECIMAL(8,2)"),
+        # 創薬ベンチャー等は売上が極小でも研究開発費が大きく、経常利益率が
+        # ±100万%を超え得る。値を捨てず履歴表と同じ精度・範囲で保持する。
+        ("ord_margin",     "DECIMAL(18,4)"),
         ("ord_growth",     "DECIMAL(8,2)"),
         ("psr",            "DECIMAL(8,2)"),
         ("pcfr",           "DECIMAL(8,2)"),
@@ -250,6 +252,12 @@ def _ensure_table():
             cur.execute(f"ALTER TABLE price_stats ADD COLUMN {col} {typedef}")
         except Exception:
             pass  # 既存カラムは無視
+    # 既存環境向け互換マイグレーション。ADD COLUMNだけでは旧DECIMAL(8,2)が
+    # 残るため、実データを保持したまま履歴表と同じ型へ拡張する。
+    cur.execute("SHOW COLUMNS FROM price_stats LIKE %s", ("ord_margin",))
+    ord_margin_col = cur.fetchone()
+    if ord_margin_col and str(ord_margin_col[1]).lower() != "decimal(18,4)":
+        cur.execute("ALTER TABLE price_stats MODIFY COLUMN ord_margin DECIMAL(18,4) NULL")
     conn.commit()
     cur.close()
     conn.close()
