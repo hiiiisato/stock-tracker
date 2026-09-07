@@ -54,6 +54,11 @@ def _evening_target_date(now: datetime | None = None) -> date | None:
         raise
 
 
+def _has_processable_prices(now: datetime | None = None) -> bool:
+    """通常便・イブニング便に共通する、処理可能な価格日があるかの判定。"""
+    return _evening_target_date(now) is not None
+
+
 def run_evening() -> bool:
     """イブニング便（20:30 JST）: 夜間に出た適時開示を回収し、市況考察と日次レポートを確定版に更新する。"""
     print(f"\n{'='*50}\nイブニング便開始: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{'='*50}")
@@ -244,10 +249,10 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
             traceback.print_exc()
             _log("prices", "failed", error=str(e))
 
-    # 休場日ガード: 当日の価格が1件も来ていない＝休場（祝日等）。
-    # 元データが更新されていないのに後段（指標再計算・AI調査・レポート保存）が走るのを防ぐ。
-    if not (rankings_only or init) and not _has_prices_today():
-        print("\n本日は休場（当日価格データなし）。後段処理をスキップして終了します。")
+    # 休場日・遅延ガード: 同日または翌16時前までの最新営業日だけ後段へ進める。
+    # 元データが更新されていないのに指標再計算・AI調査・レポート保存が走るのを防ぐ。
+    if not (rankings_only or init) and not _has_processable_prices():
+        print("\n処理対象の価格データなし（休場または古いデータ）。後段処理をスキップします。")
         return
 
     # 3.5. 株式分割・併合 対応（JPX公式 J-Quants ベース）
