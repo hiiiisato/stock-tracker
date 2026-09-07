@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '実行モード（notify_test = 休場日でも保存済み最新レポートのLINE通知だけ再送信するテスト用 / youtube_daily = YouTube日次巡回のみ）'
+        description: '実行モード（notify_test = 保存済み最新レポートが未通知ならLINE送信 / youtube_daily = YouTube日次巡回のみ）'
         type: choice
         options: [main, evening, notify_test, youtube_daily]
         default: main
@@ -48,7 +48,7 @@ jobs:
           # EDINET公式API（有報「事業の内容」の増分更新）。未設定だと該当ステップのみスキップ
           EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
           # LINE通知（イブニング便で日次レポート完成をpush・スイング候補通知にも共用）。
-          # 未設定なら送信をスキップするだけで他処理は継続。設定手順は swing_notifier.py 参照
+          # 未設定・送信失敗は他処理を最後まで継続した後、ジョブを失敗にして再試行対象にする。
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           # 日次レポート全文リンクの公開URL（本番: https://stock-tracker-rfqn.onrender.com）。
@@ -63,14 +63,17 @@ jobs:
             python youtube_insights.py --daily
             python -c "import daily_report; daily_report.save_report()"
           elif [ "${{ github.event.schedule }}" = "47 11 * * 1-5" ] || [ "${{ inputs.mode }}" = "evening" ]; then
-            python daily_run.py --evening
+            # LINE失敗でも後続のYouTube救済・最終保存は実行し、最後に元の終了コードを返す。
+            evening_status=0
+            python daily_run.py --evening || evening_status=$?
             # 19:00便のYouTube集約がGemini 503等で失敗していたら救済（解析済み動画から集約のみ再試行）
             python youtube_insights.py --aggregate-only
             python -c "import daily_report; daily_report.save_report()"
+            exit "$evening_status"
           else
             python daily_run.py
           fi
 
       - name: 結果サマリー
         if: always()
-        run: echo "daily_run.py 完了（exit code $?）"
+        run: echo "日次市場データ更新 ${{ job.status }}"

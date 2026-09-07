@@ -888,15 +888,30 @@ def build_report_html(target_date: date | None = None) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def ensure_table():
+    """日次レポート表と、既存環境向けの通知状態カラムを保証する。"""
     conn = get_conn()
     cur  = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS daily_reports (
             report_date DATE PRIMARY KEY,
             html        MEDIUMTEXT,
-            created_at  DATETIME
+            created_at  DATETIME,
+            notified_at DATETIME NULL,
+            notify_attempts INT NOT NULL DEFAULT 0,
+            notify_error VARCHAR(500) NULL
         )
     """)
+    # 初回マイグレーション: 既存テーブルはデータを保ったまま不足列だけADDする。
+    # カラム名・DDLは固定の許可リストで、ユーザー入力は埋め込まない。
+    notification_columns = {
+        "notified_at": "notified_at DATETIME NULL",
+        "notify_attempts": "notify_attempts INT NOT NULL DEFAULT 0",
+        "notify_error": "notify_error VARCHAR(500) NULL",
+    }
+    for column, ddl in notification_columns.items():
+        cur.execute("SHOW COLUMNS FROM daily_reports LIKE %s", (column,))
+        if not cur.fetchone():
+            cur.execute(f"ALTER TABLE daily_reports ADD COLUMN {ddl}")
     conn.commit()
     cur.close()
     conn.close()
@@ -935,19 +950,59 @@ def _report_base_url() -> str:
 def notify_report_ready(report_date: date) -> bool:
     """確定した日次レポートを LINE に通知する（リンクのみの最小通知）。
 
-    イブニング便（確定版）でのみ呼ぶ想定。LINE 未設定なら送信をスキップする。
+    イブニング便（確定版）でのみ呼ぶ想定。同じレポート日を複数回呼んでも、
+    `notified_at` があれば再送しない。失敗回数・理由はDBへ残す。
     """
     from line_notify import is_configured, push_text
-    if not is_configured():
-        print("  [日次レポートLINE] LINE 未設定のためスキップ")
-        return False
-    wd = "月火水木金土日"[report_date.weekday()]
-    base = _report_base_url()
-    lines = ["📰 本日の日次レポートが完成しました",
-             f"{report_date.strftime('%Y/%m/%d')}（{wd}）"]
-    if base:
-        lines += ["", f"▶ 全文を読む\n{base}/daily"]
-    return push_text("\n".join(lines), label="日次レポートLINE")
+    ensure_table()
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        # 行ロックで同一日の並行リトライを直列化し、二重pushを防ぐ。
+        cur.execute("""
+            SELECT notified_at FROM daily_reports
+            WHERE report_date = %s FOR UPDATE
+        """, (report_date,))
+        row = cur.fetchone()
+        if not row:
+            print(f"  [日次レポートLINE] 対象レポートなし: {report_date}")
+            return False
+        if row[0]:
+            print(f"  [日次レポートLINE] {report_date} は送信済み・再送不要")
+            return True
+
+        sent = False
+        error = None
+        if not is_configured():
+            error = "LINE credentials are not configured"
+            print("  [日次レポートLINE] LINE 未設定のため送信失敗")
+        else:
+            wd = "月火水木金土日"[report_date.weekday()]
+            base = _report_base_url()
+            lines = ["📰 本日の日次レポートが完成しました",
+                     f"{report_date.strftime('%Y/%m/%d')}（{wd}）"]
+            if base:
+                lines += ["", f"▶ 全文を読む\n{base}/daily"]
+            try:
+                sent = push_text("\n".join(lines), label="日次レポートLINE")
+                if not sent:
+                    error = "LINE Messaging API push failed"
+            except Exception as exc:  # 失敗状態をDBに残してから呼び出し元へFalseを返す
+                error = f"{type(exc).__name__}: {exc}"[:500]
+                print(f"  [日次レポートLINE] 送信例外: {error}")
+
+        cur.execute("""
+            UPDATE daily_reports
+            SET notify_attempts = COALESCE(notify_attempts, 0) + 1,
+                notified_at = CASE WHEN %s THEN NOW() ELSE notified_at END,
+                notify_error = %s
+            WHERE report_date = %s
+        """, (sent, None if sent else error, report_date))
+        conn.commit()
+        return sent
+    finally:
+        cur.close()
+        conn.close()
 
 
 def load_report(target_date: date) -> str | None:
@@ -987,7 +1042,10 @@ if __name__ == "__main__":
     if "--save" in args:
         saved = save_report(d)
         if "--notify" in args and saved:
-            notify_report_ready(saved)
+            if not notify_report_ready(saved):
+                sys.exit(1)
+        elif "--notify" in args:
+            sys.exit(1)
     elif "--notify" in args:
         # 保存済みの最新レポート日付でLINE通知だけ送る（送信テスト用）
         conn = get_conn(); cur = conn.cursor()
@@ -997,8 +1055,10 @@ if __name__ == "__main__":
         rd = cur.fetchone()[0]
         cur.close(); conn.close()
         if rd:
-            notify_report_ready(rd)
+            if not notify_report_ready(rd):
+                sys.exit(1)
         else:
             print("通知対象のレポートがありません（先に --save してください）")
+            sys.exit(1)
     else:
         print(build_report_html(d))

@@ -39,8 +39,10 @@ J-Quants 無料枠・EDINET）のみで構成。
 
 **GitHub Actions cron の注意**: 発火は数十分〜数時間遅延することがある（実測で2時間超）。
 このため「メイン+リトライ」の2本立て+`timeout-minutes: 60`+イブニング便で確定、という設計にしている。
+`batch_dates.py` をJST・対象日の単一ルールとし、イブニング便が日をまたいでも次回バッチ開始前なら
+DBの最新営業日を処理する。週報は実行ホストのTZではなくJSTの直近日曜、YouTube日次はDBの最新営業日を使う。
 daily_run.py には (a)重複実行ガード（当日daily_report完了済みならスキップ）と
-(b)休場日ガード（当日価格が0件なら後段をスキップ）が入っている。
+(b)休場日・古い価格ガード（次回バッチ開始後に当日価格がなければ後段をスキップ）が入っている。
 
 **ジョブがそもそも起動しない失敗**: `The job was not acquired by Runner of type hosted even after
 multiple attempts`（GitHub側のホストランナー割当失敗）は、ログすら残らず全ジョブが cancelled になる。
@@ -77,6 +79,7 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 ### 基盤
 - `config.py` — DB接続・bulk_upsert・APIキー・理論株価の係数テーブル。**設定値は必ずここに置く**
   - `with db() as cur:` — 例外時も必ずrollback+closeする接続。**app.py（常駐プロセス）の新規コードはこちらを使う**。`get_conn()`は自前でclose管理する既存コード・バッチ用
+- `batch_dates.py` — GitHub Actionsの遅延・UTCホスト差を吸収するJST時刻、直近日曜、イブニング対象営業日の共通ルール
 - `render.yaml` — Render.com のサービス定義（本番のスケジューラ）
 
 ### データ取得
@@ -162,6 +165,7 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
   日曜22時JST週次(misc_batch.yml)。ライブ配信等はタイトルで除外。1回の分析上限 MAX_ANALYZE=12本。
   週次集約はJSON MIME固定＋形式不正時の再生成、LINEは一時エラー再試行。
   生成または送信失敗は非ゼロ終了でActionsに可視化し、月曜5:30に自動救済する。
+  週キーはJSTの直近日曜、日次キーはDBの最新営業日とし、遅延実行で翌日の空レポートを作らない。
   - **`_resolve_code` の解決順**: ①名寄せ(`stock_aliases`。読み・略称に対応) →②Geminiのコードを
     正規化比較で検証 →③同じ集約対象の動画で解決済みのコード（集約AIのコード欠落を補う）
     →④社名の完全/前方一致 →⑤空（リンクなし）。**一意に定まらない時は必ず空**にして誤リンクを防ぐ
@@ -217,8 +221,9 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
   騰落TOP5+理由+スパークライン→トリガー銘柄(基準は TRIGGER_DEFS)→好材料開示→ウォッチリスト。
   自己完結HTML（外部JS/CSSなし）なのでメール・LINE転送にも流用可能。
   `notify_report_ready(date)` = 確定版のLINE通知（リンクのみの最小通知。全文URLは `REPORT_BASE_URL` 環境変数、
-  既定は `DEFAULT_REPORT_BASE_URL`）。イブニング便の `save_report()` 直後に呼ばれる。
-  手動テスト: `python daily_report.py --save --notify` / 保存済みを再通知 `python daily_report.py --notify`
+  既定は `DEFAULT_REPORT_BASE_URL`）。`daily_reports.notified_at/notify_attempts/notify_error` で送信状態を保持し、
+  同じ日を再実行しても二重送信しない。未設定・送信失敗は非ゼロ終了となりActionsの失敗時再試行対象になる。
+  手動テスト: `python daily_report.py --save --notify` / 保存済み最新が未通知なら送信 `python daily_report.py --notify`
 - `money_flow.py` — 資金フロー週次集計 → `money_flow_weekly`。テーマ(統一テーママスタ tier>=2)/業種/時価総額帯/スタイル別に
   週間売買代金シェアの対13週平均比（flow_ratio）・**Zスコア**（母数非依存の流入強度＝今週シェアが過去13週の
   変動幅の何σ分か。小グループの偶然のブレを排除）・騰落率中央値・上昇銘柄比率・対TOPIXを算出。
@@ -308,6 +313,7 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 | 会社情報 | `stocks.business_description`（カラム） | edinet_business.py / edinet_texts.py（詳細=有報「事業の内容」） |
 | ファンド | `fund_master` `fund_reports` | fund_watch.py |
 | YouTube | `youtube_channels` `youtube_videos` `youtube_weekly` `youtube_daily` | youtube_insights.py（週次AI巡回・動画分析・横断サマリー。日次は大引け解説を集約し日次レポートへ差し込む） |
+| レポート | `daily_reports` | daily_report.py（日次HTMLとLINE送信状態。通知はreport_date単位で冪等） |
 | コンセンサス | `analyst_consensus` | analyst_consensus.py（みんかぶ・目標株価/レーティング/会社予想vsコンセンサス） |
 | アプリ | `watchlist` `stock_memos` `fetch_logs` | app.py / daily_run.py |
 | ポートフォリオ | `my_holdings` `my_trades` | import_sbi.py（SBI証券CSVをローカル手動取込・保有は全置換／約定はrow_hashで冪等）。/portfolio で表示 |

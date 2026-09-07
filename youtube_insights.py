@@ -36,6 +36,7 @@ from datetime import date, datetime, timedelta
 
 import requests
 
+from batch_dates import jst_today, latest_sunday
 import stock_aliases
 from config import get_conn, GEMINI_API_KEY
 
@@ -695,12 +696,13 @@ def run_weekly(max_analyze: int = MAX_ANALYZE, verbose: bool = True) -> dict:
                                MAX_PER_CHANNEL, max_analyze, verbose)
     # 週次集約 → LINE通知。どちらかが失敗した場合は呼び出し元が
     # 非ゼロ終了にし、GitHub Actionsの緑成功への誤検知を防ぐ。
-    report_generated = aggregate_weekly(cur, client, date.today())
+    week_end = _latest_sunday(jst_today())
+    report_generated = aggregate_weekly(cur, client, week_end)
     notified = False
     if report_generated:
         conn.commit()
         try:
-            notified = notify_weekly(cur, date.today())
+            notified = notify_weekly(cur, week_end)
         except Exception as e:  # noqa: BLE001
             print(f"  [YouTube週報LINE] 送信失敗: {str(e)[:60]}")
     stats["report_generated"] = report_generated
@@ -718,7 +720,7 @@ def run_weekly(max_analyze: int = MAX_ANALYZE, verbose: bool = True) -> dict:
 
 def _latest_sunday(day: date) -> date:
     """指定日以前の直近日曜日（指定日が日曜なら当日）。"""
-    return day - timedelta(days=(day.weekday() + 1) % 7)
+    return latest_sunday(day)
 
 
 def recover_weekly(week_end: date | None = None, verbose: bool = True) -> bool:
@@ -730,7 +732,7 @@ def recover_weekly(week_end: date | None = None, verbose: bool = True) -> bool:
     if not GEMINI_API_KEY:
         print("GEMINI_API_KEY未設定のため週報救済失敗")
         return False
-    week_end = week_end or _latest_sunday(date.today())
+    week_end = week_end or _latest_sunday(jst_today())
     conn = get_conn()
     cur = conn.cursor()
     try:
@@ -771,7 +773,10 @@ def run_daily(max_analyze: int = DAILY_MAX_ANALYZE, verbose: bool = True) -> dic
     client = _gemini()
     stats = _crawl_and_analyze(cur, conn, client, DAILY_CHANNELS, DAILY_LOOKBACK_DAYS,
                                DAILY_MAX_PER_CHANNEL, max_analyze, verbose)
-    if aggregate_daily(cur, client, date.today()):
+    cur.execute("SELECT MAX(date) FROM daily_prices WHERE date <= %s", (jst_today(),))
+    row = cur.fetchone()
+    report_day = row[0] if row and row[0] else jst_today()
+    if aggregate_daily(cur, client, report_day):
         conn.commit()
     conn.commit()
     cur.close()
@@ -789,10 +794,13 @@ def aggregate_only(day: date | None = None, verbose: bool = True) -> bool:
     if not GEMINI_API_KEY:
         print("GEMINI_API_KEY未設定のためスキップ")
         return False
-    day = day or date.today()
     conn = get_conn(); cur = conn.cursor()
     try:
         ensure_tables(cur); conn.commit()
+        if day is None:
+            cur.execute("SELECT MAX(date) FROM daily_prices WHERE date <= %s", (jst_today(),))
+            row = cur.fetchone()
+            day = row[0] if row and row[0] else jst_today()
         cur.execute("SELECT 1 FROM youtube_daily WHERE report_date=%s", (day,))
         if cur.fetchone():
             if verbose:

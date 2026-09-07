@@ -74,6 +74,49 @@ class WeeklyReportResilienceTest(unittest.TestCase):
         self.assertEqual(yt._latest_sunday(date(2026, 8, 3)), date(2026, 8, 2))
         self.assertEqual(yt._latest_sunday(date(2026, 8, 2)), date(2026, 8, 2))
 
+    def test_weekly_run_uses_one_jst_sunday_key_for_save_and_notify(self):
+        class Cursor:
+            def close(self):
+                pass
+
+        class Connection:
+            def __init__(self):
+                self.commits = 0
+
+            def cursor(self):
+                return Cursor()
+
+            def commit(self):
+                self.commits += 1
+
+            def close(self):
+                pass
+
+        seen = {"aggregate": [], "notify": []}
+
+        def aggregate(_cur, _client, week_end):
+            seen["aggregate"].append(week_end)
+            return True
+
+        def notify(_cur, week_end):
+            seen["notify"].append(week_end)
+            return True
+
+        empty_stats = {"videos_found": 0, "analyzed": 0, "failed": 0, "skipped": 0}
+        with patch.object(yt, "get_conn", return_value=Connection()), \
+                patch.object(yt, "ensure_tables"), \
+                patch.object(yt, "_gemini", return_value=object()), \
+                patch.object(yt, "_crawl_and_analyze", return_value=empty_stats), \
+                patch.object(yt, "jst_today", return_value=date(2026, 9, 7)), \
+                patch.object(yt, "aggregate_weekly", side_effect=aggregate), \
+                patch.object(yt, "notify_weekly", side_effect=notify):
+            result = yt.run_weekly(verbose=False)
+
+        self.assertTrue(result["report_generated"])
+        self.assertTrue(result["notified"])
+        self.assertEqual(seen["aggregate"], [date(2026, 9, 6)])
+        self.assertEqual(seen["notify"], [date(2026, 9, 6)])
+
 
 if __name__ == "__main__":
     unittest.main()

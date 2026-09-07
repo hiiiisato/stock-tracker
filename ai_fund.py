@@ -1252,7 +1252,7 @@ def _call_gemini(prompt: str) -> dict | None:
     return None
 
 
-def decide() -> int:
+def decide(decision_date: date | None = None) -> int:
     """夜間の意思決定。売り/買いを決めて ai_fund_orders に登録する（執行は翌営業日の寄付）。
     戻り値: 登録した注文数。"""
     ensure_tables()
@@ -1262,7 +1262,8 @@ def decide() -> int:
     conn = get_conn(); cur = conn.cursor()
     _init_state(cur); conn.commit()
     state = _get_state(cur)
-    today = date.today()
+    # 遅延実行が日をまたいでも、注文・重複ガードは価格データの対象営業日に固定する。
+    today = decision_date or date.today()
 
     if state["last_decided"] == today:
         print("  [AIファンド] 本日の意思決定は完了済み")

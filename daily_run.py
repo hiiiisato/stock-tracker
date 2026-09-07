@@ -14,12 +14,14 @@
 """
 import sys
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
+
+from batch_dates import jst_now, resolve_evening_business_date
 from config import get_conn
 
 
 def _jst_now() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(hours=9)
+    return jst_now()
 
 
 def _already_done_today(fetch_type: str = "daily_report") -> bool:
@@ -38,25 +40,35 @@ def _already_done_today(fetch_type: str = "daily_report") -> bool:
         return False
 
 
-def _has_prices_today() -> bool:
-    """今日(JST)の価格データが存在するか（=営業日か）。休場日はYahooが当日行を返さない。"""
+def _evening_target_date(now: datetime | None = None) -> date | None:
+    """DBの最新価格日とJST時刻から、イブニング便の対象営業日を確定する。"""
     try:
         c = get_conn(); cur = c.cursor()
-        cur.execute("SELECT COUNT(*) FROM daily_prices WHERE date = %s LIMIT 1",
-                    (_jst_now().date(),))
-        n = cur.fetchone()[0]
+        cur.execute("SELECT MAX(date) FROM daily_prices")
+        row = cur.fetchone()
         cur.close(); c.close()
-        return n > 0
+        latest = row[0] if row else None
+        return resolve_evening_business_date(latest, now or _jst_now())
     except Exception:
-        return True   # 判定不能時は続行（止める方がリスク）
+        # 判定不能のまま最新日を推測すると過去日を誤通知し得るため、明示的に失敗させる。
+        raise
 
 
-def run_evening():
+def run_evening() -> bool:
     """イブニング便（20:30 JST）: 夜間に出た適時開示を回収し、市況考察と日次レポートを確定版に更新する。"""
     print(f"\n{'='*50}\nイブニング便開始: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{'='*50}")
-    if not _has_prices_today():
-        print("本日は休場（当日価格データなし）のためスキップ")
-        return
+    try:
+        target_date = _evening_target_date()
+    except Exception as e:
+        print(f"対象営業日の判定に失敗: {e}")
+        _log("daily_report_notify", "failed", error=f"target date: {e}")
+        return False
+    if not target_date:
+        print("対象営業日なし（休場または次回バッチ開始後の古い価格データ）のためスキップ")
+        return True
+    print(f"対象営業日: {target_date}")
+
+    notification_ok = True
 
     print("\n[適時開示] 夜間分を含めて再取得・市況考察を更新...")
     try:
@@ -80,16 +92,26 @@ def run_evening():
     print("\n[日次レポート] 確定版を保存...")
     try:
         from daily_report import save_report, notify_report_ready
-        saved = save_report()
+        saved = save_report(target_date)
         _log("daily_report", "done", 1)
-        # 確定版が保存できたら LINE に「完成」通知（リンクのみ）。通知失敗はレポート保存の成否に影響させない
+        # 確定版が保存できたらLINE通知。失敗は最後に終了コードへ反映し、
+        # 後続処理を止めずにGitHub Actionsの再試行対象とする。
         if saved:
             try:
-                notify_report_ready(saved)
+                notification_ok = notify_report_ready(saved)
+                _log("daily_report_notify", "done" if notification_ok else "failed",
+                     1 if notification_ok else 0,
+                     None if notification_ok else "LINE push failed")
             except Exception as e:
                 print(f"  [日次レポートLINE] エラー: {e}")
+                notification_ok = False
+                _log("daily_report_notify", "failed", error=str(e))
+        else:
+            notification_ok = False
+            _log("daily_report_notify", "failed", error="report was not saved")
     except Exception as e:
         print(f"  エラー: {e}")
+        notification_ok = False
         _log("daily_report", "failed", error=str(e))
 
     # JPX公式の決算発表予定日を更新（AIファンドの決算跨ぎ管理に必須。JPXは17時頃更新）
@@ -106,13 +128,14 @@ def run_evening():
     print("\n[AIファンド] 意思決定...")
     try:
         from ai_fund import decide as ai_fund_decide
-        n = ai_fund_decide()
+        n = ai_fund_decide(target_date)
         _log("ai_fund_decide", "done", n)
     except Exception as e:
         print(f"  エラー: {e}")
         traceback.print_exc()
         _log("ai_fund_decide", "failed", error=str(e))
     print("\nイブニング便 完了")
+    return notification_ok
 from master import update_stock_master, update_trading_calendar
 from prices_yahoo import fetch_and_store_yahoo
 from dividends import fetch_all_dividends
@@ -488,7 +511,8 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
 
 if __name__ == "__main__":
     if "--evening" in sys.argv:
-        run_evening()
+        if not run_evening():
+            sys.exit(1)
     else:
         init          = "--init" in sys.argv
         rankings_only = "--rankings" in sys.argv
