@@ -182,6 +182,7 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 - `compute_price_stats.py` — テクニカル指標一式＋財務指標 → `price_stats`（現在値スナップショット）。
   財務は `_load_financials`（年次実績のみ=period_end<=今日で会社予想を除外）。
   `ord_margin` は低売上の研究開発企業で±100万%を超える実値があるため `DECIMAL(18,4)`（履歴表と同型）。
+  計算窓と `updated_at` は実行ホストの日付ではなく `daily_prices` の最新営業日を基準にする。
   `fscore` = 当サイト版 Piotroski F-score（`_fscore_7`・7点。標準9項目のうち流動比率/希薄化はデータ未保持で除外し、
   総負債→自己資本比率改善・粗利率→営業利益率改善で代替。クオリティ・ファクター。詳細は docs/capital_gains_strategy_survey.md）
 - `compute_stats_history.py` — 週次スナップショット → `price_stats_history`（バックテスト用・PIT補正=期末+45日）。

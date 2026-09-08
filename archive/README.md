@@ -18,4 +18,5 @@
 | `chart.py` | ローカルでチャートHTML生成 | Webアプリ `/stock/<code>` のチャート |
 | `theme_chart.py` | テーマ過熱チャートHTML生成 | Webアプリ `/theme/<id>` ページ |
 | `investigate.py` | 変動要因調査の試作 | `event_researcher.py` |
+| `repair_price_stats_date_20260908.py` | 2026-09-08の手動救済で誤記した`price_stats.updated_at`を最新営業日に訂正 | 本番DB訂正済みの一回きり作業 |
 | `debug_html/` | 上記ツールが生成したデバッグ出力（gitignore対象） | 削除して問題ない |

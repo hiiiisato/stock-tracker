@@ -53,6 +53,13 @@ def _round(v, dec=2):
     return round(v, dec) if v is not None else None
 
 
+def _latest_price_date(cur) -> date | None:
+    """実行ホストの日付ではなく、DB上の最新営業日を計算基準日にする。"""
+    cur.execute("SELECT MAX(date) FROM daily_prices")
+    row = cur.fetchone()
+    return row[0] if row and row[0] else None
+
+
 def _rsi(closes: list[float], period: int = 14) -> float | None:
     """Wilder スムージング法による RSI を計算する。"""
     if len(closes) < period + 1:
@@ -612,8 +619,15 @@ def run() -> int:
     conn = get_conn()
     cur  = conn.cursor()
 
+    as_of = _latest_price_date(cur)
+    if as_of is None:
+        cur.close()
+        conn.close()
+        print("  price_stats: 価格データなし")
+        return 0
+
     # MA200(200日) + スロープ用20日前 + 60日ボラ + ストキャス = 最低265日 → 500カレンダー日で確保
-    date_from = (date.today() - timedelta(days=500)).strftime("%Y-%m-%d")
+    date_from = (as_of - timedelta(days=500)).strftime("%Y-%m-%d")
     cur.execute("""
         SELECT code, date,
                COALESCE(adj_close, close) AS close,
@@ -629,7 +643,7 @@ def run() -> int:
         data[code].append((dt, float(close), float(high or close), float(low or close), int(vol or 0), float(raw_close or close)))
 
     # 52週高値・安値（調整済価格で取得）
-    date_from_52w = (date.today() - timedelta(days=380)).strftime("%Y-%m-%d")
+    date_from_52w = (as_of - timedelta(days=380)).strftime("%Y-%m-%d")
     cur.execute("""
         SELECT code,
                MAX(COALESCE(adj_close, close)),
@@ -642,7 +656,7 @@ def run() -> int:
            for r in cur.fetchall()}
 
     # 年初来高値・安値（当年1月1日以降）
-    ytd_from = f"{date.today().year}-01-01"
+    ytd_from = f"{as_of.year}-01-01"
     cur.execute("""
         SELECT code,
                MAX(COALESCE(adj_close, close)),
@@ -655,7 +669,7 @@ def run() -> int:
                for r in cur.fetchall()}
 
     # 日経平均 1ヶ月前の終値（25営業日 ≒ 40カレンダー日前に最も近いデータ）
-    nk_from = (date.today() - timedelta(days=60)).strftime("%Y-%m-%d")
+    nk_from = (as_of - timedelta(days=60)).strftime("%Y-%m-%d")
     cur.execute("""
         SELECT date, close FROM market_index_prices
         WHERE symbol = %s AND date >= %s
@@ -678,7 +692,7 @@ def run() -> int:
 
     # ─── 指標計算（compute_stock_stats に集約。日次とバックフィルで共有）──────────
     rows = []
-    today = str(date.today())
+    updated_at = str(as_of)
     for code, prices in data.items():
         stat = compute_stock_stats(
             prices,
@@ -689,7 +703,7 @@ def run() -> int:
         )
         if stat is None:
             continue
-        rows.append((code, today) + stat)
+        rows.append((code, updated_at) + stat)
 
     # ─── DB 保存 ──────────────────────────────────────────────────────────────
     conn = get_conn()
