@@ -28,6 +28,7 @@ J-Quants 無料枠・EDINET）のみで構成。
 |---|---|---|---|
 | daily.yml | 平日16:00 メイン | `python daily_run.py` | 日次バッチ本体（価格→指標→ランキング→開示→AI調査→レポート保存） |
 | daily.yml | 平日17:00 リトライ | 同上 | GHA cron遅延・失敗への保険。daily_run側の重複ガードで完了済みならスキップ |
+| daily.yml | 平日19:17 YouTube日次 | `python youtube_insights.py --daily` | YouTube日次巡回後、レポートを再生成（確定状態は変更しない） |
 | daily.yml | 平日20:30 イブニング便 | `python daily_run.py --evening` | 夜間の適時開示回収→市況考察→日次レポート確定版を上書き保存→**確定版をLINE通知**→AIファンド意思決定 |
 | misc_batch.yml | ~~毎日23:45~~ **一時停止中** | `python edinet_texts.py --all` | EDINET本文ドリップ（`if:false`。財務キャッチアップ中は枠譲渡） |
 | misc_batch.yml | ~~毎日23:45~~ **一時停止中** | `python edinet_segments.py --all` | 事業セグメント時系列（`if:false`。同上） |
@@ -41,8 +42,10 @@ J-Quants 無料枠・EDINET）のみで構成。
 このため「メイン+リトライ」の2本立て+`timeout-minutes: 60`+イブニング便で確定、という設計にしている。
 `batch_dates.py` をJST・対象日の単一ルールとし、イブニング便が日をまたいでも次回バッチ開始前なら
 DBの最新営業日を処理する。週報は実行ホストのTZではなくJSTの直近日曜、YouTube日次はDBの最新営業日を使う。
-daily_run.py には (a)重複実行ガード（当日daily_report完了済みならスキップ）と
+daily_run.py には (a)対象営業日ごとの確定状態（`daily_reports.completed_at`）による重複実行ガードと
 (b)休場日・古い価格ガード（次回バッチ開始後に当日価格がなければ後段をスキップ）が入っている。
+速報保存と確定版を区別し、営業日に価格・主要指標・ランキング・確定版のいずれかが作れなければ
+非ゼロ終了として自動再試行へ回す（補助データ取得失敗はログに残し、主処理は継続）。
 
 **ジョブがそもそも起動しない失敗**: `The job was not acquired by Runner of type hosted even after
 multiple attempts`（GitHub側のホストランナー割当失敗）は、ログすら残らず全ジョブが cancelled になる。
@@ -94,7 +97,8 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
   「フジ」等の曖昧な別名では誤リンクさせない。更新は**追記型**（社名変更後も旧社名で引ける。
   正規化ルールを変えた時のみ `python stock_aliases.py --rebuild`）。
   利用側: `youtube_insights._resolve_code` / `/api/search`
-- `prices_yahoo.py` — 日次価格（Yahoo Finance chart API・並列・差分）
+- `prices_yahoo.py` — 日次価格（Yahoo Finance chart API・並列・差分）。大引けデータ確定前の手動救済は
+  `batch_dates.price_fetch_end_date` により前日までに限定し、当日の未確定日足を保存しない
 - `splits.py` — 株式分割・併合。CRSP等の業界標準（生値＋調整係数分離・イベントは公式コーポレートアクション由来）に倣った多層防御:
   1. **J-Quants公式**(AdjFactor/AdjC)が正（12週遅延）。AdjC採用日には係数を重ねない
   2. 直近窓はYahoo splitsで暫定検知 → **TDnet適時開示（disclosures・事前公表）で裏取り**。
@@ -225,6 +229,7 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
   `notify_report_ready(date)` = 確定版のLINE通知（リンクのみの最小通知。全文URLは `REPORT_BASE_URL` 環境変数、
   既定は `DEFAULT_REPORT_BASE_URL`）。`daily_reports.notified_at/notify_attempts/notify_error` で送信状態を保持し、
   同じ日を再実行しても二重送信しない。未設定・送信失敗は非ゼロ終了となりActionsの失敗時再試行対象になる。
+  `completed_at` は速報版と確定版を区別する対象営業日単位の完了状態で、日時ログを完了判定には使わない。
   手動テスト: `python daily_report.py --save --notify` / 保存済み最新が未通知なら送信 `python daily_report.py --notify`
 - `money_flow.py` — 資金フロー週次集計 → `money_flow_weekly`。テーマ(統一テーママスタ tier>=2)/業種/時価総額帯/スタイル別に
   週間売買代金シェアの対13週平均比（flow_ratio）・**Zスコア**（母数非依存の流入強度＝今週シェアが過去13週の

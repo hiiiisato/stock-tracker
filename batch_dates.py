@@ -10,6 +10,7 @@ JST = ZoneInfo("Asia/Tokyo")
 # 平日の最初の定期処理は16:17 JST。これより前に起動した処理は、
 # GitHub Actionsで前日分が遅延して到着したものとして扱える。
 NEXT_BATCH_START = time(16, 0)
+MARKET_DATA_READY = time(15, 45)
 
 
 def jst_now() -> datetime:
@@ -28,6 +29,17 @@ def jst_today(now: datetime | None = None) -> date:
 def latest_sunday(day: date) -> date:
     """指定日以前の直近日曜日（指定日が日曜なら当日）。"""
     return day - timedelta(days=(day.weekday() + 1) % 7)
+
+
+def price_fetch_end_date(now: datetime | None = None) -> date:
+    """Yahoo日足の取得上限日。大引けデータ確定前は前日までに限定する。"""
+    current = now or jst_now()
+    if current.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    current = current.astimezone(JST)
+    if current.time() < MARKET_DATA_READY:
+        return current.date() - timedelta(days=1)
+    return current.date()
 
 
 def resolve_evening_business_date(
@@ -50,6 +62,11 @@ def resolve_evening_business_date(
         return None
     if latest_price_date == current.date():
         return latest_price_date
-    if current.time() < NEXT_BATCH_START:
+    # 日跨ぎ救済は「直前日の便が翌朝まで遅延した」場合だけに限定する。
+    # 何日も価格更新が止まった状態で古い営業日を成功扱いにすると、停止が連鎖する。
+    if (
+        current.time() < NEXT_BATCH_START
+        and latest_price_date == current.date() - timedelta(days=1)
+    ):
         return latest_price_date
     return None

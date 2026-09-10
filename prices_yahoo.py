@@ -19,21 +19,24 @@ YAHOO_API = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; stock-tracker/1.0)"}
 
 
-def _get_missing_date_range(conn) -> Tuple[Optional[date], Optional[date]]:
+def _get_missing_date_range(
+    conn,
+    date_to: date | None = None,
+) -> Tuple[Optional[date], Optional[date]]:
     """DBに不足している日付範囲を返す（Yahoo Finance補完用）。"""
     cur = conn.cursor()
     cur.execute("SELECT MAX(date) FROM daily_prices")
     last_date = cur.fetchone()[0]
     cur.close()
 
-    today = date.today()
+    target_end = date_to or date.today()
 
     if last_date is None:
-        return date(2024, 3, 30), today
-    if last_date >= today:
+        return date(2024, 3, 30), target_end
+    if last_date >= target_end:
         return None, None
 
-    return last_date + timedelta(days=1), today
+    return last_date + timedelta(days=1), target_end
 
 
 def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
@@ -104,10 +107,10 @@ def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
     return []
 
 
-def fetch_and_store_yahoo(max_workers: int = 10) -> int:
+def fetch_and_store_yahoo(max_workers: int = 10, date_to: date | None = None) -> int:
     """差分更新: Yahoo Finance APIで不足している直近データを全銘柄取得してUPSERT。"""
     conn = get_conn()
-    date_from, date_to = _get_missing_date_range(conn)
+    date_from, date_to = _get_missing_date_range(conn, date_to)
 
     if date_from is None:
         print("  Yahoo: 価格データは最新です。更新不要。")

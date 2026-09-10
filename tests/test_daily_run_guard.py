@@ -1,11 +1,21 @@
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from unittest.mock import patch
 
 import daily_run
 
 
 class DailyRunGuardTest(unittest.TestCase):
+    def test_main_guard_uses_current_jst_date_after_batch_start(self):
+        now = datetime(2026, 9, 9, 12, 20, tzinfo=timezone.utc)  # 9/9 21:20 JST
+        with patch.object(daily_run, "_latest_price_date", return_value=date(2026, 9, 7)):
+            self.assertEqual(daily_run._main_guard_target_date(now), date(2026, 9, 9))
+
+    def test_main_guard_uses_latest_price_for_overnight_delay(self):
+        now = datetime(2026, 9, 9, 15, 20, tzinfo=timezone.utc)  # 9/10 00:20 JST
+        with patch.object(daily_run, "_latest_price_date", return_value=date(2026, 9, 9)):
+            self.assertEqual(daily_run._main_guard_target_date(now), date(2026, 9, 9))
+
     def test_latest_business_date_allows_main_batch_to_continue(self):
         with patch.object(
             daily_run,

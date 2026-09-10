@@ -14,9 +14,15 @@
 """
 import sys
 import traceback
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
-from batch_dates import jst_now, resolve_evening_business_date
+from batch_dates import (
+    JST,
+    NEXT_BATCH_START,
+    jst_now,
+    price_fetch_end_date,
+    resolve_evening_business_date,
+)
 from config import get_conn
 
 
@@ -24,31 +30,77 @@ def _jst_now() -> datetime:
     return jst_now()
 
 
-def _already_done_today(fetch_type: str = "daily_report") -> bool:
-    """今日(JST)に指定ステップが完了済みか。リトライ実行の重複ガードに使う。"""
-    jst_day_start_utc = datetime.combine(_jst_now().date(), datetime.min.time()) - timedelta(hours=9)
+def _latest_price_date() -> date | None:
+    """DB上の最新価格日を返す。"""
+    c = get_conn(); cur = c.cursor()
+    try:
+        cur.execute("SELECT MAX(date) FROM daily_prices")
+        row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        cur.close(); c.close()
+
+
+def _main_guard_target_date(now: datetime | None = None) -> date | None:
+    """通常便の重複ガード対象日をJSTで決める。
+
+    16時以降は必ず当日を見る。翌朝まで遅延した便だけDBの最新営業日を見る。
+    これにより、前日分の遅延ログが当日便を止めることを防ぐ。
+    """
+    current = now or _jst_now()
+    if current.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    current = current.astimezone(JST)
+    if current.time() >= NEXT_BATCH_START:
+        return current.date()
+    return _latest_price_date()
+
+
+def _report_completed(target_date: date) -> bool:
+    """対象営業日の確定版レポートが完成済みか。"""
+    c = None
+    cur = None
     try:
         c = get_conn(); cur = c.cursor()
-        cur.execute("""
-            SELECT COUNT(*) FROM fetch_logs
-            WHERE fetch_type = %s AND status = 'done' AND finished_at >= %s
-        """, (fetch_type, jst_day_start_utc.strftime("%Y-%m-%d %H:%M:%S")))
-        n = cur.fetchone()[0]
-        cur.close(); c.close()
-        return n > 0
+        cur.execute(
+            "SELECT completed_at FROM daily_reports WHERE report_date = %s",
+            (target_date,),
+        )
+        row = cur.fetchone()
+        return bool(row and row[0])
+    except Exception:
+        # 初回デプロイでcompleted_atがまだ無い場合は、処理を止めず本体側の
+        # daily_report.ensure_table()でマイグレーションする。
+        return False
+    finally:
+        if cur:
+            cur.close()
+        if c:
+            c.close()
+
+
+def _is_market_holiday(day: date) -> bool:
+    """J-Quants公式取引カレンダーで休場日と確認できた場合だけTrue。"""
+    c = None
+    cur = None
+    try:
+        c = get_conn(); cur = c.cursor()
+        cur.execute("SELECT is_holiday FROM trading_calendar WHERE date = %s", (day,))
+        row = cur.fetchone()
+        return bool(row and row[0])
     except Exception:
         return False
+    finally:
+        if cur:
+            cur.close()
+        if c:
+            c.close()
 
 
 def _evening_target_date(now: datetime | None = None) -> date | None:
     """DBの最新価格日とJST時刻から、イブニング便の対象営業日を確定する。"""
     try:
-        c = get_conn(); cur = c.cursor()
-        cur.execute("SELECT MAX(date) FROM daily_prices")
-        row = cur.fetchone()
-        cur.close(); c.close()
-        latest = row[0] if row else None
-        return resolve_evening_business_date(latest, now or _jst_now())
+        return resolve_evening_business_date(_latest_price_date(), now or _jst_now())
     except Exception:
         # 判定不能のまま最新日を推測すると過去日を誤通知し得るため、明示的に失敗させる。
         raise
@@ -69,8 +121,14 @@ def run_evening() -> bool:
         _log("daily_report_notify", "failed", error=f"target date: {e}")
         return False
     if not target_date:
-        print("対象営業日なし（休場または次回バッチ開始後の古い価格データ）のためスキップ")
-        return True
+        today = _jst_now().date()
+        if _is_market_holiday(today):
+            print("対象営業日なし（J-Quants取引カレンダーで休場日のためスキップ）")
+            return True
+        message = "対象営業日なし（営業日に価格データが更新されていません）"
+        print(message)
+        _log("daily_report_notify", "failed", error=message)
+        return False
     print(f"対象営業日: {target_date}")
 
     notification_ok = True
@@ -97,7 +155,7 @@ def run_evening() -> bool:
     print("\n[日次レポート] 確定版を保存...")
     try:
         from daily_report import save_report, notify_report_ready
-        saved = save_report(target_date)
+        saved = save_report(target_date, final=True)
         _log("daily_report", "done", 1)
         # 確定版が保存できたらLINE通知。失敗は最後に終了コードへ反映し、
         # 後続処理を止めずにGitHub Actionsの再試行対象とする。
@@ -170,16 +228,18 @@ def _log(fetch_type: str, status: str, rows: int = 0, error: str = None):
         print(f"  [ログ記録失敗] {log_err}")
 
 
-def run(init: bool = False, rankings_only: bool = False, force: bool = False):
+def run(init: bool = False, rankings_only: bool = False, force: bool = False) -> bool:
     start = datetime.now()
+    critical_failures: list[str] = []
     print(f"\n{'='*50}")
     print(f"日次更新開始: {start.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*50}")
 
     # 重複実行ガード: 16:17メインが完走済みなら17:17リトライは何もしない
-    if not (force or init or rankings_only) and _already_done_today("daily_report"):
-        print("本日の日次更新は完了済み（リトライ実行をスキップ）。再実行は --force")
-        return
+    guard_target = _main_guard_target_date()
+    if not (force or init or rankings_only) and guard_target and _report_completed(guard_target):
+        print(f"{guard_target} の確定版レポートは完了済み（リトライ実行をスキップ）。再実行は --force")
+        return True
 
     # 0. 主要指数データ更新（毎日・差分）
     if not rankings_only:
@@ -229,7 +289,8 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
         # 3. 価格データ取得（Yahoo Finance のみ、差分更新）
         print(f"\n[3/4] 価格データ取得...")
         try:
-            n2 = fetch_and_store_yahoo(max_workers=10)
+            # 手動救済が大引け前に走っても当日の未確定日足を保存しない。
+            n2 = fetch_and_store_yahoo(max_workers=10, date_to=price_fetch_end_date())
             print(f"  Yahoo Finance: {n2} 件")
             # 価格データの日付を取引カレンダーに反映
             conn = get_conn()
@@ -251,9 +312,18 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
 
     # 休場日・遅延ガード: 同日または翌16時前までの最新営業日だけ後段へ進める。
     # 元データが更新されていないのに指標再計算・AI調査・レポート保存が走るのを防ぐ。
-    if not (rankings_only or init) and not _has_processable_prices():
-        print("\n処理対象の価格データなし（休場または古いデータ）。後段処理をスキップします。")
-        return
+    target_date = _evening_target_date()
+    if init and target_date is None:
+        target_date = _latest_price_date()
+    if not (rankings_only or init) and target_date is None:
+        today = _jst_now().date()
+        if _is_market_holiday(today):
+            print("\nJ-Quants取引カレンダーで休場日のため、後段処理をスキップします。")
+            return True
+        message = "営業日なのに当日または直前日の価格データが取得できませんでした"
+        print(f"\n{message}")
+        _log("daily_batch", "failed", error=message)
+        return False
 
     # 3.5. 株式分割・併合 対応（JPX公式 J-Quants ベース）
     #   - 直近窓の新規分割を Yahoo splits で暫定検知し、該当銘柄の adj_close を再計算。
@@ -360,6 +430,7 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
         except Exception as e:
             print(f"  エラー: {e}")
             _log("price_stats", "failed", error=str(e))
+            critical_failures.append(f"price_stats: {e}")
 
     # 理論株価（はっしゃん式）を計算 → theoretical_values に保存
     # price_stats と stock_fundamentals の最新値に依存するため、その後に実行する
@@ -423,6 +494,7 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
     except Exception as e:
         print(f"  エラー: {e}")
         _log("rankings", "failed", error=str(e))
+        critical_failures.append(f"rankings: {e}")
 
     # 資金フロー週次集計（テーマ/業種/規模/スタイル別。直近26週を再計算=自己修復）
     # テーママスタ(theme_master)の同期は misc_batch.yml の夜間便で日次実行される
@@ -443,7 +515,7 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
         print("\n[日次レポート] 速報版を保存...")
         try:
             from daily_report import save_report
-            save_report()
+            save_report(target_date)
             _log("daily_report_interim", "done", 1)
         except Exception as e:
             print(f"  エラー: {e}")
@@ -500,11 +572,14 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
         print("\n[日次レポート] 生成・保存中...")
         try:
             from daily_report import save_report
-            save_report()
+            saved = save_report(target_date, final=True)
+            if saved != target_date:
+                raise RuntimeError(f"日次レポート保存日不一致: expected={target_date}, actual={saved}")
             _log("daily_report", "done", 1)
         except Exception as e:
             print(f"  エラー: {e}")
             _log("daily_report", "failed", error=str(e))
+            critical_failures.append(f"daily_report: {e}")
 
     elapsed = (datetime.now() - start).total_seconds()
     print(f"\n{'='*50}")
@@ -512,6 +587,10 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False):
 
     print_rankings("daily",  "change_pct")
     print_rankings("weekly", "change_pct")
+    if critical_failures:
+        print("\nクリティカル処理失敗: " + " / ".join(critical_failures))
+        return False
+    return True
 
 
 if __name__ == "__main__":
@@ -522,4 +601,5 @@ if __name__ == "__main__":
         init          = "--init" in sys.argv
         rankings_only = "--rankings" in sys.argv
         force         = "--force" in sys.argv
-        run(init=init, rankings_only=rankings_only, force=force)
+        if not run(init=init, rankings_only=rankings_only, force=force):
+            sys.exit(1)

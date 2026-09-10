@@ -888,7 +888,7 @@ def build_report_html(target_date: date | None = None) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def ensure_table():
-    """日次レポート表と、既存環境向けの通知状態カラムを保証する。"""
+    """日次レポート表と、既存環境向けの状態カラムを保証する。"""
     conn = get_conn()
     cur  = conn.cursor()
     cur.execute("""
@@ -896,6 +896,7 @@ def ensure_table():
             report_date DATE PRIMARY KEY,
             html        MEDIUMTEXT,
             created_at  DATETIME,
+            completed_at DATETIME NULL,
             notified_at DATETIME NULL,
             notify_attempts INT NOT NULL DEFAULT 0,
             notify_error VARCHAR(500) NULL
@@ -903,12 +904,14 @@ def ensure_table():
     """)
     # 初回マイグレーション: 既存テーブルはデータを保ったまま不足列だけADDする。
     # カラム名・DDLは固定の許可リストで、ユーザー入力は埋め込まない。
-    notification_columns = {
+    state_columns = {
+        # 速報版の保存と確定版の完成を区別する。重複ガードはcompleted_atだけを見る。
+        "completed_at": "completed_at DATETIME NULL",
         "notified_at": "notified_at DATETIME NULL",
         "notify_attempts": "notify_attempts INT NOT NULL DEFAULT 0",
         "notify_error": "notify_error VARCHAR(500) NULL",
     }
-    for column, ddl in notification_columns.items():
+    for column, ddl in state_columns.items():
         cur.execute("SHOW COLUMNS FROM daily_reports LIKE %s", (column,))
         if not cur.fetchone():
             cur.execute(f"ALTER TABLE daily_reports ADD COLUMN {ddl}")
@@ -917,8 +920,8 @@ def ensure_table():
     conn.close()
 
 
-def save_report(target_date: date | None = None) -> date | None:
-    """レポートを生成してDBに保存する（その日の状態のスナップショットとして蓄積）。"""
+def save_report(target_date: date | None = None, *, final: bool = False) -> date | None:
+    """レポートを保存する。final=Trueの時だけ確定版の完成時刻を記録する。"""
     ensure_table()
     html = build_report_html(target_date)
     conn = get_conn()
@@ -931,10 +934,13 @@ def save_report(target_date: date | None = None) -> date | None:
         cur.close(); conn.close()
         return None
     cur.execute("""
-        INSERT INTO daily_reports (report_date, html, created_at)
-        VALUES (%s, %s, NOW())
-        ON DUPLICATE KEY UPDATE html = VALUES(html), created_at = VALUES(created_at)
-    """, (d, html))
+        INSERT INTO daily_reports (report_date, html, created_at, completed_at)
+        VALUES (%s, %s, NOW(), CASE WHEN %s THEN NOW() ELSE NULL END)
+        ON DUPLICATE KEY UPDATE
+            html = VALUES(html),
+            created_at = VALUES(created_at),
+            completed_at = CASE WHEN %s THEN NOW() ELSE completed_at END
+    """, (d, html, final, final))
     conn.commit()
     cur.close()
     conn.close()
@@ -1040,7 +1046,7 @@ if __name__ == "__main__":
         if not a.startswith("--"):
             d = datetime.strptime(a, "%Y-%m-%d").date()
     if "--save" in args:
-        saved = save_report(d)
+        saved = save_report(d, final=True)
         if "--notify" in args and saved:
             if not notify_report_ready(saved):
                 sys.exit(1)
