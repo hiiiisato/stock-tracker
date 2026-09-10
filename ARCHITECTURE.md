@@ -98,7 +98,8 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
   正規化ルールを変えた時のみ `python stock_aliases.py --rebuild`）。
   利用側: `youtube_insights._resolve_code` / `/api/search`
 - `prices_yahoo.py` — 日次価格（Yahoo Finance chart API・並列・差分）。大引けデータ確定前の手動救済は
-  `batch_dates.price_fetch_end_date` により前日までに限定し、当日の未確定日足を保存しない
+  `batch_dates.price_fetch_end_date` により前日までに限定し、Yahooが`period2`境界より後の足を返しても
+  レスポンス側で要求範囲外を除外して当日の未確定日足を保存しない
 - `splits.py` — 株式分割・併合。CRSP等の業界標準（生値＋調整係数分離・イベントは公式コーポレートアクション由来）に倣った多層防御:
   1. **J-Quants公式**(AdjFactor/AdjC)が正（12週遅延）。AdjC採用日には係数を重ねない
   2. 直近窓はYahoo splitsで暫定検知 → **TDnet適時開示（disclosures・事前公表）で裏取り**。

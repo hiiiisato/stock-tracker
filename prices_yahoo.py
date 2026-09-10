@@ -79,6 +79,10 @@ def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
                 if close is None:
                     continue
                 dt = datetime.fromtimestamp(ts).date()
+                # Yahoo chart APIはperiod2境界の次日（当日進行中の足を含む）を
+                # 返すことがある。要求範囲外はレスポンス受領後にも必ず除外する。
+                if not date_from <= dt <= date_to:
+                    continue
 
                 # adj_close は close と同値で書く（調整はしない）。
                 # 理由: Yahoo の adjclose は「配当・分配金」まで調整に含めるため、
