@@ -2134,6 +2134,8 @@ def _build_watchlist_page(msg: str = "", selected: str = "all") -> str:
         badges = "".join(f'<span class="wl-list-badge">{_html.escape(n)}</span>' for _i, n in memberships[code])
         if not badges:
             badges = '<span class="wl-list-badge muted-badge">未分類</span>'
+        if not name:
+            badges += '<span class="wl-list-badge muted-badge">銘柄情報なし</span>'
         memo = latest_memos.get(code)
         memo_html = (_html.escape(str(memo[1])) if memo else '<span class="muted">メモなし</span>')
         memo_id = memo[0] if memo else ""
