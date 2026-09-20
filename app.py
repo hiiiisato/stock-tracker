@@ -19,6 +19,10 @@ import time
 import threading
 import json as _json
 import html as _html
+import hashlib
+import hmac
+import os
+from urllib.parse import quote as _url_quote
 from datetime import date, timedelta, datetime
 
 import requests as _requests
@@ -2106,6 +2110,7 @@ def _build_watchlist_page(msg: str = "", selected: str = "all") -> str:
 
     selected_q = _html.escape(selected, quote=True)
     next_url = f"/watchlist?list={selected_q}"
+    csrf_input = _watchlist_csrf_input()
     msg_html = f'<div class="alert">{_html.escape(msg)}</div>' if msg else ""
     pills = [f'<a class="wl-pill {"active" if selected == "all" else ""}" href="/watchlist?list=all">すべて <b>{len(base_items)}</b></a>']
     pills += [f'<a class="wl-pill {"active" if selected == str(i) else ""}" href="/watchlist?list={i}">{_html.escape(n)} <b>{counts[i]}</b></a>' for i, n in lists]
@@ -2162,7 +2167,7 @@ def _build_watchlist_page(msg: str = "", selected: str = "all") -> str:
                 label = "上限到達" if direction == "upper" else "下限到達"
                 flag_html += (f'<span class="wl-flag hit">{label} · {event_date}</span>'
                               f'<form method="POST" action="/watchlist/alert/ack" class="wl-inline">'
-                              f'<input type="hidden" name="event_id" value="{event_id}"><input type="hidden" name="code" value="{code}">'
+                              f'{csrf_input}<input type="hidden" name="event_id" value="{event_id}"><input type="hidden" name="code" value="{code}">'
                               f'<input type="hidden" name="next" value="{next_url}#wl-{code}">'
                               f'<button class="wl-text-btn" type="submit">確認済み</button></form>')
         alerts_text = " / ".join(alert_summary) if alert_summary else "未設定"
@@ -2175,10 +2180,10 @@ def _build_watchlist_page(msg: str = "", selected: str = "all") -> str:
   <div class="wl-chart">{_wl_sparkline(price_series.get(code, []))}<span>3か月</span></div>
   <div class="wl-personal"><div class="wl-note"><span class="wl-label">メモ</span><p>{memo_html}</p></div><div class="wl-alert-line"><span class="wl-label">価格通知</span><b>{alerts_text}</b></div><div class="wl-flags">{flag_html}</div></div>
   <details class="wl-actions"><summary>整理・メモ・価格通知</summary><div class="wl-action-grid">
-    <form method="POST" action="/watchlist/memberships"><h4>所属リスト</h4><input type="hidden" name="code" value="{code}"><input type="hidden" name="next" value="{next_url}#wl-{code}"><div class="wl-checks">{list_checks(code)}</div><button class="btn-sm" type="submit">保存</button></form>
-    <form method="POST" action="/memo/{'edit' if memo else 'add'}"><h4>メモ</h4><input type="hidden" name="code" value="{code}"><input type="hidden" name="id" value="{memo_id}"><input type="hidden" name="next" value="{next_url}#wl-{code}"><textarea name="content" rows="3" maxlength="2000" placeholder="気になった理由や次に確認すること">{memo_value}</textarea><button class="btn-sm" type="submit">{'更新' if memo else '追加'}</button></form>
-    <form method="POST" action="/watchlist/alert"><h4>終値リマインダー</h4><input type="hidden" name="code" value="{code}"><input type="hidden" name="next" value="{next_url}#wl-{code}"><input type="hidden" name="upper_status" value="{upper_status}"><input type="hidden" name="lower_status" value="{lower_status}"><div class="wl-price-inputs"><label>上値<input name="upper" inputmode="decimal" value="{upper_value}" placeholder="{upper_placeholder}"></label><label>下値<input name="lower" inputmode="decimal" value="{lower_value}" placeholder="{lower_placeholder}"></label></div><p class="muted">監視中の空欄は解除。到達済みは価格を入力すると再開します。</p><button class="btn-sm" type="submit">保存</button></form>
-    <form method="POST" action="/watchlist/remove" class="wl-remove"><input type="hidden" name="code" value="{code}"><input type="hidden" name="next" value="{next_url}"><button type="submit" class="wl-danger">ウォッチリストから削除</button></form>
+    <form method="POST" action="/watchlist/memberships"><h4>所属リスト</h4>{csrf_input}<input type="hidden" name="code" value="{code}"><input type="hidden" name="next" value="{next_url}#wl-{code}"><div class="wl-checks">{list_checks(code)}</div><button class="btn-sm" type="submit">保存</button></form>
+    <form method="POST" action="/memo/{'edit' if memo else 'add'}"><h4>メモ</h4>{csrf_input}<input type="hidden" name="code" value="{code}"><input type="hidden" name="id" value="{memo_id}"><input type="hidden" name="next" value="{next_url}#wl-{code}"><textarea name="content" rows="3" maxlength="2000" placeholder="気になった理由や次に確認すること">{memo_value}</textarea><button class="btn-sm" type="submit">{'更新' if memo else '追加'}</button></form>
+    <form method="POST" action="/watchlist/alert"><h4>終値リマインダー</h4>{csrf_input}<input type="hidden" name="code" value="{code}"><input type="hidden" name="next" value="{next_url}#wl-{code}"><input type="hidden" name="upper_status" value="{upper_status}"><input type="hidden" name="lower_status" value="{lower_status}"><div class="wl-price-inputs"><label>上値<input name="upper" inputmode="decimal" value="{upper_value}" placeholder="{upper_placeholder}"></label><label>下値<input name="lower" inputmode="decimal" value="{lower_value}" placeholder="{lower_placeholder}"></label></div><p class="muted">監視中の空欄は解除。到達済みは価格を入力すると再開します。</p><button class="btn-sm" type="submit">保存</button></form>
+    <form method="POST" action="/watchlist/remove" class="wl-remove">{csrf_input}<input type="hidden" name="code" value="{code}"><input type="hidden" name="next" value="{next_url}"><button type="submit" class="wl-danger">ウォッチリストから削除</button></form>
   </div></details>
 </article>""")
     cards_html = "".join(cards) if cards else '<div class="wl-empty">このリストには銘柄がありません。</div>'
@@ -2187,10 +2192,10 @@ def _build_watchlist_page(msg: str = "", selected: str = "all") -> str:
     body = f"""\
 <style>{_WATCHLIST_CSS}</style>
 <div class="page-header wl-title-row"><div><div class="page-title">ウォッチリスト</div><div class="page-subtitle">保存理由・指標・価格到達をひと目で確認</div></div>
-<details class="wl-list-manage"><summary>リストを管理</summary><div class="wl-manage-pop"><form method="POST" action="/watchlist/lists/create"><input name="name" maxlength="40" placeholder="新しいリスト名" required><button class="btn-sm">作成</button></form>{''.join(f'<form method="POST" action="/watchlist/lists/rename"><input type="hidden" name="list_id" value="{i}"><input name="name" maxlength="40" value="{_html.escape(n, quote=True)}" required><button class="btn-sm">変更</button><button class="wl-danger" formaction="/watchlist/lists/delete">削除</button></form>' for i,n in lists)}</div></details></div>
+<details class="wl-list-manage"><summary>リストを管理</summary><div class="wl-manage-pop"><form method="POST" action="/watchlist/lists/create">{csrf_input}<input name="name" maxlength="40" placeholder="新しいリスト名" required><button class="btn-sm">作成</button></form>{''.join(f'<form method="POST" action="/watchlist/lists/rename">{csrf_input}<input type="hidden" name="list_id" value="{i}"><input name="name" maxlength="40" value="{_html.escape(n, quote=True)}" required><button class="btn-sm">変更</button><button class="wl-danger" formaction="/watchlist/lists/delete">削除</button></form>' for i,n in lists)}</div></details></div>
 {msg_html}
 <div class="wl-pills">{''.join(pills)}</div>
-<div class="wl-add card"><div class="card-body"><form method="POST" action="/watchlist/add" id="wl-add-form"><input type="hidden" name="memberships_present" value="1"><div class="wl-search-wrap"><input id="wl-stock-search" placeholder="銘柄名・コードで検索" autocomplete="off" required><input type="hidden" name="code" id="wl-stock-code"><div id="wl-search-results" class="wl-search-results"></div></div><div class="wl-checks">{list_checks()}</div><textarea name="memo" rows="1" maxlength="2000" placeholder="メモ（任意）"></textarea><button type="submit" class="btn">追加</button></form></div></div>
+<div class="wl-add card"><div class="card-body"><form method="POST" action="/watchlist/add" id="wl-add-form">{csrf_input}<input type="hidden" name="memberships_present" value="1"><div class="wl-search-wrap"><input id="wl-stock-search" placeholder="銘柄名・コードで検索" autocomplete="off" required><input type="hidden" name="code" id="wl-stock-code"><div id="wl-search-results" class="wl-search-results"></div></div><div class="wl-checks">{list_checks()}</div><textarea name="memo" rows="1" maxlength="2000" placeholder="メモ（任意）"></textarea><button type="submit" class="btn">追加</button></form></div></div>
 {_chart_grid_toolbar(codes_js, show_added_sort=True)}
 <div id="view-list">
   <div class="wl-grid">{cards_html}</div>
@@ -2224,13 +2229,13 @@ def _stock_watch_control(code: str) -> str:
         label = "保存先を編集" if saved else "⭐ ウォッチリストに保存"
         return f"""<style>.s-wl-btn .wl-check input{{position:absolute;opacity:0}}.s-wl-btn .wl-check span{{display:inline-block;border:1px solid #30363d;border-radius:999px;padding:4px 8px;color:#8b949e;font-size:11px;margin:2px}}.s-wl-btn .wl-check input:checked+span{{background:#1f3b5b;border-color:#388bfd;color:#cae8ff}}</style><details style="position:relative"><summary class="btn-sm" style="cursor:pointer;list-style:none">{label}</summary>
 <form method="POST" action="/watchlist/add" style="position:absolute;right:0;top:34px;z-index:30;width:min(340px,86vw);padding:12px;background:#161b22;border:1px solid #30363d;border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.45)">
-<input type="hidden" name="code" value="{code}"><input type="hidden" name="next" value="/stock/{code}"><input type="hidden" name="memberships_present" value="1">
+{_watchlist_csrf_input()}<input type="hidden" name="code" value="{code}"><input type="hidden" name="next" value="/stock/{code}"><input type="hidden" name="memberships_present" value="1">
 <div class="wl-checks" style="margin-bottom:8px">{checks or '<span class="muted">リストはウォッチリスト画面で作成できます</span>'}</div>
 <textarea name="memo" rows="2" maxlength="2000" placeholder="メモ（任意）" style="width:100%;margin-bottom:8px"></textarea>
 <button type="submit" class="btn-sm">保存</button></form></details>"""
     except Exception as e:
         print(f"[stock_watch_control] error: {e}")
-        return f"""<form method="POST" action="/watchlist/add"><input type="hidden" name="code" value="{code}"><input type="hidden" name="next" value="/stock/{code}"><button type="submit" class="btn-sm">⭐ ウォッチリスト</button></form>"""
+        return f"""<form method="POST" action="/watchlist/add">{_watchlist_csrf_input()}<input type="hidden" name="code" value="{code}"><input type="hidden" name="next" value="/stock/{code}"><button type="submit" class="btn-sm">⭐ ウォッチリスト</button></form>"""
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -8716,6 +8721,7 @@ def _build_stock_page(code: str) -> str:
 
     # ─ メモ HTML ─
     memo_cards = ""
+    memo_csrf = _watchlist_csrf_input()
     for m in memos:
         created = str(m["created_at"])[:16]
         content = m["content"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -8724,6 +8730,7 @@ def _build_stock_page(code: str) -> str:
   <div style="text-align:right">
     <div class="memo-meta">{created}</div>
     <form method="POST" action="/memo/delete" style="margin-top:4px">
+      {memo_csrf}
       <input type="hidden" name="id" value="{m['id']}">
       <input type="hidden" name="code" value="{s_code}">
       <button type="submit" class="memo-del" title="削除">✕</button>
@@ -8733,6 +8740,7 @@ def _build_stock_page(code: str) -> str:
     memos_html = f"""<p class="price-section-header">メモ</p>
 <div class="memo-list">{memo_cards if memo_cards else '<p class="muted" style="font-size:13px">メモなし</p>'}</div>
 <form class="memo-form" method="POST" action="/memo/add">
+  {memo_csrf}
   <input type="hidden" name="code" value="{s_code}">
   <textarea name="content" placeholder="メモを追加..." rows="2"></textarea>
   <button type="submit" class="btn-sm">追加</button>
@@ -10911,6 +10919,32 @@ def watchlist_page():
     )
 
 
+@app.route("/watchlist/login", methods=["GET", "POST"])
+def watchlist_login():
+    next_url = request.values.get("next", "/watchlist").strip()
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = "/watchlist"
+    passcode = _watchlist_passcode()
+    if request.method == "POST" and passcode and hmac.compare_digest(
+        request.form.get("passcode", ""), passcode
+    ):
+        response = make_response(redirect(next_url))
+        response.set_cookie("wl_auth", _watchlist_token(), max_age=60 * 60 * 24 * 30,
+                            httponly=True, samesite="Lax", secure=request.is_secure)
+        return response
+    if not passcode:
+        message = ("<p>ウォッチリストの更新を保護するには、環境変数 "
+                   "<code>WATCHLIST_PASSCODE</code> または "
+                   "<code>PORTFOLIO_PASSCODE</code> を設定してください。</p>")
+    else:
+        message = (f'<p>リスト・メモ・価格通知の変更は保護されています。</p>'
+                   f'<form method="post" action="/watchlist/login">'
+                   f'<input type="hidden" name="next" value="{_html.escape(next_url, quote=True)}">'
+                   '<input type="password" name="passcode" placeholder="パスコード" autofocus>'
+                   '<button type="submit">開く</button></form>')
+    return _page_html("ウォッチリストを開く", f'<div class="pf-wrap"><div class="pf-gate"><h2>🔒 ウォッチリスト</h2>{message}</div></div>', active="watchlist")
+
+
 def _valid_code(code: str) -> bool:
     """銘柄コードの形式検証（4〜5桁の英数字。例: 7203, 285A, 1306）"""
     return bool(re.fullmatch(r"[0-9A-Z]{4,5}", code))
@@ -11273,7 +11307,6 @@ _PF_CSS = """
 
 
 def _pf_token():
-    import os, hashlib
     pw = os.environ.get("PORTFOLIO_PASSCODE", "")
     return hashlib.sha256(("pf:" + pw).encode()).hexdigest()[:32] if pw else None
 
@@ -11281,6 +11314,56 @@ def _pf_token():
 def _pf_authed() -> bool:
     tok = _pf_token()
     return bool(tok) and request.cookies.get("pf_auth") == tok
+
+
+def _watchlist_passcode() -> str:
+    """個人用の更新操作は専用値、未設定時は既存のポートフォリオ値で保護する。"""
+    return os.environ.get("WATCHLIST_PASSCODE", "") or os.environ.get("PORTFOLIO_PASSCODE", "")
+
+
+def _watchlist_token() -> str | None:
+    passcode = _watchlist_passcode()
+    return hashlib.sha256(("wl:" + passcode).encode()).hexdigest()[:32] if passcode else None
+
+
+def _watchlist_authed() -> bool:
+    token = _watchlist_token()
+    return bool(token) and (
+        _pf_authed() or hmac.compare_digest(request.cookies.get("wl_auth", ""), token)
+    )
+
+
+def _watchlist_csrf_token() -> str:
+    """HttpOnly認証Cookieから派生させる同一オリジン用のPOSTトークン。"""
+    cookie = request.cookies.get("wl_auth", "")
+    if not cookie and _pf_authed():
+        cookie = request.cookies.get("pf_auth", "")
+    return hashlib.sha256(("wl-csrf:" + cookie).encode()).hexdigest() if cookie else ""
+
+
+def _watchlist_csrf_input() -> str:
+    token = _watchlist_csrf_token()
+    return (f'<input type="hidden" name="csrf" value="{token}">'
+            if token else "")
+
+
+def _watchlist_next_from_request() -> str:
+    value = request.form.get("next", "/watchlist").strip()
+    return value if value.startswith("/") and not value.startswith("//") else "/watchlist"
+
+
+@app.before_request
+def _protect_watchlist_writes():
+    """公開閲覧は保ち、個人メモ・通知条件の変更だけを認証とCSRFで守る。"""
+    protected = request.path.startswith("/watchlist/") or request.path.startswith("/memo/")
+    if request.method != "POST" or not protected or request.path == "/watchlist/login":
+        return None
+    if not _watchlist_authed():
+        return redirect("/watchlist/login?next=" + _url_quote(_watchlist_next_from_request(), safe="/?=&"))
+    supplied = request.form.get("csrf", "")
+    if not supplied or not hmac.compare_digest(supplied, _watchlist_csrf_token()):
+        abort(403)
+    return None
 
 
 def _pf_yen(n) -> str:
