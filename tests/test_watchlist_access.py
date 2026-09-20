@@ -9,7 +9,11 @@ import app as stock_app
 
 class WatchlistWriteProtectionTest(unittest.TestCase):
     def setUp(self):
-        self.env = patch.dict(os.environ, {"PORTFOLIO_PASSCODE": "test-pass"}, clear=False)
+        self.env = patch.dict(
+            os.environ,
+            {"PORTFOLIO_PASSCODE": "test-pass", "WATCHLIST_PASSCODE": ""},
+            clear=False,
+        )
         self.env.start()
         self.client = stock_app.app.test_client()
         self.token = stock_app._watchlist_token()
@@ -31,6 +35,15 @@ class WatchlistWriteProtectionTest(unittest.TestCase):
             "/watchlist/lists/create", data={"name": "業績良さそう", "csrf": "invalid"}
         )
         self.assertEqual(response.status_code, 403)
+
+    def test_login_sets_a_separate_httponly_watchlist_cookie(self):
+        response = self.client.post(
+            "/watchlist/login", data={"passcode": "test-pass", "next": "/watchlist"}
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/watchlist")
+        self.assertIn("wl_auth=", response.headers["Set-Cookie"])
+        self.assertIn("HttpOnly", response.headers["Set-Cookie"])
 
     def test_price_alert_edit_preserves_an_unedited_triggered_direction(self):
         self.client.set_cookie("wl_auth", self.token)
