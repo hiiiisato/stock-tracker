@@ -30,6 +30,7 @@ J-Quants 無料枠・EDINET）のみで構成。
 | daily.yml | 平日17:00 リトライ | 同上 | GHA cron遅延・失敗への保険。daily_run側の重複ガードで完了済みならスキップ |
 | daily.yml | 平日19:17 YouTube日次 | `python youtube_insights.py --daily` | YouTube日次巡回後、レポートを再生成（確定状態は変更しない） |
 | daily.yml | 平日20:30 イブニング便 | `python daily_run.py --evening` | 夜間の適時開示回収→市況考察→日次レポート確定版を上書き保存→**確定版をLINE通知**→AIファンド意思決定 |
+| price_alerts.yml | 毎日7:30 | `python price_alerts.py --migrate --send` | 前営業日の終値で到達した価格リマインダーをLINEへまとめて通知（金曜分は土曜朝） |
 | misc_batch.yml | ~~毎日23:45~~ **一時停止中** | `python edinet_texts.py --all` | EDINET本文ドリップ（`if:false`。財務キャッチアップ中は枠譲渡） |
 | misc_batch.yml | ~~毎日23:45~~ **一時停止中** | `python edinet_segments.py --all` | 事業セグメント時系列（`if:false`。同上） |
 | misc_batch.yml | 毎日**00:30 JST** | `python financials_edinet.py` | 全銘柄の長期業績整備（有報年次・時価総額大きい順に未取得を取得）＋op欠損穴埋め（EDINET）。**枠リセット(00:00 JST)直後**に走らせフレッシュな100/日を使い切る。自動停止 |
@@ -213,6 +214,11 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 - `line_notify.py` — LINE Messaging API への汎用テキストpush（`push_text`/`is_configured`）。
   日次レポート完成通知のトランスポート。環境変数 `LINE_CHANNEL_ACCESS_TOKEN`/`LINE_USER_ID`、
   未設定なら送信スキップ（例外を出さない）。LINE初回設定手順は line_notify.py の docstring
+  `retry_key` 指定時は `X-Line-Retry-Key` を付け、タイムアウト後の再送でも重複配信を防ぐ
+- `watchlist_service.py` — ウォッチリストの複数リスト所属・価格通知設定・追加専用スキーマ移行。
+  既存 `watchlist`/`stock_memos` を正として維持し、リスト削除時も銘柄・メモを残す
+- `price_alerts.py` — 上値/下値の終値到達判定と翌朝LINE通知。到達イベントと送信バッチをDB保存し、
+  日次バッチ再実行・朝便再試行を冪等化。株式分割後の旧設定は自動通知せず確認待ちにする
 - `swing_scorer.py` — スイング候補スコア → `swing_scores`（/swing ページで表示）
   ※旧 `swing_notifier.py`（スイングのLINE通知）はテスト用途のみで廃止し archive/ へ移動（2026-07）
 - `event_researcher.py` — 急騰急落銘柄の要因をニュース検索+Geminiで要約 → `price_events`。
@@ -287,7 +293,8 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 | `/aifund` | AIファンド（模擬運用: 保有8銘柄・次の売買予定と理由・NAV vs TOPIX・売買履歴） |
 | `/themes` | テーマ株一覧（みんかぶ全~1,150テーマ＋手動テーマ）。上部に3枠: **ロングランテーマ**（`LONGRUN_THEMES`=手動15件・構造テーマ・featured='long'）、**気になるテーマ**（`WATCH_THEMES`=オーナー興味の手動・featured='watch'。空なら非表示）、**好調テーマ10**（自動: 6銘柄+&時価総額1兆+足切り→大局スコア順。pin/banで上書き可）。どちらも1年指数ミニチャート付きカード。みんかぶに無い「宇宙開発」「SaaS」は`theme_master.MANUAL_THEMES`の手動キュレーション（origin='manual'・同期対象外）。一覧は**大局×短期の2軸スコア＋四象限判定**（主力トレンド/押し目/大局良好/一過性疑い/冷却）でデフォルト大局順。大局=1年・6ヶ月の対TOPIX超過×資金流入持続週数(26週)×高値圏×増益率中央値 |
 | `/theme/<id>` | テーマ詳細（みんかぶ風・2026-07刷新。説明文＋前日/前月/前年比＋テーマ指数vsTOPIXチャート(期間切替)＋関連度バー・3ヶ月ミニチャート付き構成銘柄表＋周辺銘柄折りたたみ） |
-| `/rankings` `/events` `/swing` `/watchlist` | 各分析ページ（/report/<date>は/themesへリダイレクト） |
+| `/rankings` `/events` `/swing` | 各分析ページ（/report/<date>は/themesへリダイレクト） |
+| `/watchlist` | 複数リスト分類、共通メモ、終値/PER/PBR/配当利回り、3か月ミニチャート、上値/下値リマインダーと到達フラグ |
 | `/portfolio` (+ `/portfolio/login` `/portfolio/logout`) | ポートフォリオ（SBI証券の保有/約定を取込表示）。概要サマリーを常時表示し、**資産・配当／診断・リスク／保有銘柄／取引履歴**の4ビューで既存情報を整理。総資産・含み損益・**実現損益（取引履歴から）**・銘柄別ヒートマップ/口座別/業種別の切替式資産構成・年間/月別/銘柄別の配当見込み・集中度HHI・テーマ/業種エクスポージャー・2軸ヘルスチェック・リスク指標/ストレステスト・**取引履歴＆実現損益**。ヒートマップ内は文字サイズを拡大し、投信は短縮表示（正式名はホバー）を使用。月別配当は予想年間DPSを直近の権利落ち実績パターンへ配分（支払月とは区別）。**評価額は当社の日次終値ベースで毎日自動更新**（SBI明細は取得単価・保有構成の取込元＝随時でOK。投信のみSBI値）。**個人情報のため `PORTFOLIO_PASSCODE`(env) の簡易Cookie認証で保護**、未設定時OFF。データ投入は `import_sbi.py`（ローカル手動）、分析は `portfolio_analytics.py` |
 | `/api/chart_grid` `/api/search` `/health` | 補助API |
 
@@ -323,7 +330,9 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 | YouTube | `youtube_channels` `youtube_videos` `youtube_weekly` `youtube_daily` | youtube_insights.py（週次AI巡回・動画分析・横断サマリー。日次は大引け解説を集約し日次レポートへ差し込む） |
 | レポート | `daily_reports` | daily_report.py（日次HTMLとLINE送信状態。通知はreport_date単位で冪等） |
 | コンセンサス | `analyst_consensus` | analyst_consensus.py（みんかぶ・目標株価/レーティング/会社予想vsコンセンサス） |
-| アプリ | `watchlist` `stock_memos` `fetch_logs` | app.py / daily_run.py |
+| アプリ | `watchlist` `stock_memos` `watchlist_lists` `watchlist_list_items` | 保存銘柄・共通メモ・複数リスト分類（app.py / watchlist_service.py） |
+| 通知 | `price_alerts` `price_alert_events` `price_alert_notification_batches` | 終値リマインダー設定・到達履歴・LINE送信の冪等管理（price_alerts.py） |
+| 運用 | `fetch_logs` | daily_run.py のバッチ実行ログ |
 | ポートフォリオ | `my_holdings` `my_trades` | import_sbi.py（SBI証券CSVをローカル手動取込・保有は全置換／約定はrow_hashで冪等）。/portfolio で表示 |
 | AIファンド | `ai_fund_state` `ai_fund_positions` `ai_fund_orders` `ai_fund_trades` `ai_fund_nav` `ai_fund_policy` `ai_fund_bench` | ai_fund.py（模擬運用・全売買に理由を記録・投資基準と控え銘柄を日次蓄積） |
 | 決算予定 | `earnings_schedule` | earnings_calendar_jpx.py（JPX公式の決算発表予定日Excel・日次更新）。ai_fund.py `_earnings_dates` が読み取り。kabutan/ J-Quants無料枠(12週遅延)は使用不可のため公式JPXに置換 |

@@ -14,6 +14,7 @@ on:
     workflows:
       - その他の定期バッチ（EDINETテキスト・ファンドウォッチ）
       - 日次市場データ更新
+      - 価格リマインダー朝便
     types: [completed]
 
 permissions:

@@ -238,8 +238,16 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
     # 重複実行ガード: 16:17メインが完走済みなら17:17リトライは何もしない
     guard_target = _main_guard_target_date()
     if not (force or init or rankings_only) and guard_target and _report_completed(guard_target):
-        print(f"{guard_target} の確定版レポートは完了済み（リトライ実行をスキップ）。再実行は --force")
-        return True
+        print(f"{guard_target} の確定版レポートは完了済み（重い処理をスキップ）。再実行は --force")
+        # レポート完了後に価格通知判定だけ失敗した場合も、17:17便で自己回復させる。
+        try:
+            from price_alerts import check_alerts
+            check_alerts(guard_target)
+            return True
+        except Exception as e:
+            print(f"  [価格リマインダー] エラー: {e}")
+            _log("price_alert_check", "failed", error=str(e))
+            return False
 
     # 0. 主要指数データ更新（毎日・差分）
     if not rankings_only:
@@ -348,6 +356,17 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
         except Exception as e:
             print(f"  エラー: {e}")
             _log("splits_integrity", "failed", error=str(e))
+
+        # 分割検証後の確定終値で価格リマインダーを判定する。
+        print("\n[価格リマインダー] 終値到達を判定中...")
+        try:
+            from price_alerts import check_alerts
+            n_alerts = check_alerts(target_date)
+            _log("price_alert_check", "done", n_alerts)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("price_alert_check", "failed", error=str(e))
+            critical_failures.append(f"price_alert_check: {e}")
 
     # AIファンド: 前夜に決定した注文を当日寄付で約定 → 終値でNAV記録
     # （価格・分割処理の直後＝当日の open/close が確定してから）

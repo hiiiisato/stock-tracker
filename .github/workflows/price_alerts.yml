@@ -1,0 +1,45 @@
+name: 価格リマインダー朝便
+
+on:
+  schedule:
+    # 前営業日の終値到達を翌暦日7:30 JSTにまとめて通知。金曜分は土曜朝に送る。
+    - cron: '30 22 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'LINE送信せず対象と本文だけ確認する'
+        type: boolean
+        default: true
+
+concurrency:
+  group: price-alert-morning
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TIDB_HOST: ${{ secrets.TIDB_HOST }}
+      TIDB_PORT: ${{ secrets.TIDB_PORT }}
+      TIDB_USER: ${{ secrets.TIDB_USER }}
+      TIDB_PASSWORD: ${{ secrets.TIDB_PASSWORD }}
+      TIDB_DATABASE: ${{ secrets.TIDB_DATABASE }}
+      JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
+      LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+      LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+      REPORT_BASE_URL: ${{ secrets.REPORT_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: スキーマ移行と翌朝通知
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            python price_alerts.py --migrate --send --dry-run --force
+          else
+            python price_alerts.py --migrate --send
+          fi

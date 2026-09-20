@@ -38,7 +38,7 @@ def is_configured() -> bool:
                 and os.environ.get("LINE_USER_ID", "").strip())
 
 
-def push_text(text: str, *, label: str = "LINE") -> bool:
+def push_text(text: str, *, label: str = "LINE", retry_key: str | None = None) -> bool:
     """LINE にテキストメッセージを1通送る。未設定ならスキップして False を返す。
 
     label は複数の通知種別（スイング/日次レポート等）をログで区別するためのタグ。
@@ -54,13 +54,17 @@ def push_text(text: str, *, label: str = "LINE") -> bool:
         "messages": [{"type": "text", "text": text[:MAX_TEXT_LEN]}],
     }).encode("utf-8")
 
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+    if retry_key:
+        headers["X-Line-Retry-Key"] = retry_key
+
     req = urllib.request.Request(
         LINE_PUSH_URL,
         data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-        },
+        headers=headers,
         method="POST",
     )
     for attempt in range(3):
@@ -70,6 +74,10 @@ def push_text(text: str, *, label: str = "LINE") -> bool:
                 return True
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
+            # 同じretry keyが既に受理済みなら、初回送信は成功している。
+            if retry_key and e.code == 409:
+                print(f"  [{label}] 再送キーは受付済み（重複送信なし）")
+                return True
             transient = e.code == 429 or e.code >= 500
             if transient and attempt < 2:
                 retry_after = e.headers.get("Retry-After", "")
