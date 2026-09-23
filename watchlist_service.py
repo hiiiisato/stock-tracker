@@ -110,7 +110,13 @@ def parse_price(value: str | None) -> Decimal | None:
 
 
 def next_effective_date(now: datetime | None = None) -> date:
-    """設定後に初めて終値が確定する営業日。"""
+    """設定後に初めて終値が確定する営業日。
+
+    取引カレンダーに該当行が無い場合、土日だけで代用すると祝日を営業日と
+    誤判定しうる（trading_calendarの正本はJ-Quants公式＋JPX休業日一覧。
+    daily_run.pyが先読み180日を切ったら失敗させて気づける設計にしたので、
+    ここで沈黙してフォールバックする必要はない）。取得できなければ例外を送出する。
+    """
     current = (now or jst_now()).astimezone(JST)
     start = current.date() if current.time() < MARKET_DATA_READY else current.date() + timedelta(days=1)
     ensure_schema()
@@ -125,9 +131,7 @@ def next_effective_date(now: datetime | None = None) -> date:
             return row[0]
     finally:
         cur.close(); conn.close()
-    while start.weekday() >= 5:
-        start += timedelta(days=1)
-    return start
+    raise ValueError(f"取引カレンダーが{start}以降で未登録です")
 
 
 def set_memberships(code: str, list_ids: list[int]) -> None:

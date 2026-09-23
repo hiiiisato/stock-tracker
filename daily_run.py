@@ -79,17 +79,24 @@ def _report_completed(target_date: date) -> bool:
             c.close()
 
 
-def _is_market_holiday(day: date) -> bool:
-    """J-Quants公式取引カレンダーで休場日と確認できた場合だけTrue。"""
+def _calendar_status(day: date) -> str:
+    """取引カレンダーでその日を "open"（営業日） / "holiday"（休場） /
+    "unregistered"（未登録・DB接続失敗）のいずれかで返す。
+
+    未登録を営業日扱いしてしまうと「休場日なのに価格0件」を見逃す（2026-09-22の
+    障害の原因）。営業日扱いにできるのは行が存在してis_holiday=FALSEの時だけにする。
+    """
     c = None
     cur = None
     try:
         c = get_conn(); cur = c.cursor()
         cur.execute("SELECT is_holiday FROM trading_calendar WHERE date = %s", (day,))
         row = cur.fetchone()
-        return bool(row and row[0])
+        if row is None:
+            return "unregistered"
+        return "holiday" if row[0] else "open"
     except Exception:
-        return False
+        return "unregistered"
     finally:
         if cur:
             cur.close()
@@ -106,11 +113,6 @@ def _evening_target_date(now: datetime | None = None) -> date | None:
         raise
 
 
-def _has_processable_prices(now: datetime | None = None) -> bool:
-    """通常便・イブニング便に共通する、処理可能な価格日があるかの判定。"""
-    return _evening_target_date(now) is not None
-
-
 def run_evening() -> bool:
     """イブニング便（20:30 JST）: 夜間に出た適時開示を回収し、市況考察と日次レポートを確定版に更新する。"""
     print(f"\n{'='*50}\nイブニング便開始: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{'='*50}")
@@ -122,10 +124,14 @@ def run_evening() -> bool:
         return False
     if not target_date:
         today = _jst_now().date()
-        if _is_market_holiday(today):
-            print("対象営業日なし（J-Quants取引カレンダーで休場日のためスキップ）")
+        status = _calendar_status(today)
+        if status == "holiday":
+            print("対象営業日なし（取引カレンダーで休場日と確認できたためスキップ）")
             return True
-        message = "対象営業日なし（営業日に価格データが更新されていません）"
+        if status == "unregistered":
+            message = "対象営業日なし（取引カレンダーが未登録の日付です。JPX休業日一覧の取り込みを確認してください）"
+        else:
+            message = "対象営業日なし（営業日に価格データが更新されていません）"
         print(message)
         _log("daily_report_notify", "failed", error=message)
         return False
@@ -294,24 +300,36 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
             print(f"  エラー: {e}")
             _log("calendar", "failed", error=str(e))
 
+        # 2.5 取引カレンダーの先読み連続性チェック。
+        #   JPX休業日一覧の取り込みが止まっても MAX(date) だけでは気づけない（途中の欠落や
+        #   ページ構造変更を見逃す）ため、今日から先が何日連続して登録済みかを数える。
+        #   2026-09-22 障害の再発防止: 猶予を切ったら「価格0件」より先にここで検知して失敗させる。
+        try:
+            from master import calendar_lookahead_days, CALENDAR_MIN_LOOKAHEAD_DAYS
+            lookahead = calendar_lookahead_days()
+            print(f"  先読み日数: {lookahead} 日（閾値 {CALENDAR_MIN_LOOKAHEAD_DAYS} 日）")
+            if lookahead < CALENDAR_MIN_LOOKAHEAD_DAYS:
+                msg = f"取引カレンダーの先読みが{lookahead}日しかありません（閾値{CALENDAR_MIN_LOOKAHEAD_DAYS}日）。JPX休業日一覧の取り込みを確認してください"
+                print(f"  警告: {msg}")
+                _log("calendar_lookahead", "failed", error=msg)
+                critical_failures.append(f"calendar_lookahead: {msg}")
+            else:
+                _log("calendar_lookahead", "done", lookahead)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("calendar_lookahead", "failed", error=str(e))
+            critical_failures.append(f"calendar_lookahead: {e}")
+
         # 3. 価格データ取得（Yahoo Finance のみ、差分更新）
         print(f"\n[3/4] 価格データ取得...")
         try:
             # 手動救済が大引け前に走っても当日の未確定日足を保存しない。
             n2 = fetch_and_store_yahoo(max_workers=10, date_to=price_fetch_end_date())
             print(f"  Yahoo Finance: {n2} 件")
-            # 価格データの日付を取引カレンダーに反映
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO trading_calendar (date, is_holiday)
-                SELECT DISTINCT date, FALSE FROM daily_prices
-                WHERE date >= '2000-01-01'  -- 零値日付等の毒データでINSERT全体が失敗するのを防ぐ
-                ON DUPLICATE KEY UPDATE is_holiday=FALSE
-            """)
-            conn.commit()
-            cur.close()
-            conn.close()
+            # 取引カレンダーは update_trading_calendar()（J-Quants公式＋JPX休業日一覧）が
+            # 唯一の正本。Yahooの価格有無で is_holiday を上書きしない
+            # （ARCHITECTURE.md記載の「幽霊行」= 休場日でもstale値の行を返すことがあるため、
+            #  Yahooの取得結果で公式休場日を営業日に書き換えるのは危険）。
             _log("prices", "done", n2)
         except Exception as e:
             print(f"  エラー: {e}")
@@ -325,10 +343,14 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
         target_date = _latest_price_date()
     if not (rankings_only or init) and target_date is None:
         today = _jst_now().date()
-        if _is_market_holiday(today):
-            print("\nJ-Quants取引カレンダーで休場日のため、後段処理をスキップします。")
+        status = _calendar_status(today)
+        if status == "holiday":
+            print("\n取引カレンダーで休場日と確認できたため、後段処理をスキップします。")
             return True
-        message = "営業日なのに当日または直前日の価格データが取得できませんでした"
+        if status == "unregistered":
+            message = "取引カレンダーが未登録の日付です（JPX休業日一覧の取り込みが止まっている可能性）"
+        else:
+            message = "営業日なのに当日または直前日の価格データが取得できませんでした"
         print(f"\n{message}")
         _log("daily_batch", "failed", error=message)
         return False

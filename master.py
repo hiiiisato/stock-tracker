@@ -246,23 +246,85 @@ def _refresh_alpha_listings() -> int:
     return len(updates)
 
 
-def update_trading_calendar(date_from: date = None, date_to: date = None) -> int:
-    """取引カレンダーを更新する。デフォルトは2024-03-30〜1年後。"""
-    if date_from is None:
-        date_from = date(2024, 3, 30)
-    if date_to is None:
-        date_to = date.today() + timedelta(days=365)
+# J-Quants 休日区分（現物株）。0・3=休場、1・2=営業日。
+# https://jpx.gitbook.io/j-quants-ja/api-reference/trading_calendar/holiday_division
+_JQUANTS_HOLIDAY_DIVISIONS = {"0", "3"}
+_JQUANTS_OPEN_DIVISIONS = {"1", "2"}
 
-    params = {
-        "date_from": date_from.strftime("%Y-%m-%d"),
-        "date_to":   date_to.strftime("%Y-%m-%d"),
-    }
-    r = requests.get(f"{JQUANTS_BASE_URL}/markets/calendar", headers=JQUANTS_HEADERS, params=params, timeout=60)
+# 取引カレンダーの連続性チェックがこれを下回ったら daily_run を失敗させる猶予日数。
+# JPX公式の休業日一覧（翌々年末まで掲載）を使う限り通常は1年以上余裕があるため、
+# これを割り込むのは「JPXページの構造変更で未来分を取り込めなくなった」兆候。
+CALENDAR_MIN_LOOKAHEAD_DAYS = 180
+
+
+def _classify_holdiv(div: str, iso_date: str) -> bool:
+    """J-Quants HolDivを is_holiday (bool) に変換する。未知の区分は例外にする
+    （黙って営業日/休場のどちらかに倒すと将来の区分追加を見逃す）。"""
+    if div in _JQUANTS_HOLIDAY_DIVISIONS:
+        return True
+    if div in _JQUANTS_OPEN_DIVISIONS:
+        return False
+    raise ValueError(f"J-Quants HolDiv不明な値: {div!r} ({iso_date})")
+
+
+def _build_calendar_rows(
+    jq_data: list[dict],
+    jpx_holidays: dict[date, str],
+) -> list[tuple[str, bool]]:
+    """J-QuantsのレスポンスとJPX休業日一覧から取引カレンダーの行を組み立てる（DB非依存）。
+
+    - jq_data の範囲: HolDivをそのまま採用（公式の一次情報）。
+    - jq_data の最終日より後〜jpx_holidays の最終日まで: 平日かつ
+      jpx_holidays に載っていない日を営業日、それ以外（土日・JPX掲載日）を休場とする。
+      jpx_holidays が空（取得失敗）なら未来分は追加しない＝DBの既存行をそのまま残す。
+    """
+    if not jq_data:
+        raise ValueError("J-Quants取引カレンダーが0件でした")
+
+    rows: list[tuple[str, bool]] = []
+    max_jq_date = date(1900, 1, 1)
+    for d in jq_data:
+        is_holiday = _classify_holdiv(d["HolDiv"], d["Date"])
+        rows.append((d["Date"], is_holiday))
+        jq_date = date.fromisoformat(d["Date"])
+        if jq_date > max_jq_date:
+            max_jq_date = jq_date
+
+    if jpx_holidays:
+        future_end = max(jpx_holidays)
+        d = max_jq_date + timedelta(days=1)
+        while d <= future_end:
+            is_holiday = d.weekday() >= 5 or d in jpx_holidays
+            rows.append((d.isoformat(), is_holiday))
+            d += timedelta(days=1)
+
+    return rows
+
+
+def update_trading_calendar() -> int:
+    """取引カレンダーを更新する。
+
+    - 過去〜J-Quants契約範囲: J-Quants公式の休日区分で確定（date_from/date_to指定なしで
+      契約範囲全体を取得。範囲を指定するとV2では無視されるか400になるため付けない）。
+    - それより先: J-Quants無料枠の窓（過去12週遅延・契約範囲まで）に入らない将来分は、
+      JPX公式サイトの「休業日一覧」（翌々年末まで掲載）を使い、その一覧の最終日までの
+      平日を営業日・休業日一覧に載っている日と土日を休場として埋める。
+    JPX側の取得に失敗した場合はDBの既存の未来分をそのまま残し、例外を送出しない
+    （呼び出し側の daily_run.py が calendar_lookahead_days() で連続性を検証し、
+    猶予日数を割り込んだ時点でジョブを失敗させて気づけるようにする）。
+    """
+    r = requests.get(f"{JQUANTS_BASE_URL}/markets/calendar", headers=JQUANTS_HEADERS, timeout=60)
     r.raise_for_status()
     data = r.json()["data"]
 
-    # HolDiv: "0"=休場, "1"=取引あり
-    rows = [(d["Date"], d["HolDiv"] == "0") for d in data]
+    try:
+        from jpx_calendar import fetch_future_holidays
+        jpx_holidays = fetch_future_holidays()
+    except Exception as e:
+        print(f"  [JPX休業日一覧] 取得失敗（未来分は既存DBを維持）: {e}")
+        jpx_holidays = {}
+
+    rows = _build_calendar_rows(data, jpx_holidays)
 
     conn = get_conn()
     cur = conn.cursor()
@@ -271,6 +333,33 @@ def update_trading_calendar(date_from: date = None, date_to: date = None) -> int
     cur.close()
     conn.close()
     return len(rows)
+
+
+def calendar_lookahead_days(today: date = None) -> int:
+    """今日から、取引カレンダーに切れ目なく行が存在する最終日までの日数を返す。
+
+    daily_run.py がこれを CALENDAR_MIN_LOOKAHEAD_DAYS と比較し、JPX休業日一覧の
+    取り込みが長期間止まっていないかを検知する（MAX(date)だけだと途中の欠落や
+    「更新が完全に止まった」ケースを見逃すため、連続日数を数える）。
+    """
+    today = today or date.today()
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT date FROM trading_calendar WHERE date >= %s ORDER BY date",
+            (today,),
+        )
+        existing = {row[0] for row in cur.fetchall()}
+    finally:
+        cur.close()
+        conn.close()
+    d = today
+    days = 0
+    while d in existing:
+        days += 1
+        d += timedelta(days=1)
+    return days
 
 
 if __name__ == "__main__":

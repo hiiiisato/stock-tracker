@@ -1,6 +1,6 @@
 import unittest
 from datetime import date, datetime, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import daily_run
 
@@ -16,17 +16,34 @@ class DailyRunGuardTest(unittest.TestCase):
         with patch.object(daily_run, "_latest_price_date", return_value=date(2026, 9, 9)):
             self.assertEqual(daily_run._main_guard_target_date(now), date(2026, 9, 9))
 
-    def test_latest_business_date_allows_main_batch_to_continue(self):
-        with patch.object(
-            daily_run,
-            "_evening_target_date",
-            return_value=date(2026, 9, 7),
-        ):
-            self.assertTrue(daily_run._has_processable_prices())
 
-    def test_missing_business_date_stops_main_batch(self):
-        with patch.object(daily_run, "_evening_target_date", return_value=None):
-            self.assertFalse(daily_run._has_processable_prices())
+def _mock_conn(fetchone_return):
+    """get_conn()が返すカーソルのfetchone()を固定値にするモック接続。"""
+    conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.return_value = fetchone_return
+    conn.cursor.return_value = cur
+    return conn
+
+
+class CalendarStatusTest(unittest.TestCase):
+    """2026-09-22障害の再発防止: 未登録を営業日と誤判定しないことを確認する。"""
+
+    def test_holiday_row_returns_holiday(self):
+        with patch.object(daily_run, "get_conn", return_value=_mock_conn((True,))):
+            self.assertEqual(daily_run._calendar_status(date(2026, 9, 23)), "holiday")
+
+    def test_open_row_returns_open(self):
+        with patch.object(daily_run, "get_conn", return_value=_mock_conn((False,))):
+            self.assertEqual(daily_run._calendar_status(date(2026, 9, 24)), "open")
+
+    def test_missing_row_returns_unregistered_not_open(self):
+        with patch.object(daily_run, "get_conn", return_value=_mock_conn(None)):
+            self.assertEqual(daily_run._calendar_status(date(2026, 9, 23)), "unregistered")
+
+    def test_db_error_returns_unregistered_not_open(self):
+        with patch.object(daily_run, "get_conn", side_effect=RuntimeError("db down")):
+            self.assertEqual(daily_run._calendar_status(date(2026, 9, 23)), "unregistered")
 
 
 if __name__ == "__main__":
