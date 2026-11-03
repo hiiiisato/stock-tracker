@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import threading
+import re
+from urllib.parse import urlsplit
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from batch_dates import JST, MARKET_DATA_READY, jst_now
-from config import get_conn
+from config import (db, get_conn, STOCK_MEMO_MAX_LENGTH, STOCK_MEMO_MAX_BYTES,
+                    STOCK_MEMO_TITLE_MAX_LENGTH, STOCK_MEMO_URL_MAX_LENGTH)
 
 
 _schema_lock = threading.Lock()
@@ -24,6 +27,16 @@ def ensure_schema() -> None:
         conn = get_conn()
         cur = conn.cursor()
         try:
+            # 初回: ensure_schema()（Web初回アクセスでも実行）で作成する。
+            # stock_memos本体は変更せず、URL/見出しを付加テーブルへ分離する。
+            # 旧メモ・旧アプリとの互換性を保ち、再実行でもデータを失わない。
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS stock_memo_sources (
+                    memo_id INT PRIMARY KEY,
+                    title VARCHAR(200) NOT NULL DEFAULT '',
+                    source_url VARCHAR(2048) NOT NULL DEFAULT ''
+                )
+            """)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS watchlist_lists (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -104,7 +117,7 @@ def parse_price(value: str | None) -> Decimal | None:
         price = Decimal(text)
     except InvalidOperation as exc:
         raise ValueError("価格は数字で入力してください") from exc
-    if price <= 0 or price > Decimal("99999999"):
+    if not price.is_finite() or price <= 0 or price > Decimal("99999999"):
         raise ValueError("価格は0より大きい値で入力してください")
     return price.quantize(Decimal("0.0001"))
 
@@ -226,6 +239,70 @@ def acknowledge_event(event_id: int, code: str) -> None:
         conn.commit()
     finally:
         cur.close(); conn.close()
+
+
+def validate_memo(content: str, title: str = "", source_url: str = "") -> tuple[str, str, str]:
+    """URLは保存のみ。外部ページの自動取得は行わない。"""
+    content, title, source_url = content.strip(), title.strip(), source_url.strip()
+    if len(content) > STOCK_MEMO_MAX_LENGTH:
+        raise ValueError(f"本文は{STOCK_MEMO_MAX_LENGTH:,}文字以内で入力してください")
+    if len(content.encode("utf-8")) > STOCK_MEMO_MAX_BYTES:
+        raise ValueError("本文の保存容量を超えています。絵文字などを含む長文は複数のメモに分けてください")
+    if len(title) > STOCK_MEMO_TITLE_MAX_LENGTH:
+        raise ValueError(f"見出しは{STOCK_MEMO_TITLE_MAX_LENGTH}文字以内で入力してください")
+    if len(source_url) > STOCK_MEMO_URL_MAX_LENGTH:
+        raise ValueError("URLが長すぎます")
+    if source_url:
+        try:
+            parsed = urlsplit(source_url)
+            valid = (parsed.scheme in {"https", "http"} and parsed.hostname
+                     and not parsed.username and not parsed.password
+                     and not re.search(r"[\s\\\x00-\x1f\x7f]", source_url))
+            parsed.port  # 不正なポート指定も拒否する。
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError("参照URLは https:// または http:// から始まる有効なURLを入力してください")
+    if not (content or source_url):
+        raise ValueError("本文または参照URLを入力してください")
+    return content, title, source_url
+
+
+def save_memo(code: str, content: str, title: str = "", source_url: str = "",
+              memo_id: int | None = None) -> int:
+    content, title, source_url = validate_memo(content, title, source_url)
+    ensure_schema()
+    with db() as cur:
+        if memo_id is None:
+            cur.execute("SELECT 1 FROM stocks WHERE code = %s", (code,))
+            if not cur.fetchone():
+                raise ValueError("銘柄が見つかりません")
+            # URLだけの保存も既存ページ・旧版から読めるよう本文にも残す。
+            cur.execute("INSERT INTO stock_memos (code, content) VALUES (%s, %s)",
+                        (code, content or source_url))
+            memo_id = cur.lastrowid
+        else:
+            cur.execute("SELECT id FROM stock_memos WHERE id = %s AND code = %s FOR UPDATE",
+                        (memo_id, code))
+            if not cur.fetchone():
+                raise ValueError("対象のメモが見つかりません。再読み込みしてください")
+            cur.execute("UPDATE stock_memos SET content = %s WHERE id = %s AND code = %s",
+                        (content or source_url, memo_id, code))
+        cur.execute("""INSERT INTO stock_memo_sources (memo_id, title, source_url)
+                       VALUES (%s, %s, %s)
+                       ON DUPLICATE KEY UPDATE title = VALUES(title), source_url = VALUES(source_url)""",
+                    (memo_id, title, source_url))
+    return int(memo_id)
+
+
+def delete_memo(code: str, memo_id: int) -> None:
+    ensure_schema()
+    with db() as cur:
+        cur.execute("SELECT id FROM stock_memos WHERE id = %s AND code = %s FOR UPDATE", (memo_id, code))
+        if not cur.fetchone():
+            raise ValueError("対象のメモが見つかりません")
+        cur.execute("DELETE FROM stock_memo_sources WHERE memo_id = %s", (memo_id,))
+        cur.execute("DELETE FROM stock_memos WHERE id = %s AND code = %s", (memo_id, code))
 
 
 def migrate_legacy_memos() -> int:

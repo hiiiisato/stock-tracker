@@ -1,0 +1,16 @@
+<section class="sn-root" data-code="{{ code }}" aria-label="銘柄のメモ・参考資料">
+  <div class="sn-heading"><h3>メモ・参考資料 <span class="sn-count"></span></h3><button type="button" class="btn-sm sn-new">＋ 情報を追加</button></div>
+  <p class="sn-help">Xの投稿も参考ページも、1件ずつ追加できます。銘柄の情報をここに蓄積します。</p>
+  <form class="sn-editor" method="post" action="/memo/add" hidden>
+    {{ csrf_input|safe }}
+    <input type="hidden" name="code" value="{{ code }}"><input type="hidden" name="id"><input type="hidden" name="next" value="/stock/{{ code }}">
+    <h4 class="sn-editor-title">新しい情報を追加</h4>
+    <label>見出し（任意）<input name="title" maxlength="200" placeholder="例：決算後の考察、成長の根拠"></label>
+    <label>参照URL（任意）<input name="source_url" type="url" maxlength="2048" placeholder="https://x.com/… または参考ページのURL"></label>
+    <label>メモ<textarea name="content" rows="5" maxlength="20000" placeholder="投稿の要点、注目する理由、次に調べたいこと。URLだけでも保存できます。"></textarea></label>
+    <p class="sn-error" role="alert"></p>
+    <div class="sn-editor-actions"><span class="sn-draft-hint">入力中の内容はこのタブに下書き保存</span><button type="button" class="btn-sm sn-cancel">閉じる</button><button type="submit" class="btn sn-save">追加する</button></div>
+  </form>
+  <div class="sn-tools"><input type="search" class="sn-search" aria-label="この銘柄のメモを検索" placeholder="本文・見出し・URLから検索"><select class="sn-filter" aria-label="資料の種類"><option value="all">すべての情報</option><option value="x">Xの投稿</option><option value="link">参考URL</option><option value="memo">メモ</option></select><select class="sn-order" aria-label="メモの並び順"><option value="desc">新しい順</option><option value="asc">古い順</option></select></div>
+  <div class="sn-status" role="status"></div><div class="sn-timeline"></div>
+</section>

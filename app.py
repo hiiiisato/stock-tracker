@@ -1982,232 +1982,11 @@ def _chart_grid_script() -> str:
 #  ウォッチリストページ
 # ════════════════════════════════════════════════════════════════════════
 
-_WATCHLIST_CSS = """
-.wl-title-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
-.wl-list-manage{position:relative}.wl-list-manage>summary{list-style:none;cursor:pointer;border:1px solid #30363d;border-radius:8px;padding:6px 11px;color:#c9d1d9;background:#161b22;font-size:12px}.wl-list-manage>summary::-webkit-details-marker{display:none}
-.wl-manage-pop{position:absolute;right:0;top:40px;z-index:30;width:330px;background:#161b22;border:1px solid #30363d;border-radius:12px;padding:10px;box-shadow:0 16px 40px rgba(0,0,0,.42)}.wl-manage-pop form{display:grid;grid-template-columns:1fr auto auto;gap:6px;margin:6px 0}.wl-manage-pop input{min-width:0}
-.wl-pills{display:flex;gap:7px;overflow-x:auto;margin:-4px 0 14px;padding:4px 1px 8px;scrollbar-width:none}.wl-pills::-webkit-scrollbar{display:none}.wl-pill{white-space:nowrap;color:#8b949e;border:1px solid #30363d;background:#161b22;border-radius:999px;padding:6px 11px;font-size:12px;text-decoration:none}.wl-pill:hover{text-decoration:none;border-color:#58a6ff}.wl-pill.active{color:#f0f6fc;background:#1f6feb;border-color:#388bfd}.wl-pill b{font-size:10px;margin-left:3px;opacity:.8}
-.wl-add{margin-bottom:14px}.wl-add form{display:grid;grid-template-columns:minmax(210px,1.2fr) minmax(220px,1fr) minmax(190px,1fr) auto;gap:10px;align-items:center}.wl-add textarea{resize:vertical;min-height:34px}.wl-search-wrap{position:relative}.wl-search-wrap>input{width:100%}.wl-search-results{display:none;position:absolute;z-index:40;left:0;right:0;top:39px;background:#161b22;border:1px solid #30363d;border-radius:9px;box-shadow:0 12px 30px rgba(0,0,0,.45);overflow:hidden}.wl-search-results.show{display:block}.wl-search-results button{display:flex;width:100%;gap:10px;padding:9px 11px;border:0;border-bottom:1px solid #21262d;background:transparent;color:#c9d1d9;text-align:left;cursor:pointer}.wl-search-results button:hover{background:#21262d}.wl-search-results b{color:#58a6ff;min-width:45px}
-.wl-checks{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.wl-check{cursor:pointer}.wl-check input{position:absolute;opacity:0}.wl-check span{display:block;border:1px solid #30363d;border-radius:999px;padding:4px 8px;color:#8b949e;font-size:11px}.wl-check input:checked+span{background:#1f3b5b;border-color:#388bfd;color:#cae8ff}
-.wl-grid{display:grid;gap:11px}.wl-stock{display:grid;grid-template-columns:minmax(300px,1.25fr) minmax(180px,.7fr) minmax(260px,1fr);gap:16px;align-items:center;background:linear-gradient(145deg,#161b22,#121820);border:1px solid #30363d;border-radius:14px;padding:15px 17px;box-shadow:0 7px 22px rgba(0,0,0,.12)}.wl-stock:target{border-color:#388bfd}.wl-stock-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.wl-name{font-weight:750;font-size:16px;color:#f0f6fc}.wl-code{font-size:11px;color:#8b949e;margin-left:7px}.wl-badges{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}.wl-list-badge{font-size:10px;color:#a5d6ff;background:#122b42;border:1px solid #1f4d72;border-radius:999px;padding:2px 7px}.wl-list-badge.muted-badge{color:#8b949e;background:#21262d;border-color:#30363d}.wl-quote{display:flex;align-items:baseline;gap:10px;margin:11px 0 10px}.wl-quote strong{font-size:23px;line-height:1;color:#e6edf3}.wl-quote small{font-size:10px;color:#6e7681;margin-left:auto}.wl-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.wl-metrics div{background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:6px 8px}.wl-metrics span{display:block;font-size:9px;color:#6e7681}.wl-metrics b{display:block;font-size:12px;color:#c9d1d9;margin-top:1px}.wl-chart{height:91px;position:relative;border-left:1px solid #21262d;border-right:1px solid #21262d;padding:7px 12px}.wl-chart>span{position:absolute;right:14px;bottom:1px;color:#6e7681;font-size:9px}.wl-spark{width:100%;height:70px}.wl-chart-empty{height:70px;display:grid;place-items:center;color:#484f58;font-size:11px}.wl-personal{min-width:0}.wl-label{font-size:9px;text-transform:uppercase;letter-spacing:.7px;color:#6e7681}.wl-note p{font-size:12px;color:#c9d1d9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:2px 0 8px}.wl-alert-line{display:flex;justify-content:space-between;gap:8px;align-items:center}.wl-alert-line b{font-size:12px;color:#e6edf3}.wl-flags{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:7px}.wl-flag{font-size:10px;font-weight:700;border-radius:999px;padding:3px 8px}.wl-flag.hit{color:#ffd8a8;background:#3b2607;border:1px solid #7d4e09}.wl-flag.review{color:#f2cc60;background:#302b13;border:1px solid #6e5b16}.wl-inline{display:inline}.wl-text-btn{border:0;background:transparent;color:#58a6ff;font-size:10px;cursor:pointer}.wl-actions{grid-column:1/-1;border-top:1px solid #21262d;padding-top:8px}.wl-actions>summary{cursor:pointer;color:#8b949e;font-size:11px;list-style:none}.wl-actions>summary::-webkit-details-marker{display:none}.wl-action-grid{display:grid;grid-template-columns:1fr 1.2fr 1.2fr;gap:14px;margin-top:12px}.wl-action-grid h4{font-size:11px;color:#8b949e;margin-bottom:7px}.wl-action-grid textarea{width:100%;resize:vertical;margin-bottom:6px}.wl-action-grid .muted{font-size:10px;margin:5px 0}.wl-price-inputs{display:grid;grid-template-columns:1fr 1fr;gap:7px}.wl-price-inputs label{font-size:10px;color:#8b949e}.wl-price-inputs input{width:100%;display:block;margin-top:2px}.wl-remove{grid-column:1/-1;text-align:right}.wl-danger{border:0;background:transparent;color:#f85149;font-size:11px;cursor:pointer;padding:5px}.wl-empty{border:1px dashed #30363d;border-radius:12px;padding:36px;text-align:center;color:#8b949e}
-@media(max-width:768px){.wl-title-row{align-items:center}.wl-manage-pop{position:fixed;left:12px;right:12px;top:104px;width:auto}.wl-add form{grid-template-columns:1fr}.wl-add .wl-checks{order:2}.wl-add textarea{order:3}.wl-add .btn{order:4}.wl-stock{grid-template-columns:1fr;padding:14px;gap:10px}.wl-chart{border:0;border-top:1px solid #21262d;border-bottom:1px solid #21262d;padding:7px 0}.wl-action-grid{grid-template-columns:1fr}.wl-metrics span{font-size:8px}.wl-quote small{font-size:9px}.wl-remove{grid-column:auto}.cg-toolbar{margin-top:4px}}
-"""
-
-_WATCHLIST_JS = r"""
-(function(){
-  var input=document.getElementById('wl-stock-search'), code=document.getElementById('wl-stock-code'), results=document.getElementById('wl-search-results'), timer;
-  if(!input)return;
-  function choose(c,n){code.value=c;input.value=n+' ('+c+')';results.classList.remove('show');}
-  input.addEventListener('input',function(){code.value='';clearTimeout(timer);var q=input.value.trim();if(!q){results.classList.remove('show');return;}timer=setTimeout(function(){fetch('/api/search?q='+encodeURIComponent(q)).then(function(r){return r.json();}).then(function(rows){results.innerHTML='';rows.forEach(function(x){var b=document.createElement('button');b.type='button';var strong=document.createElement('b');strong.textContent=x.code;var span=document.createElement('span');span.textContent=x.name;b.appendChild(strong);b.appendChild(span);b.addEventListener('click',function(){choose(x.code,x.name);});results.appendChild(b);});results.classList.toggle('show',rows.length>0);});},180);});
-  document.getElementById('wl-add-form').addEventListener('submit',function(e){if(!code.value){var m=input.value.match(/[0-9A-Z]{4,5}/i);if(m)code.value=m[0].toUpperCase();}if(!code.value){e.preventDefault();input.setCustomValidity('候補から銘柄を選んでください');input.reportValidity();}else input.setCustomValidity('');});
-  document.addEventListener('click',function(e){if(!results.contains(e.target)&&e.target!==input)results.classList.remove('show');});
-})();
-"""
-
-
-def _format_decimal(value: object) -> str:
-    if value is None:
-        return ""
-    number = float(value)
-    return f"{number:.4f}".rstrip("0").rstrip(".")
-
-def _wl_sparkline(values: list[float]) -> str:
-    if len(values) < 2:
-        return '<div class="wl-chart-empty">チャートデータなし</div>'
-    width, height, pad = 250, 72, 4
-    lo, hi = min(values), max(values)
-    span = hi - lo or 1
-    points = " ".join(
-        f"{pad + i * (width - pad * 2) / (len(values) - 1):.1f},"
-        f"{height - pad - (v - lo) * (height - pad * 2) / span:.1f}"
-        for i, v in enumerate(values)
-    )
-    color = "#3fb950" if values[-1] >= values[0] else "#f85149"
-    return (f'<svg class="wl-spark" viewBox="0 0 {width} {height}" preserveAspectRatio="none" '
-            f'aria-label="3か月株価チャート"><polyline points="{points}" '
-            f'fill="none" stroke="{color}" stroke-width="2.2" vector-effect="non-scaling-stroke"/></svg>')
-
-
-def _build_watchlist_page(msg: str = "", selected: str = "all") -> str:
-    from watchlist_service import ensure_schema
-    ensure_schema()
-    conn = get_conn()
-    cur  = conn.cursor()
-    cur.execute("SELECT id, name FROM watchlist_lists ORDER BY sort_order, id")
-    lists = cur.fetchall()
-    cur.execute("""
-        SELECT w.code, s.name, dp.date, dp.close, dp.change_pct,
-               f.per, f.pbr, f.div_yield, w.added_at
-        FROM watchlist w
-        LEFT JOIN stocks s ON w.code = s.code
-        LEFT JOIN (
-          SELECT p.code, p.date, p.close, p.change_pct
-          FROM daily_prices p
-          JOIN (SELECT code, MAX(date) AS max_date FROM daily_prices
-                WHERE close IS NOT NULL GROUP BY code) x
-            ON x.code = p.code AND x.max_date = p.date
-        ) dp ON dp.code = w.code
-        LEFT JOIN stock_fundamentals f ON f.code = w.code
-        ORDER BY w.added_at DESC
-    """)
-    base_items = cur.fetchall()
-    codes = [r[0] for r in base_items]
-    memberships: dict[str, list[tuple[int, str]]] = {c: [] for c in codes}
-    latest_memos: dict[str, tuple] = {}
-    alerts: dict[str, dict[str, tuple]] = {c: {} for c in codes}
-    price_series: dict[str, list[float]] = {c: [] for c in codes}
-    if codes:
-        ph = ",".join(["%s"] * len(codes))
-        cur.execute(f"""
-            SELECT i.code, l.id, l.name FROM watchlist_list_items i
-            JOIN watchlist_lists l ON l.id = i.list_id
-            WHERE i.code IN ({ph}) ORDER BY l.sort_order, l.id
-        """, codes)
-        for code, list_id, list_name in cur.fetchall():
-            memberships[code].append((list_id, list_name))
-        cur.execute(f"""
-            SELECT sm.id, sm.code, sm.content, sm.created_at
-            FROM stock_memos sm
-            JOIN (SELECT code, MAX(id) AS id FROM stock_memos
-                  WHERE code IN ({ph}) GROUP BY code) x ON x.id = sm.id
-        """, codes)
-        for memo_id, code, content, created_at in cur.fetchall():
-            latest_memos[code] = (memo_id, content, created_at)
-        cur.execute(f"""
-            SELECT a.code, a.direction, a.target_price, a.status, a.effective_from,
-                   e.id, e.price_date, e.triggered_price
-            FROM price_alerts a
-            LEFT JOIN price_alert_events e ON e.alert_id = a.id
-              AND e.alert_version = a.version AND e.cancelled_at IS NULL
-              AND e.acknowledged_at IS NULL
-            WHERE a.code IN ({ph})
-        """, codes)
-        for row in cur.fetchall():
-            alerts[row[0]][row[1]] = row[2:]
-        cur.execute(f"""
-            SELECT code, adj_close FROM daily_prices
-            WHERE code IN ({ph}) AND date >= DATE_SUB(CURDATE(), INTERVAL 100 DAY)
-              AND adj_close IS NOT NULL
-            ORDER BY code, date
-        """, codes)
-        for code, close in cur.fetchall():
-            price_series[code].append(float(close))
-    cur.close(); conn.close()
-
-    counts = {list_id: sum(any(x[0] == list_id for x in memberships[c]) for c in codes)
-              for list_id, _name in lists}
-    unclassified = sum(not memberships[c] for c in codes)
-    valid_ids = {str(r[0]) for r in lists}
-    if selected not in {"all", "unclassified", *valid_ids}:
-        selected = "all"
-    if selected == "unclassified":
-        items = [r for r in base_items if not memberships[r[0]]]
-    elif selected in valid_ids:
-        sid = int(selected)
-        items = [r for r in base_items if any(x[0] == sid for x in memberships[r[0]])]
-    else:
-        items = base_items
-
-    selected_q = _html.escape(selected, quote=True)
-    next_url = f"/watchlist?list={selected_q}"
-    csrf_input = _watchlist_csrf_input()
-    msg_html = f'<div class="alert">{_html.escape(msg)}</div>' if msg else ""
-    pills = [f'<a class="wl-pill {"active" if selected == "all" else ""}" href="/watchlist?list=all">すべて <b>{len(base_items)}</b></a>']
-    pills += [f'<a class="wl-pill {"active" if selected == str(i) else ""}" href="/watchlist?list={i}">{_html.escape(n)} <b>{counts[i]}</b></a>' for i, n in lists]
-    pills.append(f'<a class="wl-pill {"active" if selected == "unclassified" else ""}" href="/watchlist?list=unclassified">未分類 <b>{unclassified}</b></a>')
-
-    def list_checks(code: str = "", prefix: str = "") -> str:
-        owned = {x[0] for x in memberships.get(code, [])}
-        return "".join(
-            f'<label class="wl-check"><input type="checkbox" name="list_ids" value="{i}" '
-            f'{"checked" if i in owned else ""}><span>{_html.escape(n)}</span></label>'
-            for i, n in lists
-        ) or '<span class="muted">リストはまだありません</span>'
-
-    cards = []
-    for code, name, price_date, close, chg, per, pbr, div_yield, _added_at in items:
-        cl = float(close) if close is not None else None
-        chg_val = float(chg) if chg is not None else None
-        chg_cls = "up" if chg_val is not None and chg_val >= 0 else "dn"
-        price_text = f"{cl:,.0f}円" if cl is not None else "—"
-        chg_text = f"{chg_val:+.2f}%" if chg_val is not None else "—"
-        badges = "".join(f'<span class="wl-list-badge">{_html.escape(n)}</span>' for _i, n in memberships[code])
-        if not badges:
-            badges = '<span class="wl-list-badge muted-badge">未分類</span>'
-        if not name:
-            badges += '<span class="wl-list-badge muted-badge">銘柄情報なし</span>'
-        memo = latest_memos.get(code)
-        memo_html = (_html.escape(str(memo[1])) if memo else '<span class="muted">メモなし</span>')
-        memo_id = memo[0] if memo else ""
-        memo_value = _html.escape(str(memo[1]), quote=True) if memo else ""
-        flag_html = ""
-        alert_summary = []
-        upper_value = lower_value = ""
-        upper_status = lower_status = ""
-        upper_placeholder, lower_placeholder = "例 3000", "例 2500"
-        for direction in ("upper", "lower"):
-            info = alerts.get(code, {}).get(direction)
-            if not info:
-                continue
-            target, status, effective, event_id, event_date, triggered_price = info
-            if direction == "upper": upper_status = status
-            else: lower_status = status
-            # 到達済みは空欄にして、別方向を編集しただけで意図せず再開しない。
-            if status in ("active", "split_review"):
-                if direction == "upper": upper_value = _format_decimal(target)
-                else: lower_value = _format_decimal(target)
-            elif status == "triggered":
-                text = f"到達済み（再開: {_format_decimal(target)}）"
-                if direction == "upper": upper_placeholder = text
-                else: lower_placeholder = text
-            arrow = "↑" if direction == "upper" else "↓"
-            if status == "active":
-                alert_summary.append(f'{arrow}{float(target):,.0f}円')
-            elif status == "split_review":
-                flag_html += '<span class="wl-flag review">分割確認が必要</span>'
-            if event_id:
-                label = "上限到達" if direction == "upper" else "下限到達"
-                flag_html += (f'<span class="wl-flag hit">{label} · {event_date}</span>'
-                              f'<form method="POST" action="/watchlist/alert/ack" class="wl-inline">'
-                              f'{csrf_input}<input type="hidden" name="event_id" value="{event_id}"><input type="hidden" name="code" value="{code}">'
-                              f'<input type="hidden" name="next" value="{next_url}#wl-{code}">'
-                              f'<button class="wl-text-btn" type="submit">確認済み</button></form>')
-        alerts_text = " / ".join(alert_summary) if alert_summary else "未設定"
-        cards.append(f"""<article class="wl-stock" id="wl-{code}">
-  <div class="wl-stock-main">
-    <div class="wl-stock-head"><div><a href="/stock/{code}" class="wl-name">{_html.escape(name or code)}</a><span class="wl-code">{code}</span></div><div class="wl-badges">{badges}</div></div>
-    <div class="wl-quote"><strong>{price_text}</strong><span class="{chg_cls}">{chg_text}</span><small>{price_date or '価格なし'}</small></div>
-    <div class="wl-metrics"><div><span>PER（実績）</span><b>{f'{float(per):.1f}倍' if per else '—'}</b></div><div><span>PBR</span><b>{f'{float(pbr):.2f}倍' if pbr else '—'}</b></div><div><span>配当利回り</span><b>{f'{float(div_yield):.2f}%' if div_yield else '—'}</b></div></div>
-  </div>
-  <div class="wl-chart">{_wl_sparkline(price_series.get(code, []))}<span>3か月</span></div>
-  <div class="wl-personal"><div class="wl-note"><span class="wl-label">メモ</span><p>{memo_html}</p></div><div class="wl-alert-line"><span class="wl-label">価格通知</span><b>{alerts_text}</b></div><div class="wl-flags">{flag_html}</div></div>
-  <details class="wl-actions"><summary>整理・メモ・価格通知</summary><div class="wl-action-grid">
-    <form method="POST" action="/watchlist/memberships"><h4>所属リスト</h4>{csrf_input}<input type="hidden" name="code" value="{code}"><input type="hidden" name="next" value="{next_url}#wl-{code}"><div class="wl-checks">{list_checks(code)}</div><button class="btn-sm" type="submit">保存</button></form>
-    <form method="POST" action="/memo/{'edit' if memo else 'add'}"><h4>メモ</h4>{csrf_input}<input type="hidden" name="code" value="{code}"><input type="hidden" name="id" value="{memo_id}"><input type="hidden" name="next" value="{next_url}#wl-{code}"><textarea name="content" rows="3" maxlength="2000" placeholder="気になった理由や次に確認すること">{memo_value}</textarea><button class="btn-sm" type="submit">{'更新' if memo else '追加'}</button></form>
-    <form method="POST" action="/watchlist/alert"><h4>終値リマインダー</h4>{csrf_input}<input type="hidden" name="code" value="{code}"><input type="hidden" name="next" value="{next_url}#wl-{code}"><input type="hidden" name="upper_status" value="{upper_status}"><input type="hidden" name="lower_status" value="{lower_status}"><div class="wl-price-inputs"><label>上値<input name="upper" inputmode="decimal" value="{upper_value}" placeholder="{upper_placeholder}"></label><label>下値<input name="lower" inputmode="decimal" value="{lower_value}" placeholder="{lower_placeholder}"></label></div><p class="muted">監視中の空欄は解除。到達済みは価格を入力すると再開します。</p><button class="btn-sm" type="submit">保存</button></form>
-    <form method="POST" action="/watchlist/remove" class="wl-remove">{csrf_input}<input type="hidden" name="code" value="{code}"><input type="hidden" name="next" value="{next_url}"><button type="submit" class="wl-danger">ウォッチリストから削除</button></form>
-  </div></details>
-</article>""")
-    cards_html = "".join(cards) if cards else '<div class="wl-empty">このリストには銘柄がありません。</div>'
-    codes_js = _json.dumps([r[0] for r in items])
-
-    body = f"""\
-<style>{_WATCHLIST_CSS}</style>
-<div class="page-header wl-title-row"><div><div class="page-title">ウォッチリスト</div><div class="page-subtitle">保存理由・指標・価格到達をひと目で確認</div></div>
-<details class="wl-list-manage"><summary>リストを管理</summary><div class="wl-manage-pop"><form method="POST" action="/watchlist/lists/create">{csrf_input}<input name="name" maxlength="40" placeholder="新しいリスト名" required><button class="btn-sm">作成</button></form>{''.join(f'<form method="POST" action="/watchlist/lists/rename">{csrf_input}<input type="hidden" name="list_id" value="{i}"><input name="name" maxlength="40" value="{_html.escape(n, quote=True)}" required><button class="btn-sm">変更</button><button class="wl-danger" formaction="/watchlist/lists/delete">削除</button></form>' for i,n in lists)}</div></details></div>
-{msg_html}
-<div class="wl-pills">{''.join(pills)}</div>
-<div class="wl-add card"><div class="card-body"><form method="POST" action="/watchlist/add" id="wl-add-form">{csrf_input}<input type="hidden" name="memberships_present" value="1"><div class="wl-search-wrap"><input id="wl-stock-search" placeholder="銘柄名・コードで検索" autocomplete="off" required><input type="hidden" name="code" id="wl-stock-code"><div id="wl-search-results" class="wl-search-results"></div></div><div class="wl-checks">{list_checks()}</div><textarea name="memo" rows="1" maxlength="2000" placeholder="メモ（任意）"></textarea><button type="submit" class="btn">追加</button></form></div></div>
-{_chart_grid_toolbar(codes_js, show_added_sort=True)}
-<div id="view-list">
-  <div class="wl-grid">{cards_html}</div>
-</div>
-<div id="view-chart" style="display:none">
-  <div class="cg-grid" id="cg-grid"><div class="cg-loading">読み込み中...</div></div>
-</div>
-{_chart_grid_script()}
-<script>{_WATCHLIST_JS}</script>"""
-
+def _build_watchlist_page(msg: str = "") -> str:
+    from flask import render_template
+    from watchlist_workspace import load_workspace
+    body = render_template("watchlist.html", data=load_workspace(), msg=msg,
+                           csrf_input=_watchlist_csrf_input(), authed=_watchlist_authed())
     return _page_html("ウォッチリスト", body, active="watchlist")
 
 
@@ -7486,17 +7265,6 @@ def _build_stock_page(code: str) -> str:
                "news_items","ai_summary","reason_category"]
     events = [dict(zip(ev_cols, r)) for r in cur.fetchall()]
 
-    # メモ（stock_memos）
-    cur.execute("""
-        SELECT id, content, created_at
-        FROM stock_memos
-        WHERE code = %s
-        ORDER BY created_at DESC
-        LIMIT 20
-    """, (code,))
-    memo_cols = ["id","content","created_at"]
-    memos = [dict(zip(memo_cols, r)) for r in cur.fetchall()]
-
     # ─ 業績実績（通期 + 四半期、最新12件ずつ） ─
     fin_annual_rows: list = []
     fin_quarterly_rows: list = []
@@ -8721,32 +8489,13 @@ def _build_stock_page(code: str) -> str:
     else:
         events_html = ""
 
-    # ─ メモ HTML ─
-    memo_cards = ""
-    memo_csrf = _watchlist_csrf_input()
-    for m in memos:
-        created = str(m["created_at"])[:16]
-        content = m["content"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        memo_cards += f"""<div class="memo-card">
-  <div class="memo-content">{content}</div>
-  <div style="text-align:right">
-    <div class="memo-meta">{created}</div>
-    <form method="POST" action="/memo/delete" style="margin-top:4px">
-      {memo_csrf}
-      <input type="hidden" name="id" value="{m['id']}">
-      <input type="hidden" name="code" value="{s_code}">
-      <button type="submit" class="memo-del" title="削除">✕</button>
-    </form>
-  </div>
-</div>"""
-    memos_html = f"""<p class="price-section-header">メモ</p>
-<div class="memo-list">{memo_cards if memo_cards else '<p class="muted" style="font-size:13px">メモなし</p>'}</div>
-<form class="memo-form" method="POST" action="/memo/add">
-  {memo_csrf}
-  <input type="hidden" name="code" value="{s_code}">
-  <textarea name="content" placeholder="メモを追加..." rows="2"></textarea>
-  <button type="submit" class="btn-sm">追加</button>
-</form>"""
+    # 銘柄詳細もウォッチリストと同じ、件数上限のない情報履歴を利用する。
+    from flask import render_template
+    memos_html = (
+        '<link rel="stylesheet" href="/static/stock_notes.css">'
+        + render_template("stock_notes.html", code=s_code, csrf_input=_watchlist_csrf_input())
+        + '<script src="/static/stock_notes.js" defer></script>'
+    )
 
     # ─ 業績タブ JS（データ埋め込み部分はf-string、ロジック部分は生文字列） ─
     _fin_data_script = f"""<script>
@@ -10915,10 +10664,7 @@ def api_perf_grid():
 
 @app.route("/watchlist")
 def watchlist_page():
-    return _build_watchlist_page(
-        request.args.get("msg", "")[:160],
-        request.args.get("list", "all"),
-    )
+    return _build_watchlist_page(request.args.get("msg", "")[:160])
 
 
 @app.route("/watchlist/login", methods=["GET", "POST"])
@@ -10952,6 +10698,29 @@ def _valid_code(code: str) -> bool:
     return bool(re.fullmatch(r"[0-9A-Z]{4,5}", code))
 
 
+@app.route("/api/watchlist/memos/<code>")
+def api_watchlist_memos(code: str):
+    if not _valid_code(code):
+        return jsonify(error="銘柄コードが不正です"), 400
+    from watchlist_workspace import load_memos
+    response = jsonify(load_memos(code))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/api/watchlist/chart/<code>")
+def api_watchlist_chart(code: str):
+    if not _valid_code(code):
+        return jsonify(error="銘柄コードが不正です"), 400
+    key = f"watchlist_chart_{code}"
+    prices = _get(key)
+    if prices is None:
+        from watchlist_workspace import load_chart
+        prices = load_chart(code)
+        _set(key, prices)
+    return jsonify(prices)
+
+
 def _safe_next(default: str = "/watchlist") -> str:
     value = request.form.get("next", default).strip()
     return value if value.startswith("/") and not value.startswith("//") else default
@@ -10959,26 +10728,42 @@ def _safe_next(default: str = "/watchlist") -> str:
 
 @app.route("/watchlist/add", methods=["POST"])
 def watchlist_add():
+    from watchlist_service import ensure_schema, validate_memo
     code = request.form.get("code", "").strip().upper()
     next_url = _safe_next()
     if not _valid_code(code):
-        return redirect(next_url)
+        return _memo_failure("候補から銘柄を選んでください")
     try:
+        memo = request.form.get("memo", "").strip()
+        if memo:
+            validate_memo(memo)
+        ensure_schema()
         with db() as cur:
             cur.execute("SELECT 1 FROM stocks WHERE code = %s AND is_active = TRUE", (code,))
             if not cur.fetchone():
-                return redirect(next_url)
+                return _memo_failure("銘柄が見つかりません")
             cur.execute("INSERT IGNORE INTO watchlist (code) VALUES (%s)", (code,))
-            memo = request.form.get("memo", "").strip()
             if memo:
-                cur.execute("INSERT INTO stock_memos (code, content) VALUES (%s, %s)", (code, memo[:2000]))
-        if request.form.get("memberships_present") == "1":
-            from watchlist_service import set_memberships
-            set_memberships(code, [int(x) for x in request.form.getlist("list_ids") if x.isdigit()])
+                cur.execute("INSERT INTO stock_memos (code, content) VALUES (%s, %s)", (code, memo))
+            if request.form.get("memberships_present") == "1":
+                ids = sorted({int(x) for x in request.form.getlist("list_ids") if x.isdigit() and int(x) > 0})
+                cur.execute("DELETE FROM watchlist_list_items WHERE code = %s", (code,))
+                if ids:
+                    ph = ",".join(["%s"] * len(ids))
+                    cur.execute(f"SELECT id FROM watchlist_lists WHERE id IN ({ph})", ids)
+                    valid = [r[0] for r in cur.fetchall()]
+                    if valid:
+                        cur.executemany("INSERT INTO watchlist_list_items (list_id, code) VALUES (%s, %s)",
+                                        [(list_id, code) for list_id in valid])
         _bust_prefix("home_")
         _bust_prefix(f"stock_{code}")
+    except ValueError as exc:
+        return _memo_failure(str(exc))
     except Exception as e:
         print(f"[watchlist_add] error: {e}")
+        return _memo_failure("銘柄を保存できませんでした。もう一度お試しください。", 503)
+    if request.accept_mimetypes.best == "application/json":
+        return jsonify(ok=True, code=code)
     return redirect(next_url)
 
 
@@ -11045,15 +10830,29 @@ def watchlist_list_delete():
     return redirect("/watchlist")
 
 
+def _watchlist_failure(message: str, status: int = 400):
+    if request.accept_mimetypes.best == "application/json":
+        return jsonify(error=message), status
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    target = urlsplit(_safe_next())
+    query = dict(parse_qsl(target.query))
+    query["msg"] = message
+    return redirect(urlunsplit(("", "", target.path, urlencode(query), target.fragment)))
+
+
 @app.route("/watchlist/memberships", methods=["POST"])
 def watchlist_memberships():
     code = request.form.get("code", "").strip().upper()
-    if _valid_code(code):
-        try:
-            from watchlist_service import set_memberships
-            set_memberships(code, [int(x) for x in request.form.getlist("list_ids") if x.isdigit()])
-        except Exception as e:
-            print(f"[watchlist_memberships] error: {e}")
+    if not _valid_code(code):
+        return _watchlist_failure("銘柄コードが不正です")
+    try:
+        from watchlist_service import set_memberships
+        set_memberships(code, [int(x) for x in request.form.getlist("list_ids") if x.isdigit()])
+    except Exception as e:
+        print(f"[watchlist_memberships] error: {e}")
+        return _watchlist_failure("所属リストを保存できませんでした。もう一度お試しください。", 503)
+    if request.accept_mimetypes.best == "application/json":
+        return jsonify(ok=True)
     return redirect(_safe_next())
 
 
@@ -11069,9 +10868,15 @@ def watchlist_alert():
                 direction for direction, raw in (("upper", upper_raw), ("lower", lower_raw))
                 if not raw and request.form.get(f"{direction}_status") == "triggered"
             }
-            set_price_alerts(code, parse_price(upper_raw), parse_price(lower_raw), preserve=preserve)
+            effective = set_price_alerts(code, parse_price(upper_raw), parse_price(lower_raw), preserve=preserve)
+            if request.accept_mimetypes.best == "application/json":
+                return jsonify(ok=True, effective=str(effective))
         except Exception as e:
             print(f"[watchlist_alert] error: {e}")
+            message = str(e) if isinstance(e, ValueError) else "価格通知を保存できませんでした。入力は保持しています。"
+            return _watchlist_failure(message, 400 if isinstance(e, ValueError) else 503)
+    elif request.accept_mimetypes.best == "application/json":
+        return jsonify(error="銘柄コードが不正です"), 400
     return redirect(_safe_next())
 
 
@@ -12170,56 +11975,68 @@ def portfolio_logout():
     return resp
 
 
+def _memo_failure(message: str, status: int = 400):
+    if request.accept_mimetypes.best == "application/json":
+        return jsonify(error=message), status
+    # JSを使わない送信でも、失敗時に入力を失わず再送できる。
+    fields = {k: _html.escape(request.form.get(k, ""), quote=True)
+              for k in ("code", "id", "title", "source_url", "content")}
+    action = "/memo/edit" if fields["id"] else "/memo/add"
+    body = (f'<div class="alert" role="alert">{_html.escape(message)}</div>'
+            f'<form method="post" action="{action}">{_watchlist_csrf_input()}'
+            f'<input type="hidden" name="code" value="{fields["code"]}">'
+            f'<input type="hidden" name="id" value="{fields["id"]}">'
+            f'<input type="hidden" name="next" value="{_html.escape(_safe_next(), quote=True)}">'
+            f'<p>見出し <input name="title" maxlength="200" value="{fields["title"]}"></p>'
+            f'<p>参照URL <input name="source_url" type="url" value="{fields["source_url"]}"></p>'
+            f'<textarea name="content" rows="12" style="width:100%">{fields["content"]}</textarea>'
+            '<button class="btn">再度保存する</button></form>')
+    return _page_html("メモを保存できませんでした", body), status
+
+
 @app.route("/memo/add", methods=["POST"])
-def memo_add():
-    code    = request.form.get("code", "").strip().upper()
-    content = request.form.get("content", "").strip()
-    if not _valid_code(code):
-        return redirect("/")
-    if content:
-        try:
-            with db() as cur:
-                cur.execute(
-                    "INSERT INTO stock_memos (code, content) VALUES (%s, %s)",
-                    (code, content)
-                )
-            _bust_prefix(f"stock_{code}")
-        except Exception as e:
-            print(f"[memo_add] error: {e}")
-    return redirect(_safe_next(f"/stock/{code}"))
-
-
 @app.route("/memo/edit", methods=["POST"])
-def memo_edit():
-    memo_id = request.form.get("id", "").strip()
+def memo_add():
+    from watchlist_service import save_memo
     code = request.form.get("code", "").strip().upper()
-    content = request.form.get("content", "").strip()[:2000]
-    if memo_id.isdigit() and _valid_code(code) and content:
-        try:
-            with db() as cur:
-                cur.execute(
-                    "UPDATE stock_memos SET content = %s WHERE id = %s AND code = %s",
-                    (content, int(memo_id), code),
-                )
-            _bust_prefix(f"stock_{code}")
-        except Exception as e:
-            print(f"[memo_edit] error: {e}")
+    if not _valid_code(code):
+        return _memo_failure("銘柄コードが不正です")
+    editing = request.path == "/memo/edit"
+    memo_id = request.form.get("id", "")
+    if editing and not memo_id.isdigit():
+        return _memo_failure("編集対象を選んでください")
+    try:
+        saved_id = save_memo(code, request.form.get("content", ""),
+                             request.form.get("title", ""), request.form.get("source_url", ""),
+                             int(memo_id) if editing else None)
+        _bust_prefix(f"stock_{code}")
+    except ValueError as exc:
+        return _memo_failure(str(exc))
+    except Exception as exc:
+        print(f"[memo_save] error: {exc}")
+        return _memo_failure("保存できませんでした。入力内容を残しています。再度お試しください。", 503)
+    if request.accept_mimetypes.best == "application/json":
+        return jsonify(ok=True, id=saved_id)
     return redirect(_safe_next(f"/stock/{code}"))
 
 
 @app.route("/memo/delete", methods=["POST"])
 def memo_delete():
-    memo_id = request.form.get("id", "").strip()
-    code    = request.form.get("code", "").strip().upper()
-    if not _valid_code(code):
-        return redirect("/")
-    if memo_id.isdigit():
-        try:
-            with db() as cur:
-                cur.execute("DELETE FROM stock_memos WHERE id = %s", (memo_id,))
-            _bust_prefix(f"stock_{code}")
-        except Exception as e:
-            print(f"[memo_delete] error: {e}")
+    from watchlist_service import delete_memo
+    code = request.form.get("code", "").strip().upper()
+    memo_id = request.form.get("id", "")
+    if not _valid_code(code) or not memo_id.isdigit():
+        return _memo_failure("削除対象が不正です")
+    try:
+        delete_memo(code, int(memo_id))
+        _bust_prefix(f"stock_{code}")
+    except ValueError as exc:
+        return _memo_failure(str(exc))
+    except Exception as exc:
+        print(f"[memo_delete] error: {exc}")
+        return _memo_failure("削除できませんでした。もう一度お試しください。", 503)
+    if request.accept_mimetypes.best == "application/json":
+        return jsonify(ok=True)
     return redirect(_safe_next(f"/stock/{code}"))
 
 

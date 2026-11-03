@@ -228,7 +228,18 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
   未設定なら送信スキップ（例外を出さない）。LINE初回設定手順は line_notify.py の docstring
   `retry_key` 指定時は `X-Line-Retry-Key` を付け、タイムアウト後の再送でも重複配信を防ぐ
 - `watchlist_service.py` — ウォッチリストの複数リスト所属・価格通知設定・追加専用スキーマ移行。
-  既存 `watchlist`/`stock_memos` を正として維持し、リスト削除時も銘柄・メモを残す
+  既存 `watchlist`/`stock_memos` を正として維持し、リスト削除時も銘柄・メモを残す。
+  調査記録は1銘柄に複数保存し、見出し・参照URLを `stock_memo_sources` に付加する。
+  本文・URL検証と追加/編集/削除を共通化し、本文と参照情報を同じトランザクションで保存する
+- `watchlist_workspace.py` — ウォッチリストの読取モデル（リスト・銘柄・情報件数・価格通知の一括取得）。
+  銘柄別の記録履歴と3年分のOHLCVをAPIへ提供。ローソク足のOHLCは既存adj_close/closeで
+  分割調整基準を統一し、出来高は当日株数を表示。独自の分割推定・配当調整は行わない
+- `templates/watchlist.html` / `static/watchlist.{css,js}` — PCは銘柄一覧と詳細の2列、スマホは縦配置。
+  検索は大きなdialog内に候補を通常フローで表示し、親cardのoverflowで隠れない構造。
+  日/週/月足・期間・移動平均・出来高・拡大チャート、絞り込み/並べ替え/選択のURL保持を担当
+- `templates/stock_notes.html` / `static/stock_notes.{css,js}` — ウォッチリストと銘柄詳細で共通の調査履歴。
+  複数のメモ/X投稿/参考URL、全文展開、本文/見出し/URL検索、編集/削除、タブ内下書きを提供。
+  状態はJSオブジェクト、下書きはsessionStorageで銘柄別に保持。保存失敗時も入力を残す
 - `price_alerts.py` — 上値/下値の終値到達判定と翌朝LINE通知。到達イベントと送信バッチをDB保存し、
   日次バッチ再実行・朝便再試行を冪等化。株式分割後の旧設定は自動通知せず確認待ちにする
 - `swing_scorer.py` — スイング候補スコア → `swing_scores`（/swing ページで表示）
@@ -306,7 +317,8 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 | `/themes` | テーマ株一覧（みんかぶ全~1,150テーマ＋手動テーマ）。上部に3枠: **ロングランテーマ**（`LONGRUN_THEMES`=手動15件・構造テーマ・featured='long'）、**気になるテーマ**（`WATCH_THEMES`=オーナー興味の手動・featured='watch'。空なら非表示）、**好調テーマ10**（自動: 6銘柄+&時価総額1兆+足切り→大局スコア順。pin/banで上書き可）。どちらも1年指数ミニチャート付きカード。みんかぶに無い「宇宙開発」「SaaS」は`theme_master.MANUAL_THEMES`の手動キュレーション（origin='manual'・同期対象外）。一覧は**大局×短期の2軸スコア＋四象限判定**（主力トレンド/押し目/大局良好/一過性疑い/冷却）でデフォルト大局順。大局=1年・6ヶ月の対TOPIX超過×資金流入持続週数(26週)×高値圏×増益率中央値 |
 | `/theme/<id>` | テーマ詳細（みんかぶ風・2026-07刷新。説明文＋前日/前月/前年比＋テーマ指数vsTOPIXチャート(期間切替)＋関連度バー・3ヶ月ミニチャート付き構成銘柄表＋周辺銘柄折りたたみ） |
 | `/rankings` `/events` `/swing` | 各分析ページ（/report/<date>は/themesへリダイレクト） |
-| `/watchlist` | 複数リスト分類、共通メモ、終値/PER/PBR/配当利回り、3か月ミニチャート、上値/下値リマインダーと到達フラグ。閲覧は公開、変更は `WATCHLIST_PASSCODE`（未設定時は `PORTFOLIO_PASSCODE`）とCSRF検証で保護 |
+| `/watchlist` | PCは銘柄一覧＋大きな詳細パネル。リスト分類・絞り込み・並べ替え、終値/PER/PBR/配当利回り、日/週/月足＋出来高＋MA、銘柄ごとに複数のメモ/X投稿/参考URLを蓄積。上値/下値リマインダーと到達フラグも共用。閲覧は公開、変更は `WATCHLIST_PASSCODE`（未設定時は `PORTFOLIO_PASSCODE`）とCSRF検証で保護 |
+| `/api/watchlist/memos/<code>` `/api/watchlist/chart/<code>` | 共通メモの全履歴（URL/見出し含む・no-store）と分割調整済み3年分OHLCV。選択銘柄だけを遅延取得。チャートは既存の1時間キャッシュを利用 |
 | `/portfolio` (+ `/portfolio/login` `/portfolio/logout`) | ポートフォリオ（SBI証券の保有/約定を取込表示）。概要サマリーを常時表示し、**資産・配当／診断・リスク／保有銘柄／取引履歴**の4ビューで既存情報を整理。総資産・含み損益・**実現損益（取引履歴から）**・銘柄別ヒートマップ/口座別/業種別の切替式資産構成・年間/月別/銘柄別の配当見込み・集中度HHI・テーマ/業種エクスポージャー・2軸ヘルスチェック・リスク指標/ストレステスト・**取引履歴＆実現損益**。ヒートマップ内は文字サイズを拡大し、投信は短縮表示（正式名はホバー）を使用。月別配当は予想年間DPSを直近の権利落ち実績パターンへ配分（支払月とは区別）。**評価額は当社の日次終値ベースで毎日自動更新**（SBI明細は取得単価・保有構成の取込元＝随時でOK。投信のみSBI値）。**個人情報のため `PORTFOLIO_PASSCODE`(env) の簡易Cookie認証で保護**、未設定時OFF。データ投入は `import_sbi.py`（ローカル手動）、分析は `portfolio_analytics.py` |
 | `/api/chart_grid` `/api/search` `/health` | 補助API |
 
@@ -342,7 +354,7 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 | YouTube | `youtube_channels` `youtube_videos` `youtube_weekly` `youtube_daily` | youtube_insights.py（週次AI巡回・動画分析・横断サマリー。日次は大引け解説を集約し日次レポートへ差し込む） |
 | レポート | `daily_reports` | daily_report.py（日次HTMLとLINE送信状態。通知はreport_date単位で冪等） |
 | コンセンサス | `analyst_consensus` | analyst_consensus.py（みんかぶ・目標株価/レーティング/会社予想vsコンセンサス） |
-| アプリ | `watchlist` `stock_memos` `watchlist_lists` `watchlist_list_items` | 保存銘柄・共通メモ・複数リスト分類（app.py / watchlist_service.py） |
+| アプリ | `watchlist` `stock_memos` `stock_memo_sources` `watchlist_lists` `watchlist_list_items` | 保存銘柄・共通メモ・メモごとの見出し/参照URL・複数リスト分類（app.py / watchlist_service.py / watchlist_workspace.py） |
 | 通知 | `price_alerts` `price_alert_events` `price_alert_notification_batches` | 終値リマインダー設定・到達履歴・LINE送信の冪等管理（price_alerts.py） |
 | 運用 | `fetch_logs` | daily_run.py のバッチ実行ログ |
 | ポートフォリオ | `my_holdings` `my_trades` | import_sbi.py（SBI証券CSVをローカル手動取込・保有は全置換／約定はrow_hashで冪等）。/portfolio で表示 |

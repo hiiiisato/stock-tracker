@@ -17,6 +17,13 @@ JQUANTS_HEADERS = {"x-api-key": JQUANTS_API_KEY}
 # 「加速／減速」と表示するか。小さな振れをトレンド扱いしないための中立帯。
 QUARTER_MOMENTUM_THRESHOLD_PCT = 5.0
 
+# 銘柄別の調査メモとウォッチリストのチャート。無料の既存DBだけを使用。
+STOCK_MEMO_MAX_LENGTH = 20000
+STOCK_MEMO_MAX_BYTES = 65535  # 既存のstock_memos.content（TEXT）の容量
+STOCK_MEMO_TITLE_MAX_LENGTH = 200
+STOCK_MEMO_URL_MAX_LENGTH = 2048
+WATCHLIST_CHART_YEARS = 3
+
 
 def _resolve_ssl_ca() -> str:
     """SSL証明書パスをクロスプラットフォームで解決する。
