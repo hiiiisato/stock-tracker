@@ -182,3 +182,21 @@ PC1512/1024px、スマホ768/390/320pxで候補表示・全文展開・記録追
 情報設計の参考: [TradingView公式のウォッチリスト解説](https://www.tradingview.com/support/solutions/43000745825-mastering-the-tradingview-watchlists/)と
 [銘柄別の全ノート表示](https://www.tradingview.com/support/solutions/43000667897-how-to-check-all-text-notes/)。
 既存のFlask/TiDB/Plotlyを使用し、新たな有料サービス・定期処理は追加していない。
+
+## 2026-11-04：新規登録の参考URLと初回確認
+
+新規登録dialogに参考URL・見出し・メモをまとめ、URLだけの登録にも対応した。
+銘柄・最初のメモ・参照情報・所属リストを同じトランザクションで保存する。
+参照情報の保存に失敗した場合は銘柄追加から取り消し、入力はタブ内の下書きに残す。
+既存銘柄を検索した際も、情報を入力すれば新しい記録として追記でき、所属リストは引き継ぐ。
+
+オーナーの選択により、公開サイトの編集保護は残し、初回だけ同じ画面で確認する。
+`/watchlist/access`で現在の編集状態を取得し、`/watchlist/login`のJSON応答からCSRFを更新して
+入力済みの登録をそのまま続ける。認証Cookieは既存と同じ30日間・HttpOnly・SameSite=Lax。
+Cookieが切れた場合も入力を残し、確認する場所を同じdialog内に示す。
+パスコードはsessionStorage等へ保存せず、銘柄・所属・URL・見出し・メモだけを復元する。
+
+既存の書込保護とJSON応答、URL付きの新規登録、URLのみ、保存途中のrollbackをPythonテストで確認。
+実データをコピーした一時DBの画面で、未確認・誤パスコード・再読み込みからの下書き復元・
+初回確認後の連続保存・2回目の確認省略を操作した。PC1512px・スマホ390pxで横はみ出しがないことも確認した。
+DBスキーマの追加・変更や、新しい有料サービスは不要。

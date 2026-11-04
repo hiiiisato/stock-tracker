@@ -45,6 +45,42 @@ class WatchlistWriteProtectionTest(unittest.TestCase):
         self.assertIn("wl_auth=", response.headers["Set-Cookie"])
         self.assertIn("HttpOnly", response.headers["Set-Cookie"])
 
+    def test_inline_login_returns_csrf_and_remembers_the_browser(self):
+        response = self.client.post("/watchlist/login", headers={"Accept": "application/json"},
+                                    data={"passcode": "test-pass"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json, {"ok": True, "csrf": self.csrf})
+        self.assertIn("Max-Age=2592000", response.headers["Set-Cookie"])
+        self.assertIn("HttpOnly", response.headers["Set-Cookie"])
+        status = self.client.get("/watchlist/access")
+        self.assertTrue(status.json["authenticated"])
+        self.assertEqual(status.json["csrf"], self.csrf)
+        self.assertEqual(status.headers["Cache-Control"], "no-store")
+
+    def test_wrong_inline_passcode_returns_an_error_without_a_cookie(self):
+        response = self.client.post("/watchlist/login", headers={"Accept": "application/json"},
+                                    data={"passcode": "wrong"})
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("違います", response.json["error"])
+        self.assertNotIn("Set-Cookie", response.headers)
+
+    def test_anonymous_json_write_has_an_inline_auth_error_instead_of_redirecting(self):
+        with patch("app.db") as database:
+            response = self.client.post("/watchlist/add", headers={"Accept": "application/json"},
+                                        data={"code": "7203", "memo": "消さない入力"})
+        self.assertEqual(response.status_code, 401)
+        self.assertTrue(response.json["auth_required"])
+        self.assertNotIn("Location", response.headers)
+        database.assert_not_called()
+
+    def test_json_csrf_error_can_be_recovered_in_the_same_screen(self):
+        self.client.set_cookie("wl_auth", self.token)
+        response = self.client.post("/watchlist/add", headers={"Accept": "application/json"},
+                                    data={"code": "7203", "csrf": "stale"})
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(response.json["csrf_invalid"])
+        self.assertEqual(self.client.get("/watchlist/access").json["csrf"], self.csrf)
+
     def test_price_alert_edit_preserves_an_unedited_triggered_direction(self):
         self.client.set_cookie("wl_auth", self.token)
         with patch("watchlist_service.set_price_alerts") as set_alerts:

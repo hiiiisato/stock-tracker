@@ -1986,7 +1986,9 @@ def _build_watchlist_page(msg: str = "") -> str:
     from flask import render_template
     from watchlist_workspace import load_workspace
     body = render_template("watchlist.html", data=load_workspace(), msg=msg,
-                           csrf_input=_watchlist_csrf_input(), authed=_watchlist_authed())
+                           csrf_input=_watchlist_csrf_input(), authed=_watchlist_authed(),
+                           passcode_configured=bool(_watchlist_passcode()),
+                           shared_passcode=not bool(os.environ.get("WATCHLIST_PASSCODE", "")))
     return _page_html("ウォッチリスト", body, active="watchlist")
 
 
@@ -10676,10 +10678,19 @@ def watchlist_login():
     if request.method == "POST" and passcode and hmac.compare_digest(
         request.form.get("passcode", ""), passcode
     ):
-        response = make_response(redirect(next_url))
-        response.set_cookie("wl_auth", _watchlist_token(), max_age=60 * 60 * 24 * 30,
+        token = _watchlist_token()
+        if request.accept_mimetypes.best == "application/json":
+            csrf = hashlib.sha256(("wl-csrf:" + token).encode()).hexdigest()
+            response = make_response(jsonify(ok=True, csrf=csrf))
+            response.headers["Cache-Control"] = "no-store"
+        else:
+            response = make_response(redirect(next_url))
+        response.set_cookie("wl_auth", token, max_age=60 * 60 * 24 * 30,
                             httponly=True, samesite="Lax", secure=request.is_secure)
         return response
+    if request.method == "POST" and request.accept_mimetypes.best == "application/json":
+        return jsonify(error="パスコードが違います。もう一度入力してください。" if passcode
+                       else "現在、編集を開始できません。サイトの設定を確認してください。"), 401 if passcode else 503
     if not passcode:
         message = ("<p>ウォッチリストの更新を保護するには、環境変数 "
                    "<code>WATCHLIST_PASSCODE</code> または "
@@ -10691,6 +10702,14 @@ def watchlist_login():
                    '<input type="password" name="passcode" placeholder="パスコード" autofocus>'
                    '<button type="submit">開く</button></form>')
     return _page_html("ウォッチリストを開く", f'<div class="pf-wrap"><div class="pf-gate"><h2>🔒 ウォッチリスト</h2>{message}</div></div>', active="watchlist")
+
+
+@app.route("/watchlist/access")
+def watchlist_access():
+    response = jsonify(authenticated=_watchlist_authed(), configured=bool(_watchlist_passcode()),
+                       csrf=_watchlist_csrf_token(), shared=not bool(os.environ.get("WATCHLIST_PASSCODE", "")))
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def _valid_code(code: str) -> bool:
@@ -10728,23 +10747,26 @@ def _safe_next(default: str = "/watchlist") -> str:
 
 @app.route("/watchlist/add", methods=["POST"])
 def watchlist_add():
-    from watchlist_service import ensure_schema, validate_memo
+    from watchlist_service import create_memo, ensure_schema, validate_memo
     code = request.form.get("code", "").strip().upper()
     next_url = _safe_next()
     if not _valid_code(code):
         return _memo_failure("候補から銘柄を選んでください")
     try:
         memo = request.form.get("memo", "").strip()
-        if memo:
-            validate_memo(memo)
+        title = request.form.get("title", "").strip()
+        source_url = request.form.get("source_url", "").strip()
+        has_memo = bool(memo or title or source_url)
+        if has_memo:
+            memo, title, source_url = validate_memo(memo, title, source_url)
         ensure_schema()
         with db() as cur:
             cur.execute("SELECT 1 FROM stocks WHERE code = %s AND is_active = TRUE", (code,))
             if not cur.fetchone():
                 return _memo_failure("銘柄が見つかりません")
             cur.execute("INSERT IGNORE INTO watchlist (code) VALUES (%s)", (code,))
-            if memo:
-                cur.execute("INSERT INTO stock_memos (code, content) VALUES (%s, %s)", (code, memo))
+            if has_memo:
+                create_memo(cur, code, memo, title, source_url)
             if request.form.get("memberships_present") == "1":
                 ids = sorted({int(x) for x in request.form.getlist("list_ids") if x.isdigit() and int(x) > 0})
                 cur.execute("DELETE FROM watchlist_list_items WHERE code = %s", (code,))
@@ -11166,9 +11188,14 @@ def _protect_watchlist_writes():
     if request.method != "POST" or not protected or request.path == "/watchlist/login":
         return None
     if not _watchlist_authed():
+        if request.accept_mimetypes.best == "application/json":
+            return jsonify(error="編集を続けるには、この端末で初回の確認が必要です。",
+                           auth_required=True), 401
         return redirect("/watchlist/login?next=" + _url_quote(_watchlist_next_from_request(), safe="/?=&"))
     supplied = request.form.get("csrf", "")
     if not supplied or not hmac.compare_digest(supplied, _watchlist_csrf_token()):
+        if request.accept_mimetypes.best == "application/json":
+            return jsonify(error="編集の確認情報を更新してください。", csrf_invalid=True), 403
         abort(403)
     return None
 

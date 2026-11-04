@@ -18,10 +18,13 @@ class SQLiteCursor:
         self.cur = conn.cursor()
 
     def execute(self, sql, args=()):
-        sql = sql.replace("%s", "?").replace(" FOR UPDATE", "")
+        sql = sql.replace("%s", "?").replace(" FOR UPDATE", "").replace("INSERT IGNORE", "INSERT OR IGNORE")
         sql = sql.replace("ON DUPLICATE KEY UPDATE title = VALUES(title), source_url = VALUES(source_url)",
                           "ON CONFLICT(memo_id) DO UPDATE SET title=excluded.title, source_url=excluded.source_url")
         self.cur.execute(sql, args)
+
+    def executemany(self, sql, args):
+        self.cur.executemany(sql.replace("%s", "?"), args)
 
     def fetchone(self):
         return self.cur.fetchone()
@@ -38,8 +41,12 @@ class StockResearchRecordsTest(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(":memory:")
         self.conn.executescript("""
-            CREATE TABLE stocks (code TEXT PRIMARY KEY);
-            INSERT INTO stocks VALUES ('7203'), ('6758');
+            CREATE TABLE stocks (code TEXT PRIMARY KEY, is_active INTEGER DEFAULT 1);
+            INSERT INTO stocks (code) VALUES ('7203'), ('6758');
+            CREATE TABLE watchlist (code TEXT PRIMARY KEY);
+            CREATE TABLE watchlist_lists (id INTEGER PRIMARY KEY);
+            INSERT INTO watchlist_lists VALUES (1);
+            CREATE TABLE watchlist_list_items (list_id INTEGER, code TEXT, PRIMARY KEY (list_id, code));
             CREATE TABLE stock_memos (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT,
                 content TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
             CREATE TABLE stock_memo_sources (memo_id INTEGER PRIMARY KEY, title TEXT, source_url TEXT);
@@ -48,7 +55,7 @@ class StockResearchRecordsTest(unittest.TestCase):
         def db():
             with self.conn:
                 yield SQLiteCursor(self.conn)
-        self.patches = [patch("watchlist_service.ensure_schema"), patch("watchlist_service.db", db),
+        self.patches = [patch("watchlist_service.ensure_schema"), patch("watchlist_service.db", db), patch("app.db", db),
                         patch("watchlist_workspace.db", db), patch.dict(os.environ, {"WATCHLIST_PASSCODE": "test-pass"})]
         for p in self.patches:
             p.start()
@@ -73,6 +80,53 @@ class StockResearchRecordsTest(unittest.TestCase):
         self.assertEqual(len({r["source_url"] for r in rows}), 3)
         self.assertTrue(all(len(r["content"]) > 2000 and r["kind"] == "x" for r in rows))
         self.assertEqual(self.client.get("/api/watchlist/memos/7203").headers["Cache-Control"], "no-store")
+
+    def test_new_stock_can_save_url_and_memo_together(self):
+        response = self.client.post("/watchlist/add", headers={"Accept": "application/json"}, data={
+            "code": "7203", "csrf": self.csrf, "memo": "投稿の考察\n最後まで保存", "title": "成長への期待",
+            "source_url": "https://x.com/example/status/123", "memberships_present": "1", "list_ids": "1"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM watchlist WHERE code='7203'").fetchone()[0], 1)
+        self.assertEqual(self.conn.execute("SELECT list_id FROM watchlist_list_items WHERE code='7203'").fetchone()[0], 1)
+        rows = load_memos("7203")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source_url"], "https://x.com/example/status/123")
+        self.assertEqual(rows[0]["title"], "成長への期待")
+        self.assertEqual(rows[0]["content"], "投稿の考察\n最後まで保存")
+
+    def test_first_registration_continues_after_inline_login(self):
+        client = stock_app.app.test_client()
+        values = {"code": "7203", "memo": "入力した考察", "source_url": "https://x.com/example/status/1"}
+        response = client.post("/watchlist/add", headers={"Accept": "application/json"}, data=values)
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(load_memos("7203"), [])
+        login = client.post("/watchlist/login", headers={"Accept": "application/json"}, data={"passcode": "test-pass"})
+        self.assertEqual(login.status_code, 200)
+        response = client.post("/watchlist/add", headers={"Accept": "application/json"}, data={**values, "csrf": login.json["csrf"]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(load_memos("7203")[0]["source_url"], values["source_url"])
+
+    def test_new_stock_accepts_url_only_and_no_information(self):
+        for code, url in (("7203", "https://example.com/ir"), ("6758", "")):
+            response = self.client.post("/watchlist/add", headers={"Accept": "application/json"}, data={
+                "code": code, "csrf": self.csrf, "source_url": url})
+            self.assertEqual(response.status_code, 200)
+        self.assertEqual(load_memos("7203")[0]["source_url"], "https://example.com/ir")
+        self.assertEqual(load_memos("6758"), [])
+
+    def test_failed_first_source_rolls_back_stock_and_memo(self):
+        self.conn.execute("DROP TABLE stock_memo_sources")
+        response = self.client.post("/watchlist/add", headers={"Accept": "application/json"}, data={
+            "code": "7203", "csrf": self.csrf, "memo": "全体を取り消す", "source_url": "https://example.com"})
+        self.assertEqual(response.status_code, 503)
+        for table in ("watchlist", "stock_memos", "watchlist_list_items"):
+            self.assertEqual(self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
+
+    def test_new_stock_rejects_invalid_url_without_saving(self):
+        response = self.client.post("/watchlist/add", headers={"Accept": "application/json"}, data={
+            "code": "7203", "csrf": self.csrf, "memo": "保存しない", "source_url": "javascript:alert(1)"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0], 0)
 
     def test_url_only_and_legacy_notes_share_the_same_history_without_twenty_item_limit(self):
         self.conn.executemany("INSERT INTO stock_memos (code,content) VALUES ('7203', ?)", [(f"旧メモ{i}",) for i in range(25)])

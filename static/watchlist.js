@@ -6,8 +6,43 @@
   const byCode = new Map(data.stocks.map(s => [s.code, s]));
   const listNames = new Map(data.lists.map(l => [l.id, l.name]));
   const params = new URLSearchParams(location.search);
-  const state = { list: params.get('list') || 'all', code: '', query: params.get('q') || '', sort: params.get('sort') || 'added', period: '6M', interval: 'day', mas: new Set([25]), chartCache: new Map(), chartRevision: 0, settings: {}, add: { code: '', query: '', memo: '', ids: [], rows: [], active: -1, revision: 0 }, expanded: false };
+  const state = { list: params.get('list') || 'all', code: '', query: params.get('q') || '', sort: params.get('sort') || 'added', period: '6M', interval: 'day', mas: new Set([25]), chartCache: new Map(), chartRevision: 0, settings: {}, add: { code: '', query: '', memo: '', title: '', source_url: '', ids: [], rows: [], active: -1, revision: 0, open: false, busy: false }, expanded: false };
+  const addDraftKey = 'watchlist-add-draft:v1';
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(addDraftKey) || '{}');
+    ['code', 'query', 'memo', 'title', 'source_url'].forEach(key => { if (typeof saved[key] === 'string') state.add[key] = saved[key]; });
+    if (Array.isArray(saved.ids)) state.add.ids = saved.ids.filter(id => listNames.has(id));
+    state.add.open = saved.open === true;
+  } catch (_) {}
+  const hasAddNote = () => !!(state.add.memo.trim() || state.add.title.trim() || state.add.source_url.trim());
+  function persistAddDraft() {
+    const { code, query, memo, title, source_url, ids, open } = state.add;
+    try { sessionStorage.setItem(addDraftKey, JSON.stringify({ code, query, memo, title, source_url, ids, open })); } catch (_) {}
+  }
+  function syncAddButton() {
+    $('wl-add-submit').disabled = !state.add.code || state.add.busy;
+    $('wl-add-submit').textContent = state.add.busy ? '保存中…' : byCode.has(state.add.code) ? hasAddNote() ? 'この銘柄に情報を追加' : '保存済みの銘柄を開く' : '銘柄と情報を保存';
+  }
   const detail = $('wl-detail'), dialog = $('wl-add-dialog'), addForm = $('wl-add-form');
+  const access = JSON.parse($('wl-access-data').textContent);
+  state.add.passcode = '';
+  function updateAccess(next) {
+    Object.assign(access, next);
+    $('wl-add-access').hidden = access.authenticated;
+    $('wl-add-passcode').disabled = !access.configured || state.add.busy;
+    const hint = document.querySelector('.wl-auth-hint'); if (hint) hint.hidden = access.authenticated;
+    $('wl-add-access').querySelector('label').textContent = access.shared ? 'ポートフォリオと共通のパスコード' : '編集用パスコード';
+    if (next.csrf !== undefined) document.querySelectorAll('form[action^="/watchlist/"], form[action^="/memo/"]').forEach(form => {
+      let input = form.elements.csrf;
+      if (!input) { input = make('input'); input.type = 'hidden'; input.name = 'csrf'; form.append(input); }
+      input.value = next.csrf;
+    });
+  }
+  async function refreshAccess() {
+    const response = await fetch('/watchlist/access', { headers: { Accept: 'application/json' }, cache: 'no-store' });
+    if (!response.ok) throw new Error('編集できる状態を確認できませんでした。もう一度お試しください。');
+    updateAccess(await response.json());
+  }
   const fmt = (v, suffix = '', digits = null) => v == null ? '—' : Number(v).toLocaleString('ja-JP', { minimumFractionDigits: digits ?? 0, maximumFractionDigits: digits ?? 4 }) + suffix;
   const change = value => value == null ? '—' : (value >= 0 ? '+' : '') + Number(value).toFixed(2) + '%';
   const color = value => value == null ? 'wl-muted' : value >= 0 ? 'wl-positive' : 'wl-negative';
@@ -171,12 +206,14 @@
     state.add.code = stock.code; state.add.query = stock.name + ' (' + stock.code + ')'; $('wl-stock-search').value = state.add.query;
     ++state.add.revision; clearTimeout(searchTimer); state.add.rows = []; state.add.active = -1; renderCandidates();
     $('wl-selected-stock').textContent = stock.name + ' (' + stock.code + ') を選択中'; $('wl-search-status').textContent = '';
-    $('wl-add-submit').disabled = false; $('wl-add-submit').textContent = byCode.has(stock.code) ? '保存済みの銘柄を開く' : '選択した銘柄を追加';
+    if (byCode.has(stock.code)) state.add.ids = [...new Set([...state.add.ids, ...byCode.get(stock.code).lists])];
+    renderAddChecks(); syncAddButton(); persistAddDraft();
   }
   $('wl-stock-search').oninput = e => {
     state.add.query = e.target.value; state.add.code = ''; state.add.rows = []; state.add.active = -1;
     $('wl-add-submit').disabled = true; $('wl-selected-stock').textContent = ''; renderCandidates(); clearTimeout(searchTimer);
     const q = state.add.query.trim(), revision = ++state.add.revision;
+    persistAddDraft();
     $('wl-search-status').textContent = q ? '検索中…' : '候補を選択して追加します';
     if (!q) return;
     searchTimer = setTimeout(async () => {
@@ -188,22 +225,68 @@
     if (['ArrowDown', 'ArrowUp'].includes(e.key) && state.add.rows.length) { e.preventDefault(); state.add.active = (state.add.active + (e.key === 'ArrowDown' ? 1 : -1) + state.add.rows.length) % state.add.rows.length; renderCandidates(); $('wl-candidate-' + state.add.active).scrollIntoView({ block: 'nearest' }); }
     if (e.key === 'Enter') { e.preventDefault(); const stock = state.add.rows[state.add.active] || (state.add.rows.length === 1 ? state.add.rows[0] : null); if (stock) chooseCandidate(stock); }
   };
-  $('wl-open-add').onclick = () => { state.add.ids = /^\d+$/.test(state.list) ? [Number(state.list)] : []; checks($('wl-add-lists'), state.add.ids, (id, checked) => { state.add.ids = checked ? [...state.add.ids, id] : state.add.ids.filter(v => v !== id); }); dialog.showModal(); $('wl-stock-search').focus(); };
+  function renderAddChecks() { checks($('wl-add-lists'), state.add.ids, (id, checked) => { state.add.ids = checked ? [...state.add.ids, id] : state.add.ids.filter(v => v !== id); persistAddDraft(); }); }
+  function openAdd() {
+    if (!state.add.query && !hasAddNote()) state.add.ids = /^\d+$/.test(state.list) ? [Number(state.list)] : [];
+    renderAddChecks(); state.add.open = true; persistAddDraft(); syncAddButton();
+    if (!dialog.open) dialog.showModal();
+    $('wl-stock-search').focus();
+    refreshAccess().catch(error => { $('wl-add-error').textContent = error.message; });
+  }
+  $('wl-open-add').onclick = openAdd;
   $('wl-close-add').onclick = () => dialog.close();
-  $('wl-add-memo').oninput = e => { state.add.memo = e.target.value; };
+  $('wl-add-passcode').oninput = e => { state.add.passcode = e.target.value; $('wl-add-access').querySelector('.wl-access-error').textContent = ''; };
+  dialog.addEventListener('close', () => { state.add.open = false; persistAddDraft(); });
+  [['wl-add-memo', 'memo'], ['wl-add-note-title', 'title'], ['wl-add-url', 'source_url']].forEach(([id, key]) => {
+    $(id).oninput = e => { state.add[key] = e.target.value; syncAddButton(); persistAddDraft(); };
+  });
   addForm.onsubmit = async e => {
-    e.preventDefault(); if (!state.add.code) return;
-    if (byCode.has(state.add.code)) { state.list = 'all'; state.query = ''; $('wl-filter').value = ''; select(state.add.code); renderPills(); renderList(); updateURL(true); dialog.close(); return; }
-    $('wl-add-submit').disabled = true; $('wl-add-error').textContent = '';
+    e.preventDefault(); if (!state.add.code || state.add.busy) return;
+    if (byCode.has(state.add.code) && !hasAddNote()) { state.list = 'all'; state.query = ''; $('wl-filter').value = ''; select(state.add.code); renderPills(); renderList(); updateURL(true); dialog.close(); return; }
+    state.add.busy = true; syncAddButton(); $('wl-add-error').textContent = '';
+    const savedCode = state.add.code;
+    const values = { code: savedCode, memo: state.add.memo, title: state.add.title, source_url: state.add.source_url, memberships_present: '1' };
+    const savedIds = state.add.ids.slice(), passcode = state.add.passcode;
+    const fields = [...addForm.querySelectorAll('input:not([type=hidden]), textarea, fieldset')]; fields.forEach(field => { field.disabled = true; });
     try {
-      const body = new URLSearchParams({ code: state.add.code, memo: state.add.memo, csrf: (addForm.elements.csrf?.value || ''), memberships_present: '1' }); state.add.ids.forEach(id => body.append('list_ids', id));
-      const response = await fetch('/watchlist/add', { method: 'POST', headers: { Accept: 'application/json' }, body });
-      if (response.redirected) throw new Error('追加するにはパスコードでログインしてください。入力は保持しています。');
-      const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.error || '保存できませんでした。もう一度お試しください。');
-      location.href = currentURL(state.add.code);
-    } catch (error) { $('wl-add-error').textContent = error.message; $('wl-add-submit').disabled = false; }
+      await refreshAccess();
+      if (!access.authenticated) {
+        if (!access.configured) throw new Error('現在は編集を開始できません。サイトの設定を確認してください。');
+        if (!passcode) throw new Error('画面上部のパスコード欄に、最初の1回だけ入力してください。');
+        const login = await fetch('/watchlist/login', { method: 'POST', headers: { Accept: 'application/json' }, body: new URLSearchParams({ passcode }) });
+        const result = await login.json().catch(() => ({}));
+        if (!login.ok) { $('wl-add-access').querySelector('.wl-access-error').textContent = result.error || '確認できませんでした'; throw new Error(result.error || 'パスコードを確認してください。'); }
+        updateAccess({ authenticated: true, csrf: result.csrf });
+        state.add.passcode = ''; $('wl-add-passcode').value = '';
+      }
+      async function submit() {
+        const body = new URLSearchParams({ ...values, csrf: (addForm.elements.csrf?.value || '') }); savedIds.forEach(id => body.append('list_ids', id));
+        const response = await fetch('/watchlist/add', { method: 'POST', headers: { Accept: 'application/json' }, body });
+        if (response.redirected) { updateAccess({ authenticated: false }); throw new Error('初回確認の欄から、そのまま登録を続けてください。'); }
+        return { response, result: await response.json().catch(() => ({})) };
+      }
+      let outcome = await submit();
+      if (outcome.result.csrf_invalid) { await refreshAccess(); if (access.authenticated) outcome = await submit(); }
+      if (outcome.result.auth_required) updateAccess({ authenticated: false });
+      if (!outcome.response.ok) throw new Error(outcome.result.error || '保存できませんでした。もう一度お試しください。');
+      try { sessionStorage.removeItem(addDraftKey); } catch (_) {}
+      state.query = '';
+      if ((state.list === 'unclassified' && savedIds.length) || (/^\d+$/.test(state.list) && !savedIds.includes(Number(state.list)))) state.list = 'all';
+      Object.assign(state.add, { code: '', query: '', memo: '', title: '', source_url: '', ids: [], open: false });
+      location.href = currentURL(savedCode);
+    } catch (error) { $('wl-add-error').textContent = error.message; persistAddDraft(); }
+    finally {
+      state.add.busy = false; fields.forEach(field => { field.disabled = false; }); syncAddButton(); updateAccess(access);
+      if (!access.authenticated && access.configured) $('wl-add-passcode').focus();
+    }
   };
-  function restoreControls() { $('wl-filter').value = state.query; $('wl-sort').value = state.sort; $('wl-stock-search').value = state.add.query; $('wl-add-memo').value = state.add.memo; if (state.code) renderSettings(byCode.get(state.code)); }
+  function restoreControls() {
+    $('wl-filter').value = state.query; $('wl-sort').value = state.sort; $('wl-stock-search').value = state.add.query;
+    [['wl-add-memo', 'memo'], ['wl-add-note-title', 'title'], ['wl-add-url', 'source_url']].forEach(([id, key]) => { $(id).value = state.add[key]; });
+    if (state.add.code) $('wl-selected-stock').textContent = state.add.query + ' を選択中';
+    renderAddChecks(); syncAddButton();
+    if (state.code) renderSettings(byCode.get(state.code));
+  }
   window.addEventListener('pageshow', restoreControls);
   window.addEventListener('popstate', () => { const p = new URLSearchParams(location.search); state.list = p.get('list') || 'all'; state.query = p.get('q') || ''; state.sort = p.get('sort') || 'added'; select(byCode.has(p.get('code')) ? p.get('code') : ''); restoreControls(); renderPills(); renderList(); });
   if (!['all', 'unclassified', ...data.lists.map(l => String(l.id))].includes(state.list)) state.list = 'all';
@@ -211,4 +294,6 @@
   if (byCode.has(initial) && inList(byCode.get(initial), state.list)) select(initial);
   restoreControls(); renderPills(); renderList(); updateURL(false);
   if (!data.stocks.length) { detail.hidden = true; $('wl-no-selection').hidden = false; }
+  updateAccess(access);
+  if (state.add.open) openAdd();
 })();

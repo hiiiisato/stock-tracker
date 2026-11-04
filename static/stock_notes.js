@@ -6,11 +6,18 @@
   window.StockNotes = { mount(root, onChange) {
     if (root._notes) return root._notes;
     const form = root.querySelector('.sn-editor'), timeline = root.querySelector('.sn-timeline'), status = root.querySelector('.sn-status');
-    const csrf = (form.elements.csrf?.value || '');
     const state = { code: '', rows: [], query: '', kind: 'all', order: 'desc', expanded: new Set(), draft: {}, revision: 0, busy: false };
     const empty = () => ({ id: '', title: '', content: '', source_url: '', open: false });
     const key = code => 'stock-notes-draft:' + code;
     const hasDraft = () => !!(state.draft.title || state.draft.content || state.draft.source_url);
+    function showError(target, error) {
+      target.replaceChildren(document.createTextNode(error.message));
+      if (error.auth_required) {
+        const link = node('a', '', '入力を残して編集を開始');
+        link.href = '/watchlist/login?' + new URLSearchParams({ next: location.pathname + location.search + location.hash });
+        target.append(document.createTextNode(' '), link);
+      }
+    }
     function persist() { try { sessionStorage.setItem(key(state.code), JSON.stringify(state.draft)); } catch (_) {} }
     function syncForm() {
       ['title', 'content', 'source_url', 'id'].forEach(k => { form.elements[k].value = state.draft[k] || ''; });
@@ -74,16 +81,16 @@
               await refresh(code);
             }
           }
-          catch (error) { if (code === state.code) status.textContent = error.message; } finally { del.disabled = false; }
+          catch (error) { if (code === state.code) showError(status, error); } finally { del.disabled = false; }
         };
         actions.append(edit, del); card.append(actions); timeline.append(card);
       });
     }
     async function write(url, values) {
-      const response = await fetch(url, { method: 'POST', headers: { Accept: 'application/json' }, body: new URLSearchParams({ ...values, csrf }) });
-      if (response.redirected) throw new Error('編集にはパスコードでのログインが必要です。下書きは保持しています。');
+      const response = await fetch(url, { method: 'POST', headers: { Accept: 'application/json' }, body: new URLSearchParams({ ...values, csrf: form.elements.csrf?.value || '' }) });
+      if (response.redirected) { const error = new Error('初回の確認が必要です。入力は保持しています。'); error.auth_required = true; throw error; }
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || '保存できませんでした。入力を残しているので、もう一度お試しください。');
+      if (!response.ok) { const error = new Error(result.error || '保存できませんでした。入力を残しているので、もう一度お試しください。'); error.auth_required = result.auth_required; throw error; }
       return result;
     }
     async function refresh(code) {
@@ -105,7 +112,7 @@
         await write(draft.id ? '/memo/edit' : '/memo/add', { ...draft, code });
         try { sessionStorage.removeItem(key(code)); } catch (_) {}
         if (code === state.code) { state.draft = empty(); syncForm(); await refresh(code); }
-      } catch (error) { if (code === state.code) root.querySelector('.sn-error').textContent = error.message; }
+      } catch (error) { if (code === state.code) showError(root.querySelector('.sn-error'), error); }
       finally { state.busy = false; syncForm(); }
     });
     root.querySelector('.sn-search').oninput = e => { state.query = e.target.value; render(); };

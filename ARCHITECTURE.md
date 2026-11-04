@@ -236,6 +236,9 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
   分割調整基準を統一し、出来高は当日株数を表示。独自の分割推定・配当調整は行わない
 - `templates/watchlist.html` / `static/watchlist.{css,js}` — PCは銘柄一覧と詳細の2列、スマホは縦配置。
   検索は大きなdialog内に候補を通常フローで表示し、親cardのoverflowで隠れない構造。
+  新規登録時も見出し・参考URL・メモを同時保存し、銘柄と参考情報を同じトランザクションで作成する。
+  初回確認は登録dialog内で行い、30日間の認証CookieとCSRFを更新してそのまま保存を続ける。
+  登録途中の銘柄・所属・参考URL・メモはsessionStorageで復元する（パスコードは保存しない）。
   日/週/月足・期間・移動平均・出来高・拡大チャート、絞り込み/並べ替え/選択のURL保持を担当
 - `templates/stock_notes.html` / `static/stock_notes.{css,js}` — ウォッチリストと銘柄詳細で共通の調査履歴。
   複数のメモ/X投稿/参考URL、全文展開、本文/見出し/URL検索、編集/削除、タブ内下書きを提供。
@@ -319,6 +322,7 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 | `/rankings` `/events` `/swing` | 各分析ページ（/report/<date>は/themesへリダイレクト） |
 | `/watchlist` | PCは銘柄一覧＋大きな詳細パネル。リスト分類・絞り込み・並べ替え、終値/PER/PBR/配当利回り、日/週/月足＋出来高＋MA、銘柄ごとに複数のメモ/X投稿/参考URLを蓄積。上値/下値リマインダーと到達フラグも共用。閲覧は公開、変更は `WATCHLIST_PASSCODE`（未設定時は `PORTFOLIO_PASSCODE`）とCSRF検証で保護 |
 | `/api/watchlist/memos/<code>` `/api/watchlist/chart/<code>` | 共通メモの全履歴（URL/見出し含む・no-store）と分割調整済み3年分OHLCV。選択銘柄だけを遅延取得。チャートは既存の1時間キャッシュを利用 |
+| `/watchlist/access` `/watchlist/login` | 編集状態とCSRFをno-storeで取得。初回のパスコード確認はJSONでも受け付け、登録画面を離れずに保存できる。未認証のJSON書込は401、古いCSRFは403で復旧方法を返す |
 | `/portfolio` (+ `/portfolio/login` `/portfolio/logout`) | ポートフォリオ（SBI証券の保有/約定を取込表示）。概要サマリーを常時表示し、**資産・配当／診断・リスク／保有銘柄／取引履歴**の4ビューで既存情報を整理。総資産・含み損益・**実現損益（取引履歴から）**・銘柄別ヒートマップ/口座別/業種別の切替式資産構成・年間/月別/銘柄別の配当見込み・集中度HHI・テーマ/業種エクスポージャー・2軸ヘルスチェック・リスク指標/ストレステスト・**取引履歴＆実現損益**。ヒートマップ内は文字サイズを拡大し、投信は短縮表示（正式名はホバー）を使用。月別配当は予想年間DPSを直近の権利落ち実績パターンへ配分（支払月とは区別）。**評価額は当社の日次終値ベースで毎日自動更新**（SBI明細は取得単価・保有構成の取込元＝随時でOK。投信のみSBI値）。**個人情報のため `PORTFOLIO_PASSCODE`(env) の簡易Cookie認証で保護**、未設定時OFF。データ投入は `import_sbi.py`（ローカル手動）、分析は `portfolio_analytics.py` |
 | `/api/chart_grid` `/api/search` `/health` | 補助API |
 

@@ -22,8 +22,18 @@
     </main>
     <div id="wl-no-selection" class="wl-empty" hidden>銘柄がありません。「銘柄を追加」から気になる銘柄を保存してください。</div>
   </div>
-  <dialog id="wl-add-dialog" aria-labelledby="wl-add-title"><div class="wl-dialog-heading"><div><h2 id="wl-add-title">銘柄を追加</h2><p>銘柄名・コード・読み・略称で検索</p></div><button type="button" class="btn-sm" id="wl-close-add" aria-label="閉じる">✕</button></div><form id="wl-add-form" method="post" action="/watchlist/add">{{ csrf_input|safe }}<input type="hidden" name="code"><input type="hidden" name="next"><input type="hidden" name="memberships_present" value="1"><label for="wl-stock-search">銘柄を検索</label><input id="wl-stock-search" type="search" placeholder="例：トヨタ、7203、スクリーン" autocomplete="off" role="combobox" aria-controls="wl-search-results" aria-expanded="false" aria-autocomplete="list"><div id="wl-search-status" role="status">候補を選択して追加します</div><div id="wl-search-results" role="listbox" aria-label="検索候補"></div><div id="wl-selected-stock"></div><label>保存先リスト</label><div id="wl-add-lists" class="wl-checks"></div><label for="wl-add-memo">最初のメモ（任意）</label><textarea id="wl-add-memo" name="memo" rows="3" maxlength="20000" placeholder="なぜ気になったのか、後から調べたいこと"></textarea><p id="wl-add-error" role="alert"></p><button class="btn" id="wl-add-submit" disabled>選択した銘柄を追加</button></form></dialog>
+  <dialog id="wl-add-dialog" aria-labelledby="wl-add-title"><div class="wl-dialog-heading"><div><h2 id="wl-add-title">銘柄を追加</h2><p>銘柄名・コード・読み・略称で検索</p></div><button type="button" class="btn-sm" id="wl-close-add" aria-label="閉じる">✕</button></div><form id="wl-add-form" method="post" action="/watchlist/add">{{ csrf_input|safe }}<input type="hidden" name="code"><input type="hidden" name="next"><input type="hidden" name="memberships_present" value="1"><section id="wl-add-access" class="wl-access" {% if authed %}hidden{% endif %}>
+<strong>この端末での初回確認</strong><p>公開ページの編集を保護しています。ここで確認すると、この端末では30日間そのまま登録・編集できます。</p>
+<label for="wl-add-passcode">{% if shared_passcode %}ポートフォリオと共通のパスコード{% else %}編集用パスコード{% endif %}</label>
+<input id="wl-add-passcode" type="password" autocomplete="current-password" placeholder="初回のみ入力" {% if not passcode_configured %}disabled{% endif %}>
+<p class="wl-access-error" role="alert"></p></section>
+<label for="wl-stock-search">銘柄を検索</label><input id="wl-stock-search" type="search" placeholder="例：トヨタ、7203、スクリーン" autocomplete="off" role="combobox" aria-controls="wl-search-results" aria-expanded="false" aria-autocomplete="list"><div id="wl-search-status" role="status">候補を選択して追加します</div><div id="wl-search-results" role="listbox" aria-label="検索候補"></div><div id="wl-selected-stock"></div><label>保存先リスト</label><div id="wl-add-lists" class="wl-checks"></div><fieldset class="wl-first-note"><legend>メモ・参考資料（任意）</legend>
+<label for="wl-add-url">参考URL</label><input id="wl-add-url" name="source_url" type="url" maxlength="2048" placeholder="https://x.com/… または参考ページのURL">
+<label for="wl-add-note-title">見出し</label><input id="wl-add-note-title" name="title" maxlength="200" placeholder="例：注目した投稿、決算の考察">
+<label for="wl-add-memo">メモ</label><textarea id="wl-add-memo" name="memo" rows="5" maxlength="20000" placeholder="投稿の要点、注目する理由、後から調べたいこと"></textarea>
+<p>URLだけでも登録できます。保存した情報は銘柄の記録に残ります。</p></fieldset><p id="wl-add-error" role="alert"></p><button class="btn" id="wl-add-submit" disabled>選択した銘柄を追加</button></form></dialog>
 </div>
+<script id="wl-access-data" type="application/json">{{ {"authenticated": authed, "configured": passcode_configured, "shared": shared_passcode}|tojson }}</script>
 <script id="wl-initial-data" type="application/json">{{ data|tojson }}</script>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
 <script src="{{ url_for('static', filename='stock_notes.js') }}" defer></script>

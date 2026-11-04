@@ -268,6 +268,24 @@ def validate_memo(content: str, title: str = "", source_url: str = "") -> tuple[
     return content, title, source_url
 
 
+def _save_memo_source(cur, memo_id: int, title: str, source_url: str) -> None:
+    cur.execute("""INSERT INTO stock_memo_sources (memo_id, title, source_url)
+                   VALUES (%s, %s, %s)
+                   ON DUPLICATE KEY UPDATE title = VALUES(title), source_url = VALUES(source_url)""",
+                (memo_id, title, source_url))
+
+
+def create_memo(cur, code: str, content: str, title: str = "", source_url: str = "") -> int:
+    """呼出元のトランザクションで本文・参考URLをまとめて作成する。"""
+    content, title, source_url = validate_memo(content, title, source_url)
+    # URLだけの保存も既存ページ・旧版から読めるよう本文にも残す。
+    cur.execute("INSERT INTO stock_memos (code, content) VALUES (%s, %s)",
+                (code, content or source_url))
+    memo_id = int(cur.lastrowid)
+    _save_memo_source(cur, memo_id, title, source_url)
+    return memo_id
+
+
 def save_memo(code: str, content: str, title: str = "", source_url: str = "",
               memo_id: int | None = None) -> int:
     content, title, source_url = validate_memo(content, title, source_url)
@@ -277,10 +295,7 @@ def save_memo(code: str, content: str, title: str = "", source_url: str = "",
             cur.execute("SELECT 1 FROM stocks WHERE code = %s", (code,))
             if not cur.fetchone():
                 raise ValueError("銘柄が見つかりません")
-            # URLだけの保存も既存ページ・旧版から読めるよう本文にも残す。
-            cur.execute("INSERT INTO stock_memos (code, content) VALUES (%s, %s)",
-                        (code, content or source_url))
-            memo_id = cur.lastrowid
+            return create_memo(cur, code, content, title, source_url)
         else:
             cur.execute("SELECT id FROM stock_memos WHERE id = %s AND code = %s FOR UPDATE",
                         (memo_id, code))
@@ -288,10 +303,7 @@ def save_memo(code: str, content: str, title: str = "", source_url: str = "",
                 raise ValueError("対象のメモが見つかりません。再読み込みしてください")
             cur.execute("UPDATE stock_memos SET content = %s WHERE id = %s AND code = %s",
                         (content or source_url, memo_id, code))
-        cur.execute("""INSERT INTO stock_memo_sources (memo_id, title, source_url)
-                       VALUES (%s, %s, %s)
-                       ON DUPLICATE KEY UPDATE title = VALUES(title), source_url = VALUES(source_url)""",
-                    (memo_id, title, source_url))
+        _save_memo_source(cur, int(memo_id), title, source_url)
     return int(memo_id)
 
 
