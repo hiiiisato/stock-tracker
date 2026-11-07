@@ -2,8 +2,8 @@
 日次実行スクリプト — 毎営業日の市場終了後（16:00以降）に実行する
 実行順: 銘柄マスタ → カレンダー → 価格データ → テーマスコア → ランキング
 
-スケジューラは GitHub Actions（.github/workflows/daily.yml）:
-  16:17 JST メイン / 17:17 JST リトライ（完了済みならスキップ） / 20:47 JST イブニング便
+一次スケジューラは Cloudflare Cron → GitHub Actions（.github/workflows/daily.yml）:
+  16:05 JST メイン / 20:30 JST イブニング便（GitHub cronは保険として残す）
 
 使い方:
   python daily_run.py              # 通常の日次更新（当日完了済みならスキップ）
@@ -11,10 +11,12 @@
   python daily_run.py --evening   # イブニング便: 夜間開示の回収+市況考察+日次レポート確定版
   python daily_run.py --init       # 初回: 全期間の価格データを一括取得
   python daily_run.py --rankings   # ランキングのみ再計算
+  python daily_run.py --catch-up 2026-11-06  # 指定営業日を強制救済
 """
+import argparse
 import sys
 import traceback
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from batch_dates import (
     JST,
@@ -51,11 +53,26 @@ def _latest_price_date() -> date | None:
         cur.close(); c.close()
 
 
+def _latest_open_date_on_or_before(day: date) -> date | None:
+    """公式取引カレンダーから指定日以前の直近営業日を返す。"""
+    c = get_conn(); cur = c.cursor()
+    try:
+        cur.execute(
+            "SELECT MAX(date) FROM trading_calendar WHERE date <= %s AND is_holiday = FALSE",
+            (day,),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        cur.close(); c.close()
+
+
 def _main_guard_target_date(now: datetime | None = None) -> date | None:
     """通常便の重複ガード対象日をJSTで決める。
 
-    16時以降は必ず当日を見る。翌朝まで遅延した便だけDBの最新営業日を見る。
-    これにより、前日分の遅延ログが当日便を止めることを防ぐ。
+    16時以降は必ず当日を見る。16時前に遅延到着した便は、価格のMAX日付ではなく
+    公式取引カレンダー上の直前営業日を見る。価格取得自体が止まっている時にも、
+    古い完了レポートを見て誤スキップしないため。
     """
     current = now or _jst_now()
     if current.tzinfo is None:
@@ -63,7 +80,18 @@ def _main_guard_target_date(now: datetime | None = None) -> date | None:
     current = current.astimezone(JST)
     if current.time() >= NEXT_BATCH_START:
         return current.date()
-    return _latest_price_date()
+    return _latest_open_date_on_or_before(current.date() - timedelta(days=1))
+
+
+def _scheduled_target_date(value: str) -> date:
+    """Cloudflareが渡すISO 8601の予定時刻をJSTの論理処理日に変換する。"""
+    try:
+        scheduled = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"scheduled-for must be ISO 8601: {value}") from exc
+    if scheduled.tzinfo is None:
+        raise ValueError("scheduled-for must include a timezone offset")
+    return scheduled.astimezone(JST).date()
 
 
 def _report_completed(target_date: date) -> bool:
@@ -123,11 +151,11 @@ def _evening_target_date(now: datetime | None = None) -> date | None:
         raise
 
 
-def run_evening() -> bool:
+def run_evening(target_date_override: date | None = None) -> bool:
     """イブニング便（20:30 JST）: 夜間に出た適時開示を回収し、市況考察と日次レポートを確定版に更新する。"""
     print(f"\n{'='*50}\nイブニング便開始: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{'='*50}")
     try:
-        target_date = _evening_target_date()
+        target_date = target_date_override or _evening_target_date()
     except Exception as e:
         print(f"対象営業日の判定に失敗: {e}")
         _log("daily_report_notify", "failed", error=f"target date: {e}")
@@ -147,22 +175,42 @@ def run_evening() -> bool:
         return False
     print(f"対象営業日: {target_date}")
 
+    status = _calendar_status(target_date)
+    if status == "holiday":
+        print("対象日は取引カレンダーで休場日のためスキップ")
+        return True
+    if status != "open":
+        message = f"対象日 {target_date} が取引カレンダーに未登録です"
+        print(message)
+        _log("daily_report_notify", "failed", error=message)
+        return False
+    latest_price_date = _latest_price_date()
+    if latest_price_date is None or latest_price_date < target_date:
+        message = f"対象日 {target_date} の価格データが未取得です（latest={latest_price_date}）"
+        print(message)
+        _log("daily_report_notify", "failed", error=message)
+        return False
+
+    report_ready = True
     notification_ok = True
 
     print("\n[適時開示] 夜間分を含めて再取得・市況考察を更新...")
     try:
         from disclosures import run_daily as disclosures_run_daily
-        result = disclosures_run_daily(with_ai=True)
+        result = disclosures_run_daily(with_ai=True, target_date=target_date)
+        if not result.get("summary_saved"):
+            raise RuntimeError(f"{target_date} の市況サマリーを保存できませんでした")
         _log("disclosures_evening", "done", result.get("stored", 0))
     except Exception as e:
         print(f"  エラー: {e}")
+        report_ready = False
         _log("disclosures_evening", "failed", error=str(e))
 
     # 夕方〜夜に出た決算・業績修正も当日中に反映（15時以降の開示が大半のためここが本命）
     print("\n[業績反映] 当日開示銘柄の業績・予想を更新...")
     try:
         from earnings_refresh import refresh_from_disclosures
-        result = refresh_from_disclosures()
+        result = refresh_from_disclosures(target_date)
         _log("earnings_refresh", "done", result.get("revisions", 0))
     except Exception as e:
         print(f"  エラー: {e}")
@@ -171,11 +219,11 @@ def run_evening() -> bool:
     print("\n[日次レポート] 確定版を保存...")
     try:
         from daily_report import save_report, notify_report_ready
-        saved = save_report(target_date, final=True)
+        saved = save_report(target_date, final=report_ready)
         _log("daily_report", "done", 1)
         # 確定版が保存できたらLINE通知。失敗は最後に終了コードへ反映し、
         # 後続処理を止めずにGitHub Actionsの再試行対象とする。
-        if saved:
+        if saved and report_ready:
             try:
                 notification_ok = notify_report_ready(saved)
                 _log("daily_report_notify", "done" if notification_ok else "failed",
@@ -187,7 +235,8 @@ def run_evening() -> bool:
                 _log("daily_report_notify", "failed", error=str(e))
         else:
             notification_ok = False
-            _log("daily_report_notify", "failed", error="report was not saved")
+            reason = "market summary was not saved" if saved else "report was not saved"
+            _log("daily_report_notify", "failed", error=reason)
     except Exception as e:
         print(f"  エラー: {e}")
         notification_ok = False
@@ -244,7 +293,12 @@ def _log(fetch_type: str, status: str, rows: int = 0, error: str = None):
         print(f"  [ログ記録失敗] {log_err}")
 
 
-def run(init: bool = False, rankings_only: bool = False, force: bool = False) -> bool:
+def run(
+    init: bool = False,
+    rankings_only: bool = False,
+    force: bool = False,
+    target_date_override: date | None = None,
+) -> bool:
     start = datetime.now()
     critical_failures: list[str] = []
     print(f"\n{'='*50}")
@@ -252,7 +306,7 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
     print(f"{'='*50}")
 
     # 重複実行ガード: 16:17メインが完走済みなら17:17リトライは何もしない
-    guard_target = _main_guard_target_date()
+    guard_target = target_date_override or _main_guard_target_date()
     if not (force or init or rankings_only) and guard_target and _report_completed(guard_target):
         print(f"{guard_target} の確定版レポートは完了済み（重い処理をスキップ）。再実行は --force")
         # レポート完了後に価格通知判定だけ失敗した場合も、17:17便で自己回復させる。
@@ -338,7 +392,7 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
             from corporate_actions import sync_official_actions
             from disclosures import fetch_and_store_day
             ensure_price_schema()
-            fetch_and_store_day(_jst_now().date())
+            fetch_and_store_day(target_date_override or guard_target or _jst_now().date())
             action_result = sync_official_actions()
             official_coverage_ok = action_result["coverage_ok"]
             if action_result["errors"]:
@@ -360,7 +414,8 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
             if not official_coverage_ok:
                 raise RuntimeError("公式の権利情報を更新できなかったため、価格公開を次便へ持ち越します")
             # 手動救済が大引け前に走っても当日の未確定日足を保存しない。
-            n2 = fetch_and_store_yahoo(max_workers=10, date_to=price_fetch_end_date())
+            fetch_end = target_date_override or guard_target or price_fetch_end_date()
+            n2 = fetch_and_store_yahoo(max_workers=10, date_to=fetch_end)
             print(f"  Yahoo Finance: {n2} 件")
             # 取引カレンダーは update_trading_calendar()（J-Quants公式＋JPX休業日一覧）が
             # 唯一の正本。Yahooの価格有無で is_holiday を上書きしない
@@ -378,7 +433,7 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
 
     # 休場日・遅延ガード: 同日または翌16時前までの最新営業日だけ後段へ進める。
     # 元データが更新されていないのに指標再計算・AI調査・レポート保存が走るのを防ぐ。
-    target_date = _evening_target_date()
+    target_date = target_date_override or guard_target or _evening_target_date()
     if init and target_date is None:
         target_date = _latest_price_date()
     if not (rankings_only or init) and target_date is None:
@@ -394,6 +449,23 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
         print(f"\n{message}")
         _log("daily_batch", "failed", error=message)
         return False
+
+    if target_date and not (rankings_only or init):
+        status = _calendar_status(target_date)
+        if status == "holiday":
+            print(f"\n{target_date} は取引カレンダーで休場日のため、後段処理をスキップします。")
+            return True
+        if status != "open":
+            message = f"対象日 {target_date} が取引カレンダーに未登録です"
+            print(f"\n{message}")
+            _log("daily_batch", "failed", error=message)
+            return False
+        latest_price_date = _latest_price_date()
+        if latest_price_date is None or latest_price_date < target_date:
+            message = f"対象日 {target_date} の価格データが未取得です（latest={latest_price_date}）"
+            print(f"\n{message}")
+            _log("daily_batch", "failed", error=message)
+            return False
 
     # 3.5. 公式台帳と公開係数を検査し、未処理・途中失敗を原本から再生成。
     # 12週後のJ-Quants全銘柄照合はmisc_batchの夜間ジョブで毎日実行する。
@@ -435,7 +507,7 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
             _log("ai_fund_execute", "failed", error=str(e))
 
     # 4. 配当・財務・ファンダメンタルズ更新（毎週月曜のみ）
-    if datetime.now().weekday() == 0 and not rankings_only:
+    if target_date and target_date.weekday() == 0 and not rankings_only:
         print("\n[4/6] 配当データ更新（週次）...")
         try:
             n = fetch_all_dividends()
@@ -554,7 +626,7 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
             _log("swing_score", "failed", error=str(e))
 
     # ランキング計算
-    step = "5/5" if datetime.now().weekday() == 0 else "4/4"
+    step = "5/5" if target_date and target_date.weekday() == 0 else "4/4"
     print(f"\n[{step}] ランキング計算...")
     try:
         n_daily  = compute_daily_rankings()
@@ -599,18 +671,21 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
         print("\n[適時開示] TDnet蓄積・好材料分析・市況考察...")
         try:
             from disclosures import run_daily as disclosures_run_daily
-            result = disclosures_run_daily(with_ai=True)
+            result = disclosures_run_daily(with_ai=True, target_date=target_date)
+            if not result.get("summary_saved"):
+                raise RuntimeError(f"{target_date} の市況サマリーを保存できませんでした")
             _log("disclosures", "done", result.get("stored", 0))
         except Exception as e:
             print(f"  エラー: {e}")
             _log("disclosures", "failed", error=str(e))
+            critical_failures.append(f"disclosures: {e}")
 
     # 決算・業績修正のタイムリー反映（当日開示の銘柄だけkabutan再取得→修正幅を算出・蓄積）
     if not rankings_only:
         print("\n[業績反映] 当日開示銘柄の業績・予想を更新中...")
         try:
             from earnings_refresh import refresh_from_disclosures
-            result = refresh_from_disclosures()
+            result = refresh_from_disclosures(target_date)
             _log("earnings_refresh", "done", result.get("revisions", 0))
         except Exception as e:
             print(f"  エラー: {e}")
@@ -666,13 +741,46 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
     return True
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="株式分析アプリの日次パイプライン")
+    parser.add_argument("--evening", action="store_true")
+    parser.add_argument("--init", action="store_true")
+    parser.add_argument("--rankings", action="store_true")
+    parser.add_argument("--force", action="store_true")
+    target_group = parser.add_mutually_exclusive_group()
+    target_group.add_argument(
+        "--scheduled-for",
+        help="Cloudflareから渡された予定実行時刻（ISO 8601、タイムゾーン必須）",
+    )
+    target_group.add_argument("--catch-up", metavar="YYYY-MM-DD", help="指定営業日を強制救済")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    if "--evening" in sys.argv:
-        if not run_evening():
+    args = _parse_args()
+    try:
+        if args.catch_up:
+            target_date = date.fromisoformat(args.catch_up)
+            if target_date > _jst_now().date():
+                raise ValueError("catch-up date must not be in the future")
+        elif args.scheduled_for:
+            target_date = _scheduled_target_date(args.scheduled_for)
+        else:
+            target_date = None
+    except ValueError as exc:
+        print(f"対象日エラー: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    if args.evening:
+        if args.catch_up:
+            print("--catch-up と --evening は同時に指定できません", file=sys.stderr)
+            sys.exit(2)
+        if not run_evening(target_date_override=target_date):
             sys.exit(1)
-    else:
-        init          = "--init" in sys.argv
-        rankings_only = "--rankings" in sys.argv
-        force         = "--force" in sys.argv
-        if not run(init=init, rankings_only=rankings_only, force=force):
-            sys.exit(1)
+    elif not run(
+        init=args.init,
+        rankings_only=args.rankings,
+        force=args.force or bool(args.catch_up),
+        target_date_override=target_date,
+    ):
+        sys.exit(1)

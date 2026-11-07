@@ -4,6 +4,11 @@ GitHub Actionsの定期発火遅延を避けるため、Cloudflare Cron Trigger�
 実処理は既存のGitHub Actionsへ `workflow_dispatch` する。5分ごとのTriggerを1本だけ登録し、
 日本時間の実行表は `src/schedule.ts` に集約している。
 
+日次メイン便は市場データ確定後の16:05 JSTに発火する。Cloudflareが渡す
+`scheduled_for` を日次処理の論理日として使うため、GitHubランナーの割当が翌日に
+遅れても実行時の時計で対象日がずれない。欠損日の手動救済は `daily.yml` の
+`catch_up` と `target_date`（YYYY-MM-DD）を使う。
+
 ## 初回設定
 
 1. GitHubで対象リポジトリだけに限定したfine-grained Personal Access Tokenを作る。

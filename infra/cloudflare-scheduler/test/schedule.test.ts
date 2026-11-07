@@ -6,13 +6,13 @@ function utc(value: string): number {
 }
 
 describe("JST schedule", () => {
-  it("dispatches the main batch at 15:50 JST on weekdays", () => {
-    const tasks = matchingTasks(utc("2026-11-06T06:50:00Z"));
+  it("dispatches the main batch at 16:05 JST on weekdays", () => {
+    const tasks = matchingTasks(utc("2026-11-06T07:05:00Z"));
     expect(tasks.map((task) => task.id)).toEqual(["daily-market-update"]);
   });
 
   it("does not dispatch the main batch on Saturday", () => {
-    const tasks = matchingTasks(utc("2026-11-07T06:50:00Z"));
+    const tasks = matchingTasks(utc("2026-11-07T07:05:00Z"));
     expect(tasks.map((task) => task.id)).not.toContain("daily-market-update");
   });
 
@@ -29,8 +29,8 @@ describe("JST schedule", () => {
   });
 
   it("formats the logical execution slot in JST", () => {
-    const time = utc("2026-11-06T06:50:00Z");
-    expect(toJstParts(time).hour).toBe(15);
-    expect(scheduledForJst(time)).toBe("2026-11-06T15:50:00+09:00");
+    const time = utc("2026-11-06T07:05:00Z");
+    expect(toJstParts(time).hour).toBe(16);
+    expect(scheduledForJst(time)).toBe("2026-11-06T16:05:00+09:00");
   });
 });

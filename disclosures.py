@@ -515,23 +515,24 @@ def backfill_missing_commentaries(days_back: int = 5) -> int:
     return fixed
 
 
-def run_daily(with_ai: bool = True) -> dict:
-    """日次実行: 当日+前日の開示を蓄積 → 好材料AI付加 → 市況考察（欠損自己修復つき）。"""
+def run_daily(with_ai: bool = True, target_date: date | None = None) -> dict:
+    """対象日+前日の開示を蓄積 → 好材料AI付加 → 市況考察（欠損自己修復つき）。"""
     ensure_tables()
-    today = date.today()
+    target = target_date or date.today()
     total = 0
-    for d in (today - timedelta(days=1), today):
+    for d in (target - timedelta(days=1), target):
         if d.weekday() >= 5:
             continue
         n = fetch_and_store_day(d)
         total += n
         print(f"  [開示] {d}: {n}件")
     enriched = 0
+    summary_saved = True
     if with_ai:
         enriched = enrich_highlights(days_back=4)
-        build_market_summary()
+        summary_saved = build_market_summary(target)
         backfill_missing_commentaries()
-    return {"stored": total, "enriched": enriched}
+    return {"stored": total, "enriched": enriched, "summary_saved": summary_saved}
 
 
 if __name__ == "__main__":

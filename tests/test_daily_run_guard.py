@@ -13,8 +13,24 @@ class DailyRunGuardTest(unittest.TestCase):
 
     def test_main_guard_uses_latest_price_for_overnight_delay(self):
         now = datetime(2026, 9, 9, 15, 20, tzinfo=timezone.utc)  # 9/10 00:20 JST
-        with patch.object(daily_run, "_latest_price_date", return_value=date(2026, 9, 9)):
+        with patch.object(daily_run, "_latest_open_date_on_or_before", return_value=date(2026, 9, 9)) as latest_open:
             self.assertEqual(daily_run._main_guard_target_date(now), date(2026, 9, 9))
+            latest_open.assert_called_once_with(date(2026, 9, 9))
+
+    def test_main_guard_does_not_use_stale_price_max_after_pipeline_gap(self):
+        now = datetime(2026, 11, 6, 15, 3, tzinfo=timezone.utc)  # 11/7 00:03 JST
+        with patch.object(daily_run, "_latest_open_date_on_or_before", return_value=date(2026, 11, 6)):
+            self.assertEqual(daily_run._main_guard_target_date(now), date(2026, 11, 6))
+
+    def test_scheduled_target_uses_logical_jst_date(self):
+        self.assertEqual(
+            daily_run._scheduled_target_date("2026-11-06T16:05:00+09:00"),
+            date(2026, 11, 6),
+        )
+
+    def test_scheduled_target_rejects_naive_datetime(self):
+        with self.assertRaises(ValueError):
+            daily_run._scheduled_target_date("2026-11-06T16:05:00")
 
 
 def _mock_conn(fetchone_return):

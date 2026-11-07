@@ -12,16 +12,20 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '実行モード（notify_test = 保存済み最新レポートが未通知ならLINE送信 / youtube_daily = YouTube日次巡回のみ）'
+        description: '実行モード（catch_up = target_dateを強制救済）'
         type: choice
-        options: [main, evening, notify_test, youtube_daily]
+        options: [main, evening, catch_up, notify_test, youtube_daily]
         default: main
       source:
         description: '起動元（cloudflare / codex / manual）'
         type: string
         default: manual
       scheduled_for:
-        description: '予定実行時刻（ISO 8601・監査用）'
+        description: '予定実行時刻（ISO 8601・処理対象日の正本）'
+        type: string
+        default: ''
+      target_date:
+        description: 'catch_up対象営業日（YYYY-MM-DD）'
         type: string
         default: ''
 
@@ -67,10 +71,18 @@ jobs:
           # 日次レポート全文リンクの公開URL（本番: https://stock-tracker-rfqn.onrender.com）。
           # 未設定なら daily_report.DEFAULT_REPORT_BASE_URL が使われる
           REPORT_BASE_URL: ${{ secrets.REPORT_BASE_URL }}
+          SCHEDULED_FOR: ${{ inputs.scheduled_for }}
+          TARGET_DATE: ${{ inputs.target_date }}
           # TIDB_SSL_CA は未設定 → certifi を自動使用
         run: |
           if [ "${{ inputs.mode }}" = "notify_test" ]; then
             python daily_report.py --notify
+          elif [ "${{ inputs.mode }}" = "catch_up" ]; then
+            if [ -z "$TARGET_DATE" ]; then
+              echo "catch_upにはtarget_dateが必要です" >&2
+              exit 2
+            fi
+            python daily_run.py --catch-up "$TARGET_DATE"
           elif [ "${{ github.event.schedule }}" = "17 10 * * 1-5" ] || [ "${{ inputs.mode }}" = "youtube_daily" ]; then
             # YouTube日次巡回 → 日次レポートを再生成して要約を反映（本編バッチは遅らせない）
             python youtube_insights.py --daily
@@ -78,13 +90,26 @@ jobs:
           elif [ "${{ github.event.schedule }}" = "47 11 * * 1-5" ] || [ "${{ inputs.mode }}" = "evening" ]; then
             # LINE失敗でも後続のYouTube救済・最終保存は実行し、最後に元の終了コードを返す。
             evening_status=0
-            python daily_run.py --evening || evening_status=$?
+            if [ -n "$SCHEDULED_FOR" ]; then
+              python daily_run.py --evening --scheduled-for "$SCHEDULED_FOR" || evening_status=$?
+            else
+              python daily_run.py --evening || evening_status=$?
+            fi
             # 19:00便のYouTube集約がGemini 503等で失敗していたら救済（解析済み動画から集約のみ再試行）
             python youtube_insights.py --aggregate-only
-            python -c "import daily_report; daily_report.save_report()"
+            if [ -n "$SCHEDULED_FOR" ]; then
+              report_date="${SCHEDULED_FOR%%T*}"
+              REPORT_DATE="$report_date" python -c 'import os; from datetime import date; import daily_report; daily_report.save_report(date.fromisoformat(os.environ["REPORT_DATE"]))'
+            else
+              python -c "import daily_report; daily_report.save_report()"
+            fi
             exit "$evening_status"
           else
-            python daily_run.py
+            if [ -n "$SCHEDULED_FOR" ]; then
+              python daily_run.py --scheduled-for "$SCHEDULED_FOR"
+            else
+              python daily_run.py
+            fi
           fi
 
       - name: 結果サマリー
