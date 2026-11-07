@@ -9461,7 +9461,7 @@ def screen():
 def api_backtest_dates():
     """バックテストで選択可能な週次スナップショット日の一覧。"""
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history ORDER BY snapshot_date")
+    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history_current ORDER BY snapshot_date")
     dates = [str(r[0]) for r in cur.fetchall()]
     cur.close(); conn.close()
     return _json.dumps(dates), 200, {"Content-Type": "application/json"}
@@ -9479,7 +9479,7 @@ def api_screen_asof():
         return cached, 200, {"Content-Type": "application/json"}
 
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history ORDER BY snapshot_date")
+    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history_current ORDER BY snapshot_date")
     dates = [r[0] for r in cur.fetchall()]
     if not dates:
         cur.close(); conn.close()
@@ -9494,7 +9494,7 @@ def api_screen_asof():
     col_list = ", ".join("h.`" + c + "`" for c in cols)
     cur.execute(f"""
         SELECT {col_list}, s.name
-        FROM price_stats_history h JOIN stocks s ON h.code = s.code
+        FROM price_stats_history_current h JOIN stocks s ON h.code = s.code
         WHERE h.snapshot_date = %s
     """, (snap,))
     rows = cur.fetchall()

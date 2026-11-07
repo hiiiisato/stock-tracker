@@ -13,7 +13,7 @@ from price_store import load_actions
 
 
 def adjusted_units(shares, unit_price, action: Action) -> tuple[int | None, Decimal | None]:
-    if action.kind not in {"split", "consolidation"} or action.status != "confirmed":
+    if action.kind not in {"split", "consolidation", "bonus"} or action.status != "confirmed":
         raise PriceBasisError("模擬運用の権利処理を確認する必要があります")
     qty = number(shares)
     price = number(unit_price)

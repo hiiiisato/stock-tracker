@@ -14,6 +14,8 @@ YAHOO_HEADERS   = {"User-Agent": "Mozilla/5.0 (compatible; stock-tracker/1.0)"}
 
 def update_stock_master() -> int:
     """銘柄マスタを最新状態に更新。新規上場・廃止・情報変更を反映する。"""
+    from price_verification import reserve_request_slot
+    reserve_request_slot()
     r = requests.get(f"{JQUANTS_BASE_URL}/equities/master", headers=JQUANTS_HEADERS, timeout=60)
     r.raise_for_status()
     data = r.json()["data"]
@@ -313,6 +315,8 @@ def update_trading_calendar() -> int:
     （呼び出し側の daily_run.py が calendar_lookahead_days() で連続性を検証し、
     猶予日数を割り込んだ時点でジョブを失敗させて気づけるようにする）。
     """
+    from price_verification import reserve_request_slot
+    reserve_request_slot()
     r = requests.get(f"{JQUANTS_BASE_URL}/markets/calendar", headers=JQUANTS_HEADERS, timeout=60)
     r.raise_for_status()
     data = r.json()["data"]

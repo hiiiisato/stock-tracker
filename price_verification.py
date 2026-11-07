@@ -10,25 +10,41 @@ import requests
 from batch_dates import jst_today
 from config import (db, bulk_upsert, JQUANTS_BASE_URL, JQUANTS_HEADERS,
                     PRICE_JQUANTS_DELAY_DAYS, PRICE_JQUANTS_REQUEST_INTERVAL,
-                    PRICE_JQUANTS_AUDIT_DATES)
+                    PRICE_JQUANTS_AUDIT_DATES, PRICE_JQUANTS_BACKOFF_SECONDS)
 from price_adjustments import Action, matches, number
 from price_store import ensure_schema, hold, put_action, snapshot
 
-_last_request = 0.0
-
-
 def reserve_request_slot() -> None:
     """別プロセス・日次/夜間便も含めFreeの呼出間隔を共有する。"""
+    while True:
+        with db() as cur:
+            cur.execute("INSERT IGNORE INTO price_sync_state (name,value) VALUES (%s,%s),(%s,%s)",
+                        ("jquants_rate_limit", "0", "jquants_backoff", "0"))
+            cur.execute("SELECT value FROM price_sync_state WHERE name=%s FOR UPDATE", ("jquants_rate_limit",))
+            previous = float(cur.fetchone()[0] or 0)
+            cur.execute("SELECT value FROM price_sync_state WHERE name=%s FOR UPDATE", ("jquants_backoff",))
+            cooldown = float(cur.fetchone()[0] or 0)
+            cur.execute("SELECT UNIX_TIMESTAMP(UTC_TIMESTAMP(6))")
+            now = float(cur.fetchone()[0])
+            slot = max(now, previous, cooldown)
+            cur.execute("UPDATE price_sync_state SET value=%s WHERE name=%s", (str(slot + PRICE_JQUANTS_REQUEST_INTERVAL), "jquants_rate_limit"))
+        if slot > now:
+            time.sleep(slot - now)
+        with db() as cur:
+            cur.execute("SELECT value FROM price_sync_state WHERE name=%s", ("jquants_backoff",))
+            deadline = float(cur.fetchone()[0] or 0)
+        if deadline <= slot:
+            return
+        # 待機中に別便が429になった場合、古い予約時刻でリクエストを送らない。
+
+
+def defer_requests(seconds: float = PRICE_JQUANTS_BACKOFF_SECONDS) -> None:
     with db() as cur:
-        cur.execute("INSERT IGNORE INTO price_sync_state (name,value) VALUES (%s,%s)", ("jquants_rate_limit", "0"))
-        cur.execute("SELECT value FROM price_sync_state WHERE name=%s FOR UPDATE", ("jquants_rate_limit",))
-        previous = float(cur.fetchone()[0] or 0)
         cur.execute("SELECT UNIX_TIMESTAMP(UTC_TIMESTAMP(6))")
-        now = float(cur.fetchone()[0])
-        slot = max(now, previous)
-        cur.execute("UPDATE price_sync_state SET value=%s WHERE name=%s", (str(slot + PRICE_JQUANTS_REQUEST_INTERVAL), "jquants_rate_limit"))
-    if slot > now:
-        time.sleep(slot - now)
+        until = float(cur.fetchone()[0]) + seconds
+        cur.execute("""INSERT INTO price_sync_state (name,value) VALUES (%s,%s)
+                       ON DUPLICATE KEY UPDATE value=GREATEST(CAST(value AS DECIMAL(24,6)),VALUES(value))""",
+                    ("jquants_backoff",str(until)))
 
 
 def free_cutoff(today: date | None = None) -> date:
@@ -42,7 +58,6 @@ def free_start(today: date | None = None) -> date:
 
 def fetch_bars(*, code: str | None = None, target: date | None = None,
                since: date | None = None, until: date | None = None) -> list[dict]:
-    global _last_request
     params = {"code": code} if code else {"date": str(target)}
     if code:
         params.update({"from": str(since), "to": str(until or free_cutoff())})
@@ -51,12 +66,11 @@ def fetch_bars(*, code: str | None = None, target: date | None = None,
         response = None
         for attempt in range(3):
             reserve_request_slot()
-            _last_request = time.monotonic()
             response = requests.get(JQUANTS_BASE_URL + "/equities/bars/daily",
                                     params=params, headers=JQUANTS_HEADERS, timeout=30)
             if response.status_code != 429:
                 break
-            time.sleep(15 * (attempt + 1))
+            defer_requests()
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload.get("data"), list):
@@ -85,8 +99,9 @@ def remember_bars(rows: list[dict], *, update_actions: bool = True) -> None:
         flattened = [r for bars in grouped.values() for r in bars]
         snapshot(cur, next(iter(grouped)) if len(grouped) == 1 else "", "jquants", "raw_and_adjusted", flattened)
         values = [(r["code"], r["date"], r.get("O"), r.get("H"), r.get("L"), r.get("C"),
-                   r.get("Vo"), r.get("AdjFactor"), r.get("AdjC")) for bars in grouped.values() for r in bars]
-        bulk_upsert(cur, "price_official_checks", ["code", "date", "open", "high", "low", "close", "volume", "official_factor", "official_adj_close"], values)
+                   r.get("Vo"), r.get("AdjFactor"), r.get("AdjC"),r.get("AdjO"),r.get("AdjH"),r.get("AdjL"),r.get("AdjVo")) for bars in grouped.values() for r in bars]
+        bulk_upsert(cur, "price_official_checks", ["code", "date", "open", "high", "low", "close", "volume", "official_factor", "official_adj_close",
+                                                  "official_adj_open","official_adj_high","official_adj_low","official_adj_volume"], values)
     if not update_actions:
         return
     for code, bars in grouped.items():
@@ -148,14 +163,20 @@ def audit_date(target: date, *, refetch: bool = True) -> dict:
         remember_bars(bars)
     bad = []
     with db() as cur:
-        cur.execute("""SELECT p.code,p.open,p.high,p.low,p.close,p.volume,p.adj_close,
-                              q.open,q.high,q.low,q.close,q.volume,q.official_adj_close
+        cur.execute("""SELECT p.code,p.open,p.high,p.low,p.close,p.volume,
+                              CASE WHEN p.price_basis='raw' THEN p.adj_close ELSE p.close END,
+                              CASE WHEN p.price_basis='raw' THEN p.adj_open ELSE p.open END,
+                              CASE WHEN p.price_basis='raw' THEN p.adj_high ELSE p.high END,
+                              CASE WHEN p.price_basis='raw' THEN p.adj_low ELSE p.low END,
+                              CASE WHEN p.price_basis='raw' THEN p.adj_volume ELSE p.volume END,
+                              q.open,q.high,q.low,q.close,q.volume,q.official_adj_close,
+                              q.official_adj_open,q.official_adj_high,q.official_adj_low,q.official_adj_volume
                        FROM daily_prices p JOIN price_official_checks q ON q.code=p.code AND q.date=p.date
                        WHERE p.date=%s""", (target,))
         records = cur.fetchall()
         if not records:
             raise RuntimeError(f"{target}: 照合対象が0件でした。照合済みにはしません")
-        for code, op, hi, lo, cl, vo, adj, qo, qh, ql, qc, qv, qa in records:
+        for code, op, hi, lo, cl, vo, adj, aop, ahi, alo, avo, qo, qh, ql, qc, qv, qa, qao, qah, qal, qav in records:
             differences = ["no_trade"] if qc is None and cl is not None else []
             for name, actual, expected in (("open", op, qo), ("high", hi, qh), ("low", lo, ql), ("close", cl, qc)):
                 if expected is not None and (actual is None or not matches(actual, expected, Decimal("0.00001"), Decimal("0.06"))):
@@ -165,6 +186,11 @@ def audit_date(target: date, *, refetch: bool = True) -> dict:
             # AdjCは照合時点の基準。古い保存時点のAdjCとは比較しない。
             if qa is not None and (adj is None or not matches(adj, qa, Decimal("0.00001"), Decimal("0.06"))):
                 differences.append("adjusted_close")
+            for name, actual, expected in (("adjusted_open",aop,qao),("adjusted_high",ahi,qah),("adjusted_low",alo,qal)):
+                if expected is not None and (actual is None or not matches(actual,expected,Decimal("0.00001"),Decimal("0.06"))):
+                    differences.append(name)
+            if qav is not None and (avo is None or not matches(avo,qav,Decimal("0.00001"),Decimal("1"))):
+                differences.append("adjusted_volume")
             error = "公式値との不一致: " + ",".join(differences) if differences else None
             cur.execute("UPDATE price_official_checks SET status=%s,error=%s,checked_at=CURRENT_TIMESTAMP WHERE code=%s AND date=%s",
                         ("mismatch" if error else "matched", error, code, target))

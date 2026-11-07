@@ -47,9 +47,11 @@ class PublicationTest(unittest.TestCase):
           CREATE TABLE corporate_actions (code TEXT,ex_date DATE,old_shares DECIMAL,new_shares DECIMAL,
             kind TEXT,status TEXT,source TEXT,source_url TEXT,record_date DATE,effective_date DATE,price_ratio DECIMAL);
           CREATE TABLE price_adjustment_state (code TEXT PRIMARY KEY,status TEXT,action_digest TEXT,
-            published_version TEXT,price_date DATE,basis TEXT,error TEXT,updated_at DATETIME,source_observed_at DATETIME);
-          CREATE TABLE price_official_checks (code TEXT,date DATE,open DECIMAL,high DECIMAL,low DECIMAL,close DECIMAL,volume INT);
-          CREATE TABLE price_sync_state (name TEXT PRIMARY KEY,value TEXT);
+            published_version TEXT,price_date DATE,basis TEXT,error TEXT,updated_at DATETIME,source_observed_at DATETIME,series_revision TEXT);
+          CREATE TABLE price_official_checks (code TEXT,date DATE,open DECIMAL,high DECIMAL,low DECIMAL,close DECIMAL,volume INT,
+            official_adj_close DECIMAL,official_adj_open DECIMAL,official_adj_high DECIMAL,official_adj_low DECIMAL,official_adj_volume DECIMAL,
+            status TEXT,error TEXT,checked_at DATETIME);
+          CREATE TABLE price_sync_state (name TEXT PRIMARY KEY,value TEXT,error TEXT,checked_at DATETIME);
           CREATE VIEW price_history AS SELECT p.id,p.code,p.date,p.adj_open AS open,p.adj_high AS high,
             p.adj_low AS low,p.adj_close AS close,p.adj_volume AS volume FROM daily_prices p
             JOIN price_adjustment_state s ON s.code=p.code WHERE s.status='published';
@@ -101,6 +103,34 @@ class PublicationTest(unittest.TestCase):
             self.publish("broken")
         self.assertEqual(store.load_candles(["285A"],date(2026,9,1))["285A"][0]["close"],2000.)
 
+    def test_history_revision_changes_only_when_past_series_is_rebuilt(self):
+        self.publish()
+        revision=lambda:self.conn.execute("SELECT series_revision FROM price_adjustment_state").fetchone()[0]
+        first=revision()
+        self.publish("daily_increment")
+        self.assertEqual(revision(),first)
+        with self.db() as cur:
+            store.publish(cur,"285A",self.rows,[self.action],self.basis,"raw","corrected_history",rebuild=True)
+        self.assertNotEqual(revision(),first)
+
+    def test_historical_technical_close_and_ma_use_the_same_basis(self):
+        from compute_price_stats import compute_stock_stats, STAT_COLS
+        prices=[(date(2026,9,21+i),2000.,2100.,1900.,300.,6000.,100) for i in range(5)]
+        stats=dict(zip(STAT_COLS,compute_stock_stats(prices,(2100,1900),(2100,1900),None,{})))
+        self.assertEqual(stats['close'],2000.)
+        self.assertEqual(stats['ma5'],2000.)
+        self.assertEqual(stats['turnover_day'],0.01)  # 生終値×生出来高=60万円。
+
+    def test_long_history_reader_batches_codes_and_rejects_unsafe_identifiers(self):
+        self.publish()
+        self.conn.execute("INSERT INTO daily_prices (code,date,close) VALUES ('9999','2026-10-01',10)")
+        self.conn.commit()
+        with self.db() as cur:
+            rows=list(store.iter_price_rows(cur,("code","date","close"),batch_size=1,since=date(2026,9,1)))
+            self.assertEqual(len(rows),2)
+            self.assertTrue(all(r[0]=='285A' for r in rows))  # 未公開の9999は共通ビューから出ない。
+            with self.assertRaises(ValueError):list(store.iter_price_rows(cur,("close;DROP TABLE daily_prices",)))
+
     def test_stale_result_cannot_overwrite_newer_snapshot_and_hold_hides_chart(self):
         self.publish()
         with self.assertRaises(StalePublication): self.publish("late",datetime(2026,10,29,8))
@@ -114,7 +144,7 @@ class PublicationTest(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM daily_prices").fetchone()[0],0)
 
     def test_official_ohlcv_replaces_bad_provider_values_after_basis_is_confirmed(self):
-        self.conn.execute("INSERT INTO price_official_checks VALUES ('285A','2026-09-28',6000,6300,5700,6000,100)")
+        self.conn.execute("INSERT INTO price_official_checks (code,date,open,high,low,close,volume) VALUES ('285A','2026-09-28',6000,6300,5700,6000,100)")
         self.conn.commit()
         source=[dict(code="285A",date="2026-09-28",open=2000,high=10,low=1900,close=2000,volume=999)]
         with patch("price_pipeline.db",self.db):
@@ -125,8 +155,41 @@ class PublicationTest(unittest.TestCase):
         self.assertEqual(result[0]["adj_high"],D(2100))
         self.assertEqual(result[0]["adj_volume"],D(300))
 
+    def test_official_audit_detects_bad_adjusted_high_even_when_close_is_correct(self):
+        self.publish()
+        self.conn.execute("INSERT INTO price_official_checks (code,date,open,high,low,close,volume,official_adj_close,official_adj_open,official_adj_high,official_adj_low,official_adj_volume) VALUES ('285A','2026-09-28',6000,6300,5700,6000,100,2000,2000,2100,1900,300)")
+        self.conn.execute("UPDATE daily_prices SET adj_high=20000 WHERE date='2026-09-28'"); self.conn.commit()
+        with patch.object(verification,"db",self.db),patch.object(verification,"free_cutoff",return_value=self.basis):
+            result=verification.audit_date(date(2026,9,28),refetch=False)
+        self.assertEqual(result["mismatches"],["285A"])
+        self.assertIn("adjusted_high",store.state_for("285A")["error"])
+
 
 class OfficialFetchTest(unittest.TestCase):
+    def test_official_bonus_allocation_is_added_to_existing_shares(self):
+        line="2814 佐藤食品工業 SATO FOODS INDUSTRIES CO.,LTD. 2025.12.29 2025.12.31 1:0.1 株式無償割当て"
+        pdf=Mock();pdf.pages=[Mock()];pdf.pages[0].extract_text.return_value=line
+        with patch("pdfplumber.open") as open_pdf:
+            open_pdf.return_value.__enter__.return_value=pdf
+            action=parse_monthly_pdf(b"fixture","https://www.jpx.co.jp/")[0]
+        self.assertEqual(action.kind,"bonus")
+        self.assertEqual(action.after,D("1.1"))
+        row=dict(code="2814",date="2025-12-26",open=1100,high=1100,low=1100,close=1100,volume=1000)
+        adjusted=normalize([row],[action],date(2026,1,1),"raw")[0]
+        self.assertEqual(adjusted["adj_close"],D(1000))
+        self.assertEqual(adjusted["adj_volume"],D(1100))
+        confirmed=parse_disclosure_ratio("2025年12月31日を基準日とし普通株式1株につき0.1株の割合で無償割当します。",action,"株式無償割当てのお知らせ")
+        self.assertEqual(confirmed.after,D("1.1"))
+
+    def test_rate_limit_response_defers_the_shared_account_before_retrying(self):
+        limited=Mock(status_code=429);success=Mock(status_code=200)
+        success.json.return_value={"data":[{"Date":"2026-01-05"}]}
+        with patch.object(verification.requests,"get",side_effect=[limited,success]), \
+             patch.object(verification,"reserve_request_slot") as reserve,patch.object(verification,"defer_requests") as defer:
+            self.assertEqual(len(verification.fetch_bars(target=date(2026,1,5))),1)
+        self.assertEqual(reserve.call_count,2)
+        defer.assert_called_once()
+
     def test_unparsed_later_correction_blocks_old_ratio_instead_of_republishing_it(self):
         action=Action("285A",date(2026,9,29),D(1),D(3),record_date=date(2026,9,30))
         cur=Mock();cur.fetchall.side_effect=[[("285A",)],[("（訂正）株式分割のお知らせ","https://www2.jpx.co.jp/disc/example.pdf")]]

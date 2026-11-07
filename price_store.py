@@ -15,7 +15,7 @@ import json
 import zlib
 import time
 
-from config import db, bulk_upsert
+from config import db, bulk_upsert, PRICE_READ_BATCH_CODES
 from price_adjustments import Action, PriceBasisError, StalePublication, actions_digest, day, number
 
 _ready = False
@@ -76,10 +76,18 @@ def ensure_schema() -> None:
             open DECIMAL(18,4) NULL, high DECIMAL(18,4) NULL, low DECIMAL(18,4) NULL,
             close DECIMAL(18,4) NULL, volume BIGINT NULL,
             official_factor DECIMAL(28,18) NULL, official_adj_close DECIMAL(18,4) NULL,
+            official_adj_open DECIMAL(18,4) NULL, official_adj_high DECIMAL(18,4) NULL,
+            official_adj_low DECIMAL(18,4) NULL, official_adj_volume DECIMAL(24,4) NULL,
             status VARCHAR(24) NOT NULL DEFAULT 'unchecked', error TEXT NULL,
             checked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (code, date), KEY idx_official_check_date (date, status)
         )""")
+        cur.execute("SHOW COLUMNS FROM price_official_checks")
+        check_columns = {r[0] for r in cur.fetchall()}
+        for name, definition in {"official_adj_open":"DECIMAL(18,4) NULL", "official_adj_high":"DECIMAL(18,4) NULL",
+                                 "official_adj_low":"DECIMAL(18,4) NULL", "official_adj_volume":"DECIMAL(24,4) NULL"}.items():
+            if name not in check_columns:
+                cur.execute(f"ALTER TABLE price_official_checks ADD COLUMN `{name}` {definition}")
         cur.execute("""CREATE TABLE IF NOT EXISTS price_sync_state (
             name VARCHAR(160) PRIMARY KEY, checked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             value TEXT NULL, error TEXT NULL
@@ -101,6 +109,10 @@ def ensure_schema() -> None:
             cur.execute("ALTER TABLE price_adjustment_state ADD COLUMN source_observed_at DATETIME(6) NULL")
         if "last_attempt_at" not in state_columns:
             cur.execute("ALTER TABLE price_adjustment_state ADD COLUMN last_attempt_at DATETIME NULL")
+        if "series_revision" not in state_columns:
+            # 初回移行: 再生成済みの系列と古い週次指標を区別する。原本は変更しない。
+            cur.execute("ALTER TABLE price_adjustment_state ADD COLUMN series_revision CHAR(64) NULL")
+            cur.execute("UPDATE price_adjustment_state SET series_revision=published_version WHERE published_version IS NOT NULL")
         cur.execute("SHOW COLUMNS FROM price_stats")
         if "source_price_version" not in {r[0] for r in cur.fetchall()}:
             cur.execute("ALTER TABLE price_stats ADD COLUMN source_price_version CHAR(64) NULL")
@@ -131,10 +143,11 @@ def ensure_schema() -> None:
                 p.change_pct, p.is_upper_limit,p.is_lower_limit,
                 p.price_version, p.price_basis
             FROM daily_prices p LEFT JOIN price_adjustment_state s ON s.code=p.code
+            LEFT JOIN (SELECT code FROM corporate_actions
+                       WHERE status<>'cancelled' AND ex_date <= DATE(UTC_TIMESTAMP()+INTERVAL 9 HOUR)
+                       GROUP BY code) due ON due.code=p.code
             WHERE (s.status IS NULL OR s.status IN ('legacy','published','audit_due'))
-              AND (p.price_basis='raw' OR NOT EXISTS (
-                SELECT 1 FROM corporate_actions a WHERE a.code=p.code AND a.status<>'cancelled'
-                  AND a.ex_date <= DATE(UTC_TIMESTAMP()+INTERVAL 9 HOUR)))
+              AND (p.price_basis='raw' OR due.code IS NULL)
         """)
         cur.execute("""CREATE OR REPLACE VIEW raw_price_history AS
             SELECT id,code,date,raw_open AS open,raw_high AS high,raw_low AS low,
@@ -203,7 +216,7 @@ def put_action(action: Action, *, correction: bool = False) -> bool:
             old_ratio = old[6] if old[6] is not None else old[0] / old[1]
             if abs(old_ratio - action.price_factor) > Decimal("0.000002"):
                 status = "conflict"
-            elif old[5] == action.kind:
+            elif old[5] == action.kind or (old[5] == "bonus" and action.source == "jquants" and action.kind == "split"):
                 # 同一イベントを別出典で確認できても、1/3を0.333333へ劣化させない。
                 # 全ての原文は取得原本に残り、先に確定した正確な比率を維持する。
                 return False
@@ -252,7 +265,7 @@ def bump_generation(cur) -> None:
 
 
 def publish(cur, code: str, rows: list[dict], actions: list[Action], basis_date: date,
-            basis: str, snapshot_id: str, observed_at: datetime | None = None) -> None:
+            basis: str, snapshot_id: str, observed_at: datetime | None = None, *, rebuild: bool = False) -> None:
     """呼出元の1トランザクション内で、価格・前日比・公開状態を同時更新。"""
     if not rows:
         raise PriceBasisError("公開する価格がありません")
@@ -279,6 +292,9 @@ def publish(cur, code: str, rows: list[dict], actions: list[Action], basis_date:
                 ["code", "status", "action_digest", "published_version", "price_date", "basis", "error", "updated_at", "source_observed_at"],
                 [(code, "published", digest, version, day(rows[-1]["date"]), basis, None,
                   datetime.now(timezone.utc).replace(tzinfo=None), observed_at)])
+    # 日々の追記では維持。過去の再生成では週次指標を無効化し、次便で全週を再計算する。
+    cur.execute("""UPDATE price_adjustment_state SET series_revision=%s
+                   WHERE code=%s AND (series_revision IS NULL OR %s)""", (version,code,rebuild))
     bump_generation(cur)
 
 
@@ -299,6 +315,34 @@ def load_candles(codes: list[str], since: date, cur=None) -> dict[str, list[dict
                              "low": float(lo) if lo is not None else None,
                              "close": float(close), "volume": float(volume) if volume is not None else None})
     return dict(result)
+
+
+def iter_price_rows(cur, fields: tuple[str,...], *, since=None, source="price_history",
+                    positive_only: bool = True, batch_size: int = PRICE_READ_BATCH_CODES):
+    """全銘柄の長期バッチも100銘柄ずつ読む。TiDBで数百万行を一括ソートしない。"""
+    allowed = {"code","date","open","high","low","close","volume","raw_open","raw_high","raw_low",
+               "raw_close","raw_volume","adj_open","adj_high","adj_low","adj_close","adj_volume",
+               "adj_factor","price_basis","price_version","change_pct","turnover"}
+    if source not in {"price_history","daily_prices"} or not fields or not set(fields) <= allowed:
+        raise ValueError("価格読取のテーブル・カラムが許可されていません")
+    if batch_size < 1:
+        raise ValueError("読取バッチは1銘柄以上が必要です")
+    cur.execute("SELECT DISTINCT code FROM daily_prices" + (" WHERE date >= %s" if since else "") + " ORDER BY code",
+                (since,) if since else ())
+    codes = [r[0] for r in cur.fetchall()]
+    projection = ",".join(f"p.`{f}`" for f in fields)
+    for start in range(0,len(codes),batch_size):
+        batch = codes[start:start+batch_size]
+        clauses,params=[],[]
+        if since:
+            clauses.append("p.date >= %s");params.append(since)
+        clauses.append("p.code IN (" + ",".join(["%s"]*len(batch)) + ")");params.extend(batch)
+        if source == "daily_prices":
+            clauses.append("p.price_basis=%s");params.append("raw")
+        if positive_only:
+            clauses.append("p.close > 0")
+        cur.execute(f"SELECT {projection} FROM {source} p WHERE " + " AND ".join(clauses) + " ORDER BY code, date",params)
+        yield from cur.fetchall()
 
 
 def state_for(code: str) -> dict:

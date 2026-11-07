@@ -599,7 +599,7 @@ def compute_stock_stats(prices, w52_pair, ytd_pair, nikkei_1m_chg, fm):
         nikkei_rel_1m = _round(chg25d - nikkei_1m_chg)
 
     return (
-        _round(last_raw, 2),
+        _round(last, 2),  # MA・騰落率と同じ株数基準。売買代金だけ当時値を使う。
         _round(chg5d), _round(chg25d), _round(chg75d), _round(chg126d),
         _round(ma5, 4), _round(ma25, 4), _round(ma50, 4),
         _round(ma75, 4), _round(ma200, 4), _round(ma200_slope, 4),
@@ -641,19 +641,11 @@ def run() -> int:
 
     # MA200(200日) + スロープ用20日前 + 60日ボラ + ストキャス = 最低265日 → 500カレンダー日で確保
     date_from = (as_of - timedelta(days=500)).strftime("%Y-%m-%d")
-    cur.execute("""
-        SELECT code, date,
-               COALESCE(adj_close, close) AS close,
-               high, low, volume,
-               raw_close, raw_volume, price_version
-        FROM price_history
-        WHERE date >= %s AND close IS NOT NULL AND close > 0
-        ORDER BY code, date
-    """, (date_from,))
-
+    from price_store import iter_price_rows
     data: dict[str, list] = defaultdict(list)
     price_versions = {}
-    for code, dt, close, high, low, vol, raw_close, *extra in cur.fetchall():
+    for code, dt, close, high, low, vol, raw_close, *extra in iter_price_rows(
+            cur,("code","date","close","high","low","volume","raw_close","raw_volume","price_version"),since=date_from):
         raw_volume = extra[0] if extra else vol
         price_versions[code] = extra[1] if len(extra) > 1 else None
         data[code].append((dt, float(close), float(high or close), float(low or close), float(vol or 0), float(raw_close or close), int(raw_volume or 0)))

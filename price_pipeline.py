@@ -13,10 +13,10 @@ import json
 import time
 
 from batch_dates import jst_today, price_fetch_end_date
-from config import db, PRICE_HISTORY_START, PRICE_NIGHTLY_REPAIR_CODES, price_db_session
+from config import db, PRICE_HISTORY_START, PRICE_NIGHTLY_REPAIR_CODES, PRICE_REFERENCE_OVERLAP_DAYS, price_db_session
 from price_adjustments import (PriceBasisError, StalePublication, actions_digest, day, factors,
                                identify_basis, normalize)
-from price_store import (ensure_schema, load_actions, backup_legacy, snapshot, publish, hold, lock_code, PricePublicationHeld)
+from price_store import (ensure_schema, load_actions, backup_legacy, snapshot, publish, hold, lock_code, PricePublicationHeld, iter_price_rows)
 
 
 def _source_events_verified(code: str, rows: list[dict], actions: list, *, allow_lookup: bool) -> None:
@@ -39,8 +39,8 @@ def _source_events_verified(code: str, rows: list[dict], actions: list, *, allow
         unknown.append(ex)
     if unknown:
         if allow_lookup:
-            from price_verification import obtain_anchors, free_cutoff
-            mature = [day(ex) for ex in unknown if day(ex) <= free_cutoff()]
+            from price_verification import free_cutoff, free_start
+            mature = [day(ex) for ex in unknown if free_start() <= day(ex) <= free_cutoff()]
             if mature:
                 # 過去の偽候補は公式の当日を照合する。価格差から採用しない。
                 from price_verification import fetch_bars, remember_bars
@@ -79,6 +79,22 @@ def _with_official_values(code: str, rows: list[dict], actions: list, today: dat
     return output
 
 
+def official_window_candidate(official: list[dict], provider: list[dict], actions: list,
+                              today: date, cutoff: date, price_refs: dict, volume_refs: dict) -> list[dict]:
+    """提供元の古い区間が不整合でも、公式履歴と基準確認した直近区間で再構築する。"""
+    if not official:
+        raise PriceBasisError("再構築できる公式当時値がありません")
+    # 後続の権利を織り込んだ、直近の重複期間で基準を確認する。
+    # 古い壊れた提供値の係数を新しい区間へ推測で持ち込まない。
+    start = cutoff - timedelta(days=PRICE_REFERENCE_OVERLAP_DAYS)
+    reference_rows = [r for r in provider if day(r["date"]) >= start]
+    basis = identify_basis(reference_rows,actions,today,price_refs)
+    volume_basis = identify_basis(reference_rows,actions,today,volume_refs,field="volume",absolute=Decimal(1))
+    recent = normalize([r for r in provider if day(r["date"]) > cutoff],actions,today,basis,volume_basis=volume_basis)
+    keys = ("code","date","open","high","low","close","volume")
+    return official + [{k:r[k] for k in keys} for r in recent]
+
+
 def publish_yahoo_code(code: str, rows: list[dict], *, until: date,
                        force_full: bool = False, allow_official_lookup: bool = True,
                        action_cache: dict | None = None, metadata: tuple | None = None) -> int:
@@ -99,6 +115,15 @@ def publish_yahoo_code(code: str, rows: list[dict], *, until: date,
         earliest, prior_digest, prior_status = metadata
         earliest = earliest or date.fromisoformat(PRICE_HISTORY_START)
         state = (prior_digest, prior_status) if prior_status else None
+    if allow_official_lookup:
+        with db() as cur:
+            cur.execute("SELECT 1 FROM price_official_checks WHERE code=%s AND status=%s LIMIT 1", (code,"mismatch"))
+            needs_official_history = cur.fetchone() is not None
+        if needs_official_history:
+            # 台帳に欠けた古いイベントも、公式の不一致から銘柄履歴を取り直して発見する。
+            obtain_anchors(code,earliest)
+            actions = load_actions(code=code).get(code,[])
+            digest = actions_digest(actions,today)
     due_actions = [a for a in actions if a.ex_date <= today and a.status != "cancelled"]
     if any(a.status != "confirmed" for a in due_actions):
         raise PriceBasisError(f"{code}: 実施済みの分割・併合の比率が未確定です")
@@ -138,16 +163,12 @@ def publish_yahoo_code(code: str, rows: list[dict], *, until: date,
             # 無料枠より古い分割で判別日が失われた場合、推測して過去全体を補正しない。
             # 取得可能な公式当時値と、全イベント実施後の直近値だけで再構築する。
             cutoff = free_cutoff()
-            if any(cutoff < a.ex_date <= today and a.status != "cancelled" for a in actions):
-                raise
             with db() as cur:
                 cur.execute("""SELECT date,open,high,low,close,volume FROM price_official_checks
                                WHERE code=%s AND date BETWEEN %s AND %s AND close > 0 ORDER BY date""",
                             (code, free_start(), cutoff))
                 official = [dict(zip(("date","open","high","low","close","volume"), r),code=code) for r in cur.fetchall()]
-            if not official:
-                raise PriceBasisError(f"{code}: 再構築できる公式当時値がありません")
-            rows = official + [r for r in rows if day(r["date"]) > cutoff]
+            rows = official_window_candidate(official,rows,actions,today,cutoff,anchors,_volume_anchors(code))
             basis, official_window, full = "raw", True, True
             earliest = day(official[0]["date"])
     volume_basis = "raw" if official_window or not due_actions else identify_basis(
@@ -161,13 +182,28 @@ def publish_yahoo_code(code: str, rows: list[dict], *, until: date,
                            WHERE p.code=%s AND c.is_holiday=FALSE AND p.close IS NOT NULL
                              AND p.date BETWEEN %s AND %s""", (code, earliest, until))
             missing = [r[0] for r in cur.fetchall() if str(r[0]) not in dates]
+            if allow_official_lookup and any(free_start() <= d <= free_cutoff() for d in missing):
+                cur.execute("SELECT date FROM price_official_checks WHERE code=%s",(code,))
+                recorded = {r[0] for r in cur.fetchall()}
+                if any(d not in recorded and free_start() <= d <= free_cutoff() for d in missing):
+                    # 長い欠落も1日ずつFree枠を消費せず、公式履歴を一度で取得する。
+                    from price_verification import fetch_bars, remember_bars
+                    remember_bars(fetch_bars(code=code,since=max(earliest,free_start()),until=free_cutoff()))
             for missing_date in missing:
                 if str(missing_date) in no_trade_dates:
                     continue
-                cur.execute("SELECT open,high,low,close,volume FROM price_official_checks WHERE code=%s AND date=%s AND close > 0", (code, missing_date))
+                cur.execute("SELECT open,high,low,close,volume FROM price_official_checks WHERE code=%s AND date=%s", (code, missing_date))
                 official = cur.fetchone()
+                if official is None and free_start() <= missing_date <= free_cutoff() and allow_official_lookup:
+                    from price_verification import fetch_bars, remember_bars
+                    remember_bars(fetch_bars(code=code,since=missing_date,until=missing_date))
+                    cur.execute("SELECT open,high,low,close,volume FROM price_official_checks WHERE code=%s AND date=%s", (code, missing_date))
+                    official = cur.fetchone()
                 if not official:
                     raise PriceBasisError(f"{code}: 過去価格の再取得に欠落があります: {missing_date}")
+                if official[3] is None:
+                    no_trade_dates.add(str(missing_date))
+                    continue
                 supplemental.append(dict(zip(("open", "high", "low", "close", "volume"), official), code=code, date=str(missing_date)))
         first_date = min(day(r["date"]) for r in rows)
         cur.execute("SELECT adj_close FROM daily_prices WHERE code=%s AND date < %s ORDER BY date DESC LIMIT 1", (code, first_date))
@@ -215,7 +251,8 @@ def publish_yahoo_code(code: str, rows: list[dict], *, until: date,
                            WHERE p.code=%s AND c.is_holiday=TRUE""", (code,))
             cur.execute("""DELETE p FROM daily_prices p JOIN price_official_checks q ON q.code=p.code AND q.date=p.date
                            WHERE p.code=%s AND q.close IS NULL AND q.date <= %s""", (code, free_cutoff()))
-        publish(cur, code, normalized, actions, today, "official_window" if official_window else basis, sid, observed_at)
+        publish(cur, code, normalized, actions, today, "official_window" if official_window else basis, sid, observed_at,
+                rebuild=full)
     return len(normalized)
 
 
@@ -284,12 +321,17 @@ def check_integrity() -> dict:
     bad = []
     actions = load_actions()
     with db() as cur:
-        cur.execute("""SELECT code,date,close,adj_close,adj_factor FROM daily_prices
-                       WHERE price_basis=%s ORDER BY code,date""", ("raw",))
-        for code, dt, raw, adj, _ in cur.fetchall():
+        for code, dt, raw, adj, op,hi,lo,vo,aop,ahi,alo,avo in iter_price_rows(cur,
+            ("code","date","close","adj_close","open","high","low","volume","adj_open","adj_high","adj_low","adj_volume"),
+            source="daily_prices",positive_only=False):
             try:
-                pf, _ = factors(dt, actions.get(code, []), jst_today())
+                pf, vf = factors(dt, actions.get(code, []), jst_today())
                 if raw is None or adj is None or abs(raw * pf - adj) > Decimal("0.06"):
+                    bad.append(code)
+                for original,adjusted in ((op,aop),(hi,ahi),(lo,alo)):
+                    if (original is None) != (adjusted is None) or original is not None and abs(original*pf-adjusted)>Decimal("0.06"):
+                        bad.append(code)
+                if (vo is None) != (avo is None) or vo is not None and abs(Decimal(vo)*vf-avo)>Decimal(1):
                     bad.append(code)
             except PriceBasisError:
                 bad.append(code)

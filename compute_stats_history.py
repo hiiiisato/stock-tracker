@@ -29,7 +29,7 @@ NIKKEI_SYMBOL = "^N225"
 # STAT_COLS に無い、追加のファンダ列（stock_fundamentals 相当を PIT 再構成）
 EXTRA_COLS = ["per", "pbr", "roe", "roa", "div_yield", "market_cap",
               "op_margin", "payout_ratio", "debt_to_equity", "beta"]
-HISTORY_COLS = ["code", "snapshot_date"] + STAT_COLS + EXTRA_COLS + ["market"]
+HISTORY_COLS = ["code", "snapshot_date"] + STAT_COLS + EXTRA_COLS + ["market", "source_series_revision"]
 
 _FLAG_COLS = {"macd_gc", "break_20d", "break_65d", "cf_positive",
               "gc_5_25", "gc_75_200", "bb_upper", "bb_lower", "break_ytd_high"}
@@ -57,6 +57,14 @@ def _ensure_table():
             cur.execute(f"ALTER TABLE price_stats_history ADD COLUMN {c} {typedef}")
         except Exception:
             pass  # 既存カラムは無視
+    cur.execute("SHOW COLUMNS FROM price_stats_history")
+    if "source_series_revision" not in {r[0] for r in cur.fetchall()}:
+        cur.execute("ALTER TABLE price_stats_history ADD COLUMN source_series_revision CHAR(64) NULL")
+    cur.execute("""CREATE OR REPLACE VIEW price_stats_history_current AS
+        SELECT h.* FROM price_stats_history h LEFT JOIN price_adjustment_state s ON s.code=h.code
+        WHERE s.status IS NULL OR s.status='legacy'
+           OR (s.status IN ('published','audit_due') AND h.source_series_revision=s.series_revision)
+    """)
     conn.commit(); cur.close(); conn.close()
 
 
@@ -67,14 +75,10 @@ def _load_all():
     conn = get_conn(); cur = conn.cursor()
 
     print("  daily_prices ロード中...")
-    cur.execute("""
-        SELECT code, date, close, high, low, volume, raw_close, raw_volume
-        FROM price_history
-        WHERE close IS NOT NULL AND close > 0 AND date >= '2023-06-01'
-        ORDER BY code, date
-    """)
+    from price_store import iter_price_rows
     prices = defaultdict(list)
-    for code, dt, adj, hi, lo, vol, raw, raw_volume in cur.fetchall():
+    for code, dt, adj, hi, lo, vol, raw, raw_volume in iter_price_rows(
+            cur,("code","date","close","high","low","volume","raw_close","raw_volume"),since="2023-06-01"):
         prices[code].append((dt, float(adj), float(hi or adj), float(lo or adj),
                              float(vol or 0), float(raw or adj), int(raw_volume or 0)))
 
@@ -270,7 +274,7 @@ def _nikkei_1m_chg(nk_dates, nk_closes, D):
     return (nk_closes[hi - 1] / nk_closes[hi - 26] - 1) * 100
 
 
-def _compute_snapshot(D, prices, annuals, quarters, divs, shares, nk, market):
+def _compute_snapshot(D, prices, annuals, quarters, divs, shares, nk, market, revisions=None):
     nk_dates = [x[0] for x in nk]
     nk_closes = [x[1] for x in nk]
     nk_chg = _nikkei_1m_chg(nk_dates, nk_closes, D)
@@ -321,7 +325,7 @@ def _compute_snapshot(D, prices, annuals, quarters, divs, shares, nk, market):
             extra["per"], extra["pbr"], extra["roe"], extra["roa"],
             extra["div_yield"], extra["market_cap"], extra["op_margin"],
             extra["payout_ratio"], extra["debt_to_equity"], beta,
-            market.get(code, ""),
+            market.get(code, ""), (revisions or {}).get(code),
         ]
         rows.append(tuple(row))
     return rows
@@ -330,6 +334,16 @@ def _compute_snapshot(D, prices, annuals, quarters, divs, shares, nk, market):
 def run(backfill=False, weeks=None, latest_only=False):
     _ensure_table()
     print("=== 週次スナップショット計算 ===")
+    # 読込前の版を使う。計算中に再生成されても、古い版の結果は参照ビューで公開されない。
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT code,series_revision FROM price_adjustment_state WHERE status IN ('published','audit_due')")
+    revisions = dict(cur.fetchall())
+    cur.execute("""SELECT s.code FROM price_adjustment_state s
+                   WHERE s.status IN ('published','audit_due') AND s.series_revision IS NOT NULL
+                     AND NOT EXISTS (SELECT 1 FROM price_sync_state h WHERE h.name=CONCAT('history_series:',s.code)
+                                     AND h.value=s.series_revision AND h.error IS NULL)""")
+    rebuild_codes = {r[0] for r in cur.fetchall()}
+    cur.close(); conn.close()
     data = _load_all()
     prices, annuals, quarters, divs, shares, nk, market = data
 
@@ -340,12 +354,17 @@ def run(backfill=False, weeks=None, latest_only=False):
         start = end - timedelta(weeks=weeks)
     else:
         start = end - timedelta(days=10)  # 最新週のみ
+    recent_start = start
+    if rebuild_codes:
+        start = min(start,SNAPSHOT_START)
     snap_dates = _weekly_snapshot_dates(prices, start, end)
+    historical_prices = {c:s for c,s in prices.items() if c in rebuild_codes}
     print(f"  対象スナップショット: {len(snap_dates)}週 ({snap_dates[0] if snap_dates else '-'} 〜 {snap_dates[-1] if snap_dates else '-'})")
 
     total = 0
     for i, D in enumerate(snap_dates):
-        rows = _compute_snapshot(D, prices, annuals, quarters, divs, shares, nk, market)
+        target_prices = prices if backfill or D >= recent_start else historical_prices
+        rows = _compute_snapshot(D, target_prices, annuals, quarters, divs, shares, nk, market,revisions)
         if rows:
             conn = get_conn(); cur = conn.cursor()
             bulk_upsert(cur, "price_stats_history", HISTORY_COLS, rows,
@@ -353,6 +372,12 @@ def run(backfill=False, weeks=None, latest_only=False):
             conn.commit(); cur.close(); conn.close()
             total += len(rows)
         print(f"  [{i+1}/{len(snap_dates)}] {D}: {len(rows)}銘柄  (累計 {total})")
+    # 全週の保存後にだけ完了を記録する。途中終了した場合は次便で同じ版を再実行できる。
+    if rebuild_codes:
+        conn = get_conn(); cur = conn.cursor()
+        bulk_upsert(cur,"price_sync_state",["name","value","error"],
+                    [(f"history_series:{c}",revisions[c],None) for c in sorted(rebuild_codes)])
+        conn.commit(); cur.close(); conn.close()
     print(f"\n完了: {total} 行保存")
     return total
 

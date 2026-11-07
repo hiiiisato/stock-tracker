@@ -5,6 +5,7 @@ import unittest
 
 from corporate_actions import parse_disclosure_ratio
 from price_adjustments import Action, PriceBasisError, factors, identify_basis, normalize
+from price_pipeline import official_window_candidate
 
 
 def candle(dt, close, volume=300):
@@ -35,6 +36,18 @@ class PriceAdjustmentTest(unittest.TestCase):
         self.assertEqual(expected[0]["adj_volume"], D(300))
         self.assertEqual(expected[0]["turnover"], 600000)
         self.assertEqual(expected, normalize(raw, [self.action], self.basis, "raw"))
+
+    def test_inconsistent_old_provider_segment_is_replaced_by_official_history(self):
+        actions=[Action("285A",date(2025,12,29),D(10),D(11)),self.action]
+        provider=[candle("2025-11-03",1100/3),candle("2026-08-14",1000/3),candle("2026-09-28",340)]
+        refs={"2025-11-03":D(1100),"2026-08-14":D(1000)}
+        with self.assertRaises(PriceBasisError):identify_basis(provider,actions,self.basis,refs)
+        raw=official_window_candidate([candle("2025-11-03",1100),candle("2026-08-14",1000)],
+            provider,actions,self.basis,date(2026,8,14),refs,{"2026-08-14":D(300)})
+        published=normalize(raw,actions,self.basis,"raw")
+        self.assertEqual(published[0]["adj_close"],D("333.3333"))
+        self.assertEqual(published[-1]["close"],D(1020))
+        self.assertEqual(published[-1]["adj_close"],D(340))
 
     def test_price_and_volume_basis_can_differ(self):
         rows = [candle("2026-09-28", 2000, 100)]

@@ -959,7 +959,7 @@ def _refresh_edge_stats(cur, conn, force: bool = False) -> None:
     cur.execute("SELECT DISTINCT date FROM price_history WHERE date >= '2024-10-01' ORDER BY date")
     tdays = [row[0] for row in cur.fetchall()]
     tidx = {d: i for i, d in enumerate(tdays)}
-    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history ORDER BY snapshot_date")
+    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history_current ORDER BY snapshot_date")
     snaps = [row[0] for row in cur.fetchall()]
 
     for tag, cond in EDGE_VIEWS.items():
@@ -970,7 +970,7 @@ def _refresh_edge_stats(cur, conn, force: bool = False) -> None:
                 continue
             d2 = tdays[i + EDGE_HORIZON]
             cur.execute(f"""
-                SELECT h.code, h.close FROM price_stats_history h
+                SELECT h.code, h.close FROM price_stats_history_current h
                 WHERE h.snapshot_date = %s AND h.turnover_20d >= 3
                   AND h.close BETWEEN 300 AND 24000 AND {cond}
             """, (d0,))

@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup
 
 from batch_dates import jst_today
 from config import (db, PRICE_ACTION_DISCLOSURE_LIMIT, PRICE_ACTION_HTTP_TIMEOUT,
-                    PRICE_HISTORY_START, price_db_session)
+                    PRICE_HISTORY_START, PRICE_ACTION_PARSER_VERSION, price_db_session)
 from price_adjustments import Action, PriceBasisError
 from price_store import ensure_schema, load_actions, put_action, snapshot
 
@@ -26,7 +26,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; stock-tracker/1.0)"}
 _ROW = re.compile(r"\b(?P<code>[0-9][0-9A-Z]{3})\s+.+?\s+"
                   r"(?P<ex>\d{4}\.\d{2}\.\d{2})\s+(?P<record>\d{4}\.\d{2}\.\d{2})\s+"
                   r"(?P<old>\d+(?:\.\d+)?)\s*:\s*(?P<new>\d+(?:\.\d+)?)\s*"
-                  r"(?P<kind>株式分割|株式併合|投資口分割|投資口併合|受益権分割|受益権併合|分割)")
+                  r"(?P<kind>株式分割|株式併合|投資口分割|投資口併合|受益権分割|受益権併合|株式無償割当て?|分割)")
 
 
 def get_bytes(url: str) -> bytes:
@@ -50,8 +50,12 @@ def parse_monthly_pdf(content: bytes, url: str) -> list[Action]:
                     old, new = Decimal(m["old"]), Decimal(m["new"])
                     if old <= 0 or new <= 0:
                         raise PriceBasisError("公式月報の比率が正数ではありません")
+                    kind = "bonus" if "無償割当" in m["kind"] else "consolidation" if "併合" in m["kind"] else "split"
+                    # 月報の無償割当欄は「追加の割当率」。1:0.1は合計1.1株。
+                    if kind == "bonus":
+                        new += old
                     actions.append(Action(m["code"], date.fromisoformat(m["ex"].replace(".", "-")),
-                                          old, new, "consolidation" if "併合" in m["kind"] else "split",
+                                          old, new, kind,
                                           source="jpx_monthly", source_url=url,
                                           record_date=date.fromisoformat(m["record"].replace(".", "-"))))
                 elif re.search(r"\d\s*:\s*\d.*(?:分割|併合)", line):
@@ -76,7 +80,7 @@ def parse_schedule_xls(content: bytes, url: str) -> list[Action]:
         for row_index in range(4, sheet.nrows):
             row = sheet.row_values(row_index)
             note = str(row[ni])
-            if not any(k in note for k in ("分割", "併合")):
+            if not any(k in note for k in ("分割", "併合", "無償割当", "ライツ")):
                 continue
             code = str(int(row[ci])) if isinstance(row[ci], (int, float)) else str(row[ci]).strip()
             if len(code) == 5 and code.endswith("0"):
@@ -85,8 +89,8 @@ def parse_schedule_xls(content: bytes, url: str) -> list[Action]:
                 raise PriceBasisError(f"予定表の銘柄コードを解読できません: {code}")
             ex = xlrd.xldate_as_datetime(row[ei], book.datemode).date()
             record = xlrd.xldate_as_datetime(row[ri], book.datemode).date()
-            actions.append(Action(code, ex, Decimal(1), Decimal(1),
-                                  "consolidation" if "併合" in note else "split", "needs_ratio",
+            kind = "rights" if "新株予約権" in note or "ライツ" in note else "bonus" if "無償割当" in note else "consolidation" if "併合" in note else "split"
+            actions.append(Action(code, ex, Decimal(1), Decimal(1),kind,"needs_ratio",
                                   "jpx_schedule", url, record))
     if not found_header:
         raise PriceBasisError("JPX予定表の列構成が変更されています")
@@ -119,6 +123,10 @@ def parse_disclosure_ratio(text: str, action: Action, title: str = "") -> Action
     if len(ratios) != 1:
         raise PriceBasisError("開示本文の比率が一意に確定できません")
     old, new = next(iter(ratios))
+    if action.kind == "rights":
+        raise PriceBasisError("ライツの価格係数は株数比から決めず、公式係数の確認を待ちます")
+    if action.kind == "bonus":
+        new += old
     if old <= 0 or new <= 0 or old == new:
         raise PriceBasisError("開示本文の分割比率が不正です")
     return replace(action, before=old, after=new, status="confirmed", source="tdnet")
@@ -184,6 +192,10 @@ def sync_official_actions(*, history: bool = False) -> dict:
         processed = {r[0] for r in cur.fetchall()}
         cur.execute("SELECT code FROM stocks")
         valid_codes = {r[0] for r in cur.fetchall()}
+        cur.execute("SELECT value FROM price_sync_state WHERE name=%s", ("corporate_action_parser_version",))
+        version = cur.fetchone()
+    upgrade_parser = not version or version[0] != PRICE_ACTION_PARSER_VERSION
+    history = history or upgrade_parser
     schedule_html = get_bytes(SCHEDULE_URL)
     soup = BeautifulSoup(schedule_html, "html.parser")
     links = [urljoin(SCHEDULE_URL, a["href"]) for a in soup.select("a[href]") if re.search(r"/\d{8}\.xls$", a["href"])]
@@ -209,7 +221,7 @@ def sync_official_actions(*, history: bool = False) -> dict:
             if not pdf_urls:
                 raise RuntimeError(f"月報の配信リンクがありません: {page_url}")
             for url in pdf_urls:
-                if url[:160] in processed:
+                if url[:160] in processed and not upgrade_parser:
                     continue
                 content = get_bytes(url)
                 _remember_document(url, content, 0, processed=False)
@@ -233,6 +245,11 @@ def sync_official_actions(*, history: bool = False) -> dict:
                                           source_url="https://jpx-jquants.com/ja/spec/eq-bars-daily", price_ratio=ratio)))
     resolved = resolve_disclosures(limit=PRICE_ACTION_DISCLOSURE_LIMIT)
     conflicts = resolve_mature_conflicts()
+    if not errors:
+        with db() as cur:
+            cur.execute("""INSERT INTO price_sync_state (name,value) VALUES (%s,%s)
+                           ON DUPLICATE KEY UPDATE value=VALUES(value),checked_at=CURRENT_TIMESTAMP""",
+                        ("corporate_action_parser_version", PRICE_ACTION_PARSER_VERSION))
     return {"changed": total + resolved["changed"] + conflicts["changed"], "coverage_ok": not errors,
             "errors": errors + resolved["errors"] + conflicts["errors"]}
 
@@ -244,7 +261,7 @@ def resolve_disclosures(*, limit: int = 30) -> dict:
         cur.execute("""SELECT DISTINCT code FROM disclosures WHERE disclosed_at >= %s
                        AND (title LIKE %s OR title LIKE %s OR title LIKE %s)
                        AND (title LIKE %s OR title LIKE %s OR title LIKE %s)""",
-                    (jst_today() - timedelta(days=14), "%分割%", "%併合%", "%投資口%",
+                    (jst_today() - timedelta(days=14), "%分割%", "%併合%", "%無償割当%",
                      "%訂正%", "%中止%", "%撤回%"))
         revised_codes = {r[0] for r in cur.fetchall()}
     pending = [a for aa in all_actions.values() for a in aa
@@ -260,7 +277,7 @@ def resolve_disclosures(*, limit: int = 30) -> dict:
                            ORDER BY disclosed_at DESC LIMIT 8""",
                         (action.code, datetime.combine(action.ex_date - timedelta(days=730), datetime.min.time()),
                          datetime.combine(jst_today(), datetime.max.time()),
-                         "%分割%", "%併合%", "%投資口分割%"))
+                         "%分割%", "%併合%", "%無償割当%"))
             documents = cur.fetchall()
         last_error = "公式の分割比率を含む開示がまだありません"
         resolved = None
