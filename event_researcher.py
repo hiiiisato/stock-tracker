@@ -198,7 +198,7 @@ def _get_price_history_context(codes: list, ranking_date: date, days: int = 10) 
             SELECT code, date, change_pct FROM (
                 SELECT code, date, change_pct,
                        ROW_NUMBER() OVER (PARTITION BY code ORDER BY date DESC) AS rn
-                FROM daily_prices
+                FROM price_history
                 WHERE code IN ({ph}) AND date <= %s AND change_pct IS NOT NULL
             ) t WHERE rn <= %s ORDER BY code, date
         """, codes + [ranking_date, days])
@@ -327,7 +327,7 @@ def _get_daily_movers(ranking_date: date, threshold: float, max_n: int) -> tuple
         SELECT dp.code,
                ROW_NUMBER() OVER (ORDER BY dp.change_pct DESC) AS rk,
                dp.change_pct
-        FROM daily_prices dp
+        FROM price_history dp
         JOIN stocks s ON dp.code = s.code
         LEFT JOIN markets m ON s.market_id = m.id
         WHERE dp.date = %s
@@ -343,7 +343,7 @@ def _get_daily_movers(ranking_date: date, threshold: float, max_n: int) -> tuple
         SELECT dp.code,
                ROW_NUMBER() OVER (ORDER BY dp.change_pct ASC) AS rk,
                dp.change_pct
-        FROM daily_prices dp
+        FROM price_history dp
         JOIN stocks s ON dp.code = s.code
         LEFT JOIN markets m ON s.market_id = m.id
         WHERE dp.date = %s
@@ -375,7 +375,7 @@ def _get_weekly_movers(ranking_date: date, threshold: float, max_n: int) -> tupl
                         PARTITION BY code ORDER BY date
                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
                     ) AS last_close
-                FROM daily_prices
+                FROM price_history
                 WHERE date BETWEEN %s AND %s AND close > 0
             ),
             weekly AS (
@@ -421,7 +421,7 @@ def research_top_movers(target_date: date = None, period: str = "daily") -> int:
     conn = get_conn()
     cur = conn.cursor()
     if period == "daily":
-        cur.execute("SELECT MAX(date) FROM daily_prices WHERE close IS NOT NULL")
+        cur.execute("SELECT MAX(date) FROM price_history WHERE close IS NOT NULL")
     else:
         cur.execute("""
             SELECT MAX(period_end) FROM rankings

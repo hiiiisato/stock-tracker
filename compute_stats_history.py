@@ -68,15 +68,15 @@ def _load_all():
 
     print("  daily_prices ロード中...")
     cur.execute("""
-        SELECT code, date, COALESCE(adj_close, close), high, low, volume, close
-        FROM daily_prices
+        SELECT code, date, close, high, low, volume, raw_close, raw_volume
+        FROM price_history
         WHERE close IS NOT NULL AND close > 0 AND date >= '2023-06-01'
         ORDER BY code, date
     """)
     prices = defaultdict(list)
-    for code, dt, adj, hi, lo, vol, raw in cur.fetchall():
+    for code, dt, adj, hi, lo, vol, raw, raw_volume in cur.fetchall():
         prices[code].append((dt, float(adj), float(hi or adj), float(lo or adj),
-                             int(vol or 0), float(raw or adj)))
+                             float(vol or 0), float(raw or adj), int(raw_volume or 0)))
 
     print("  financials(年次) ロード中...")
     annuals = defaultdict(list)

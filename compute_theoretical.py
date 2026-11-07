@@ -381,7 +381,7 @@ def _fetch_inputs(code: str):
                sf.market_cap,
                s.name
         FROM stock_fundamentals sf
-        JOIN price_stats ps ON sf.code = ps.code
+        JOIN price_stats_current ps ON sf.code = ps.code
         LEFT JOIN fin_eq fe ON sf.code = fe.code AND fe.rn = 1
         LEFT JOIN stocks s ON sf.code = s.code
         WHERE sf.code = %s
@@ -557,7 +557,7 @@ def run() -> int:
                ps.ord_growth,
                sf.market_cap
         FROM stock_fundamentals sf
-        JOIN price_stats ps ON sf.code = ps.code
+        JOIN price_stats_current ps ON sf.code = ps.code
         LEFT JOIN fin_eq fe ON sf.code = fe.code AND fe.rn = 1
     """)
     src = cur.fetchall()

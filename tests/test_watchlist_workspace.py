@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import app as stock_app
 from watchlist_service import delete_memo, save_memo, validate_memo
-from watchlist_workspace import adjusted_candles, load_memos
+from watchlist_workspace import load_chart, load_memos
 
 
 class SQLiteCursor:
@@ -208,14 +208,11 @@ class StockResearchRecordsTest(unittest.TestCase):
 
 
 class WatchlistCandlesTest(unittest.TestCase):
-    def test_ohlc_uses_existing_split_adjustment_and_volume_keeps_actual_share_count(self):
-        rows = [("2026-01-05", Decimal("2000"), Decimal("2200"), Decimal("1800"), Decimal("2100"), Decimal("1050"), 1234),
-                ("2026-01-06", None, None, None, Decimal("1050"), None, None),
-                ("2026-01-07", None, None, None, None, None, None)]
-        candles = adjusted_candles(rows)
-        self.assertEqual(candles[0], {"date": "2026-01-05", "open": 1000., "high": 1100., "low": 900., "close": 1050., "volume": 1234})
-        self.assertEqual(candles[1]["open"], None)
-        self.assertEqual(len(candles), 2)
+    def test_watchlist_uses_published_ohlcv_without_a_second_adjustment(self):
+        rows = [{"date": "2026-01-05", "open": 1000., "high": 1100., "low": 900., "close": 1050., "volume": 2468.}]
+        with patch("price_store.load_candles", return_value={"7203": rows}) as shared:
+            self.assertEqual(load_chart("7203"), rows)
+        self.assertEqual(shared.call_args.args[0], ["7203"])
 
 
 if __name__ == "__main__":

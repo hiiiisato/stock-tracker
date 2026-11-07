@@ -773,7 +773,7 @@ def run_daily(max_analyze: int = DAILY_MAX_ANALYZE, verbose: bool = True) -> dic
     client = _gemini()
     stats = _crawl_and_analyze(cur, conn, client, DAILY_CHANNELS, DAILY_LOOKBACK_DAYS,
                                DAILY_MAX_PER_CHANNEL, max_analyze, verbose)
-    cur.execute("SELECT MAX(date) FROM daily_prices WHERE date <= %s", (jst_today(),))
+    cur.execute("SELECT MAX(date) FROM price_history WHERE date <= %s", (jst_today(),))
     row = cur.fetchone()
     report_day = row[0] if row and row[0] else jst_today()
     if aggregate_daily(cur, client, report_day):
@@ -798,7 +798,7 @@ def aggregate_only(day: date | None = None, verbose: bool = True) -> bool:
     try:
         ensure_tables(cur); conn.commit()
         if day is None:
-            cur.execute("SELECT MAX(date) FROM daily_prices WHERE date <= %s", (jst_today(),))
+            cur.execute("SELECT MAX(date) FROM price_history WHERE date <= %s", (jst_today(),))
             row = cur.fetchone()
             day = row[0] if row and row[0] else jst_today()
         cur.execute("SELECT 1 FROM youtube_daily WHERE report_date=%s", (day,))

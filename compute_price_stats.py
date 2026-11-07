@@ -55,7 +55,7 @@ def _round(v, dec=2):
 
 def _latest_price_date(cur) -> date | None:
     """実行ホストの日付ではなく、DB上の最新営業日を計算基準日にする。"""
-    cur.execute("SELECT MAX(date) FROM daily_prices")
+    cur.execute("SELECT MAX(date) FROM price_history")
     row = cur.fetchone()
     return row[0] if row and row[0] else None
 
@@ -253,6 +253,7 @@ def _ensure_table():
         ("pcfr",           "DECIMAL(8,2)"),
         # --- クオリティ（財務健全性スコア） ---
         ("fscore",         "TINYINT"),  # 当サイト版 Piotroski F-score（0〜7・NULL=算出不能）
+        ("source_price_version", "CHAR(64) NULL"),
     ]
     for col, typedef in new_cols:
         try:
@@ -265,6 +266,17 @@ def _ensure_table():
     ord_margin_col = cur.fetchone()
     if ord_margin_col and str(ord_margin_col[1]).lower() != "decimal(18,4)":
         cur.execute("ALTER TABLE price_stats MODIFY COLUMN ord_margin DECIMAL(18,4) NULL")
+    # 比率は薄商い・極小の比較基準で大きくなり得る。1行の桁溢れで全銘柄を止めない。
+    # 数値を切り捨てず履歴表と同じ範囲に拡張。データ真偽の検証は価格公開層が担当する。
+    ratio_columns = {"chg5d", "chg25d", "chg75d", "chg126d", "ma200_slope",
+                     "dev_ma25", "dev_ma75", "dev_ma200", "dev_high52w", "dev_low52w",
+                     "dev_ytd_high", "dev_ytd_low", "vol_ratio", "vol20_ratio", "vol_ratio_6_25",
+                     "volatility_60d", "nikkei_rel_1m", "rev_growth", "op_growth", "eps_growth",
+                     "ord_growth", "psr", "pcfr"}
+    cur.execute("SHOW COLUMNS FROM price_stats")
+    for column in cur.fetchall():
+        if column[0] in ratio_columns and str(column[1]).lower() != "decimal(18,4)":
+            cur.execute(f"ALTER TABLE price_stats MODIFY COLUMN `{column[0]}` DECIMAL(18,4) NULL")
     conn.commit()
     cur.close()
     conn.close()
@@ -469,6 +481,7 @@ def compute_stock_stats(prices, w52_pair, ytd_pair, nikkei_1m_chg, fm):
     lows      = [p[3] for p in prices]
     vols      = [p[4] for p in prices]
     raw_cls   = [p[5] for p in prices]   # 生終値（売買代金計算用）
+    raw_vols  = [p[6] if len(p) > 6 else p[4] for p in prices]
     last      = closes[-1]
     last_hi   = highs[-1]
     last_raw  = raw_cls[-1]
@@ -545,10 +558,10 @@ def compute_stock_stats(prices, w52_pair, ytd_pair, nikkei_1m_chg, fm):
 
     macd, macd_signal, macd_hist, macd_gc = _macd_calc(closes)
 
-    turnover_day  = last_raw * vols[-1] / 1e8 if vols[-1] else None
+    turnover_day  = last_raw * raw_vols[-1] / 1e8 if raw_vols[-1] else None
     turnover_20d  = None
     if n >= 20:
-        t20 = [raw_cls[i] * vols[i] / 1e8 for i in range(-20, 0) if vols[i]]
+        t20 = [raw_cls[i] * raw_vols[i] / 1e8 for i in range(-20, 0) if raw_vols[i]]
         if t20:
             turnover_20d = sum(t20) / len(t20)
 
@@ -632,15 +645,18 @@ def run() -> int:
         SELECT code, date,
                COALESCE(adj_close, close) AS close,
                high, low, volume,
-               close AS raw_close
-        FROM daily_prices
+               raw_close, raw_volume, price_version
+        FROM price_history
         WHERE date >= %s AND close IS NOT NULL AND close > 0
         ORDER BY code, date
     """, (date_from,))
 
     data: dict[str, list] = defaultdict(list)
-    for code, dt, close, high, low, vol, raw_close in cur.fetchall():
-        data[code].append((dt, float(close), float(high or close), float(low or close), int(vol or 0), float(raw_close or close)))
+    price_versions = {}
+    for code, dt, close, high, low, vol, raw_close, *extra in cur.fetchall():
+        raw_volume = extra[0] if extra else vol
+        price_versions[code] = extra[1] if len(extra) > 1 else None
+        data[code].append((dt, float(close), float(high or close), float(low or close), float(vol or 0), float(raw_close or close), int(raw_volume or 0)))
 
     # 52週高値・安値（調整済価格で取得）
     date_from_52w = (as_of - timedelta(days=380)).strftime("%Y-%m-%d")
@@ -648,7 +664,7 @@ def run() -> int:
         SELECT code,
                MAX(COALESCE(adj_close, close)),
                MIN(COALESCE(adj_close, close))
-        FROM daily_prices
+        FROM price_history
         WHERE date >= %s AND close IS NOT NULL
         GROUP BY code
     """, (date_from_52w,))
@@ -661,7 +677,7 @@ def run() -> int:
         SELECT code,
                MAX(COALESCE(adj_close, close)),
                MIN(COALESCE(adj_close, close))
-        FROM daily_prices
+        FROM price_history
         WHERE date >= %s AND close IS NOT NULL
         GROUP BY code
     """, (ytd_from,))
@@ -703,12 +719,12 @@ def run() -> int:
         )
         if stat is None:
             continue
-        rows.append((code, updated_at) + stat)
+        rows.append((code, updated_at) + stat + (price_versions.get(code),))
 
     # ─── DB 保存 ──────────────────────────────────────────────────────────────
     conn = get_conn()
     cur  = conn.cursor()
-    all_cols = ["code", "updated_at"] + STAT_COLS
+    all_cols = ["code", "updated_at"] + STAT_COLS + ["source_price_version"]
     bulk_upsert(cur, "price_stats", all_cols, rows,
                 update_cols=[c for c in all_cols if c != "code"])
     conn.commit()

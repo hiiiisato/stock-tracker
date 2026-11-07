@@ -380,7 +380,7 @@ def build_market_summary(target_date: date = None) -> bool:
     """業種別・テーマ別騰落と開示動向を集計し、Geminiで市況コメントを生成して保存する。"""
     conn = get_conn(); cur = conn.cursor()
     if target_date is None:
-        cur.execute("SELECT MAX(date) FROM daily_prices WHERE close IS NOT NULL")
+        cur.execute("SELECT MAX(date) FROM price_history WHERE close IS NOT NULL")
         target_date = cur.fetchone()[0]
     if not target_date:
         cur.close(); conn.close()
@@ -390,7 +390,7 @@ def build_market_summary(target_date: date = None) -> bool:
     cur.execute("""
         SELECT sec.name, ROUND(AVG(dp.change_pct), 2) AS avg_chg, COUNT(*) AS n,
                SUM(CASE WHEN dp.change_pct > 0 THEN 1 ELSE 0 END) AS n_up
-        FROM daily_prices dp
+        FROM price_history dp
         JOIN stocks s   ON dp.code = s.code
         JOIN sectors sec ON s.sector_id = sec.id
         WHERE dp.date = %s AND dp.change_pct IS NOT NULL AND s.is_active = TRUE

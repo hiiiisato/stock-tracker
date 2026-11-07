@@ -20,10 +20,10 @@ def load_workspace() -> dict:
                    f.per, f.pbr, f.div_yield, w.added_at,
                    COALESCE(m.n, 0), m.last_at, sm.content, src.title
             FROM watchlist w LEFT JOIN stocks s ON s.code = w.code
-            LEFT JOIN (SELECT d.code, MAX(d.date) latest_date FROM daily_prices d
+            LEFT JOIN (SELECT d.code, MAX(d.date) latest_date FROM price_history d
                        JOIN watchlist saved ON saved.code = d.code
                        WHERE d.close IS NOT NULL GROUP BY d.code) latest ON latest.code = w.code
-            LEFT JOIN daily_prices p ON p.code = w.code AND p.date = latest.latest_date
+            LEFT JOIN price_history p ON p.code = w.code AND p.date = latest.latest_date
             LEFT JOIN stock_fundamentals f ON f.code = w.code
             LEFT JOIN (SELECT sm.code, COUNT(*) n, MAX(sm.id) last_id, MAX(sm.created_at) last_at
                        FROM stock_memos sm JOIN watchlist w ON w.code = sm.code
@@ -78,27 +78,6 @@ def load_memos(code: str) -> list[dict]:
     return result
 
 
-def adjusted_candles(rows: list[tuple]) -> list[dict]:
-    """既存の分割調整済み終値を正とし、OHLCを同じ価格基準へ揃える。
-
-    出来高は実際の当日株数を表示。配当調整・独自の分割推定は加えない。
-    OHLC欠損日に0円の足を作らない。
-    """
-    result = []
-    for dt, op, hi, lo, close, adj, volume in rows:
-        if close is None or close <= 0:
-            continue
-        ratio = float(adj) / float(close) if adj is not None and adj > 0 else 1.0
-        result.append({"date": str(dt), "open": float(op) * ratio if op is not None else None,
-                       "high": float(hi) * ratio if hi is not None else None,
-                       "low": float(lo) * ratio if lo is not None else None,
-                       "close": float(close) * ratio, "volume": int(volume or 0)})
-    return result
-
-
 def load_chart(code: str) -> list[dict]:
-    with db() as cur:
-        cur.execute("""SELECT date, open, high, low, close, adj_close, volume FROM daily_prices
-                       WHERE code = %s AND date >= %s AND close IS NOT NULL ORDER BY date""",
-                    (code, jst_today() - timedelta(days=366 * WATCHLIST_CHART_YEARS)))
-        return adjusted_candles(cur.fetchall())
+    from price_store import load_candles
+    return load_candles([code], jst_today() - timedelta(days=366 * WATCHLIST_CHART_YEARS)).get(code, [])

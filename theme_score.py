@@ -87,7 +87,7 @@ def _compute_raw_day(conn, target_date: date, theme_stocks: dict) -> int:
     cur.execute("""
         SELECT code, change_pct,
                COALESCE(turnover, volume * close) AS effective_turnover
-        FROM daily_prices
+        FROM price_history
         WHERE date = %s AND close IS NOT NULL
     """, (target_date,))
     price_map: dict[str, tuple] = {r[0]: r for r in cur.fetchall()}
@@ -236,7 +236,7 @@ def compute_day(target_date: date = None) -> None:
 
     if target_date is None:
         cur = conn.cursor()
-        cur.execute("SELECT MAX(date) FROM daily_prices")
+        cur.execute("SELECT MAX(date) FROM price_history")
         target_date = cur.fetchone()[0]
         cur.close()
 
@@ -256,7 +256,7 @@ def compute_all() -> None:
     """
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT DISTINCT date FROM daily_prices ORDER BY date")
+    cur.execute("SELECT DISTINCT date FROM price_history ORDER BY date")
     dates = [r[0] for r in cur.fetchall()]
     cur.close()
 

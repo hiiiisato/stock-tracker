@@ -1,0 +1,29 @@
+name: 価格データの回帰検証
+
+on:
+  push:
+    paths: ['price*.py', 'corporate_actions.py', 'splits.py', 'ai_fund*.py', 'compute_*stats*.py', 'app.py', 'watchlist_workspace.py', 'static/watchlist.js', 'tests/**', 'requirements.txt', '.github/workflows/price_quality.yml']
+  pull_request:
+    paths: ['price*.py', 'corporate_actions.py', 'splits.py', 'ai_fund*.py', 'compute_*stats*.py', 'app.py', 'watchlist_workspace.py', 'static/watchlist.js', 'tests/**', 'requirements.txt', '.github/workflows/price_quality.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      JQUANTS_API_KEY: test
+      TIDB_HOST: localhost
+      TIDB_USER: test
+      TIDB_PASSWORD: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -v

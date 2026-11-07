@@ -211,6 +211,8 @@ def _parse_order(o: dict, ref_close) -> tuple[str, float | None]:
 
 def ensure_tables():
     conn = get_conn(); cur = conn.cursor()
+    from ai_fund_adjustments import ensure_table as ensure_action_table
+    ensure_action_table(cur)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS ai_fund_state (
             id             TINYINT PRIMARY KEY,
@@ -339,8 +341,8 @@ def ensure_tables():
     conn.commit(); cur.close(); conn.close()
 
 
-def _get_state(cur) -> dict | None:
-    cur.execute("SELECT cash, inception_date, last_decided FROM ai_fund_state WHERE id = 1")
+def _get_state(cur, *, lock: bool = False) -> dict | None:
+    cur.execute("SELECT cash, inception_date, last_decided FROM ai_fund_state WHERE id = 1" + (" FOR UPDATE" if lock else ""))
     r = cur.fetchone()
     return {"cash": float(r[0]), "inception": r[1], "last_decided": r[2]} if r else None
 
@@ -353,7 +355,7 @@ def _init_state(cur):
 
 
 def _latest_trading_date(cur) -> date | None:
-    cur.execute("SELECT MAX(date) FROM daily_prices")
+    cur.execute("SELECT MAX(date) FROM price_history")
     return cur.fetchone()[0]
 
 
@@ -372,9 +374,15 @@ def execute_orders() -> int:
     today = _latest_trading_date(cur)
     if today is None:
         cur.close(); conn.close(); return 0
-    state = _get_state(cur)
+    state = _get_state(cur,lock=True)
     if state is None:
         cur.close(); conn.close(); return 0
+    from ai_fund_adjustments import apply_actions
+    try:
+        apply_actions(cur,today)
+    except Exception:
+        conn.rollback(); cur.close(); conn.close()
+        raise
 
     cur.execute("""
         SELECT id, code, side, budget, shares, reason, thesis, decided_date, style, catalyst, strategy,
@@ -387,7 +395,7 @@ def execute_orders() -> int:
     for oid, code, side, budget, shares, reason, thesis, decided, style, catalyst, strategy, order_type, limit_price in orders:
         if decided >= today:
             continue  # 決定日当日の価格では絶対に約定させない
-        cur.execute("SELECT open, high, low, close, change_pct FROM daily_prices WHERE code = %s AND date = %s", (code, today))
+        cur.execute("SELECT open, high, low, close, change_pct FROM raw_price_history WHERE code = %s AND date = %s", (code, today))
         row = cur.fetchone()
         if not row or not row[0] or float(row[0]) <= 0:
             continue  # 当日値なし（売買停止等）→ 持ち越し
@@ -464,7 +472,7 @@ def execute_orders() -> int:
             # ギャップガード（運営方針17）は成行買いのみ: 寄付が決定日終値の+15%超なら見送り。
             # 指値買いは fill_px が指値以下に抑えられ高値掴みが構造的に起きないため対象外。
             if not is_limit:
-                cur.execute("SELECT close FROM daily_prices WHERE code = %s AND date = %s", (code, decided))
+                cur.execute("SELECT close FROM raw_price_history WHERE code = %s AND date = %s", (code, decided))
                 rb = cur.fetchone()
                 if rb and rb[0] and float(rb[0]) > 0 and open_px > float(rb[0]) * 1.15:
                     gap = (open_px / float(rb[0]) - 1) * 100
@@ -517,24 +525,33 @@ def record_nav() -> float | None:
     ensure_tables()
     conn = get_conn(); cur = conn.cursor()
     today = _latest_trading_date(cur)
-    state = _get_state(cur)
+    state = _get_state(cur,lock=True)
     if today is None or state is None:
         cur.close(); conn.close(); return None
+    from ai_fund_adjustments import apply_actions
+    try:
+        apply_actions(cur,today)
+    except Exception:
+        conn.rollback(); cur.close(); conn.close()
+        raise
     cur.execute("SELECT code, shares FROM ai_fund_positions")
     pos = cur.fetchall()
     mv = 0.0
     for code, shares in pos:
-        cur.execute("SELECT close FROM daily_prices WHERE code=%s AND date=%s", (code, today))
+        cur.execute("SELECT close FROM raw_price_history WHERE code=%s AND date=%s", (code, today))
         r = cur.fetchone()
         if r and r[0]:
             mv += int(shares) * float(r[0])
         else:  # 当日値なし→直近値
-            cur.execute("SELECT close FROM daily_prices WHERE code=%s AND date<=%s ORDER BY date DESC LIMIT 1", (code, today))
+            cur.execute("SELECT close FROM raw_price_history WHERE code=%s AND date<=%s ORDER BY date DESC LIMIT 1", (code, today))
             r2 = cur.fetchone()
             if r2 and r2[0]:
                 mv += int(shares) * float(r2[0])
+            else:
+                conn.rollback(); cur.close(); conn.close()
+                raise RuntimeError(f"{code}: 検証済みの評価価格がないため模擬NAVの更新を保留します")
     nav = state["cash"] + mv
-    cur.execute("SELECT COALESCE(adj_close, close) FROM daily_prices WHERE code=%s AND date=%s", (BENCH_CODE, today))
+    cur.execute("SELECT COALESCE(adj_close, close) FROM price_history WHERE code=%s AND date=%s", (BENCH_CODE, today))
     b = cur.fetchone()
     bench = float(b[0]) if b and b[0] else None
     cur.execute("""
@@ -552,7 +569,7 @@ def record_nav() -> float | None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CAND_FROM = """
-    FROM price_stats p
+    FROM price_stats_current p
     JOIN stocks s ON s.code = p.code AND s.is_active = 1
     LEFT JOIN sectors sec ON sec.id = s.sector_id
     LEFT JOIN stock_fundamentals f ON f.code = p.code
@@ -656,10 +673,10 @@ def _candidates(cur, exclude: set[str], regime_up: bool = True) -> list[dict]:
         SELECT r.code, s.name, r.direction, r.op_chg_pct, r.dps_old, r.dps_new, r.announced_at
         FROM forecast_revisions r
         JOIN stocks s ON s.code = r.code AND s.is_active = 1
-        JOIN price_stats p ON p.code = r.code
+        JOIN price_stats_current p ON p.code = r.code
         LEFT JOIN stock_fundamentals f ON f.code = r.code
         WHERE r.announced_at >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
-          AND r.reaction_date <= (SELECT MAX(date) FROM daily_prices)
+          AND r.reaction_date <= (SELECT MAX(date) FROM price_history)
           AND (r.direction = 'up' OR (r.dps_new > r.dps_old))
           AND p.chg5d > -3  -- 初動が崩れた銘柄は除外（プレイブックE: 発表後のポジティブな流れに乗る）
           AND p.turnover_20d >= 3 AND p.close BETWEEN 300 AND 24000
@@ -697,11 +714,11 @@ def _candidates(cur, exclude: set[str], regime_up: bool = True) -> list[dict]:
                SUBSTRING_INDEX(GROUP_CONCAT(d.title ORDER BY d.disclosed_at DESC SEPARATOR '||'), '||', 1)
         FROM disclosures d
         JOIN stocks s ON s.code = d.code AND s.is_active = 1
-        JOIN price_stats p ON p.code = d.code
+        JOIN price_stats_current p ON p.code = d.code
         LEFT JOIN stock_fundamentals f ON f.code = d.code
         WHERE d.category IN ('earnings_report','earnings_rev','earnings_up','guidance','div_up','dividend_rev')
           AND d.disclosed_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
-          AND DATE(d.disclosed_at) < (SELECT MAX(date) FROM daily_prices)
+          AND DATE(d.disclosed_at) < (SELECT MAX(date) FROM price_history)
           AND p.chg5d BETWEEN 6 AND 18 AND p.dev_high52w >= -15 AND p.rsi14 < 85
           AND p.turnover_20d >= 3 AND p.close BETWEEN 300 AND 24000
           AND COALESCE(f.market_cap, 0) >= 15e9
@@ -733,13 +750,13 @@ def _candidates(cur, exclude: set[str], regime_up: bool = True) -> list[dict]:
                SUBSTRING_INDEX(GROUP_CONCAT(d.title ORDER BY d.disclosed_at DESC SEPARATOR '||'), '||', 1)
         FROM disclosures d
         JOIN stocks s ON s.code = d.code AND s.is_active = 1
-        JOIN price_stats p ON p.code = d.code
+        JOIN price_stats_current p ON p.code = d.code
         LEFT JOIN stock_fundamentals f ON f.code = d.code
         WHERE d.category = 'buyback'
           AND (d.title LIKE '%取得に係る事項の決定%' OR d.title LIKE '%買付%')
           AND d.title NOT LIKE '%状況%' AND d.title NOT LIKE '%終了%'
           AND d.disclosed_at >= DATE_SUB(CURDATE(), INTERVAL 20 DAY)
-          AND DATE(d.disclosed_at) < (SELECT MAX(date) FROM daily_prices)
+          AND DATE(d.disclosed_at) < (SELECT MAX(date) FROM price_history)
           -- バイバックは需給フロア型（初動スパイク前提のEと異なる）。明確な下落トレンドのみ除外し過熱は避ける
           AND p.chg25d > -12 AND p.rsi14 < 78
           AND p.turnover_20d >= 3 AND p.close BETWEEN 300 AND 24000
@@ -772,10 +789,10 @@ def _candidates(cur, exclude: set[str], regime_up: bool = True) -> list[dict]:
         SELECT r.code, r.op_chg_pct, r.dps_old, r.dps_new
         FROM forecast_revisions r
         JOIN stocks s ON s.code = r.code AND s.is_active = 1
-        JOIN price_stats p ON p.code = r.code
+        JOIN price_stats_current p ON p.code = r.code
         LEFT JOIN stock_fundamentals f ON f.code = r.code
-        WHERE r.announced_at = (SELECT MAX(date) FROM daily_prices)
-          AND r.reaction_date > (SELECT MAX(date) FROM daily_prices)
+        WHERE r.announced_at = (SELECT MAX(date) FROM price_history)
+          AND r.reaction_date > (SELECT MAX(date) FROM price_history)
           AND r.direction = 1
           AND p.rsi14 < 85 AND p.turnover_20d >= 3 AND p.close BETWEEN 300 AND 24000
           AND COALESCE(f.market_cap, 0) >= 15e9
@@ -809,7 +826,7 @@ def _candidates(cur, exclude: set[str], regime_up: bool = True) -> list[dict]:
         SELECT es.code, es.announce_date
         FROM earnings_schedule es
         JOIN stocks s ON s.code = es.code AND s.is_active = 1
-        JOIN price_stats p ON p.code = es.code
+        JOIN price_stats_current p ON p.code = es.code
         LEFT JOIN stock_fundamentals f ON f.code = es.code
         WHERE es.announce_date BETWEEN %s AND %s
           AND p.rsi14 < 85 AND p.chg25d > -10
@@ -884,7 +901,7 @@ def _candidates(cur, exclude: set[str], regime_up: bool = True) -> list[dict]:
             FROM theme_members tm
             JOIN themes t ON t.id = tm.theme_id AND t.status = 'active'
             JOIN stocks s ON s.code = tm.code AND s.is_active = 1
-            JOIN price_stats p ON p.code = tm.code
+            JOIN price_stats_current p ON p.code = tm.code
             WHERE tm.tier >= 2 AND p.turnover_20d >= 3 AND p.close BETWEEN 300 AND 24000
             GROUP BY t.id, t.name HAVING n >= 8 AND t_mom >= 10
             ORDER BY t_mom DESC LIMIT 5
@@ -939,7 +956,7 @@ def _refresh_edge_stats(cur, conn, force: bool = False) -> None:
         return
 
     print("  [AIファンド] 観点タグ別エッジを再計測中（週次）...")
-    cur.execute("SELECT DISTINCT date FROM daily_prices WHERE date >= '2024-10-01' ORDER BY date")
+    cur.execute("SELECT DISTINCT date FROM price_history WHERE date >= '2024-10-01' ORDER BY date")
     tdays = [row[0] for row in cur.fetchall()]
     tidx = {d: i for i, d in enumerate(tdays)}
     cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history ORDER BY snapshot_date")
@@ -964,7 +981,7 @@ def _refresh_edge_stats(cur, conn, force: bool = False) -> None:
             px0 = {row[0]: float(row[1]) for row in rows}
             fmt = ",".join(["%s"] * len(codes))
             cur.execute(f"""
-                SELECT code, COALESCE(adj_close, close) FROM daily_prices
+                SELECT code, COALESCE(adj_close, close) FROM price_history
                 WHERE date = %s AND code IN ({fmt})
             """, [d2] + codes)
             for code, px2 in cur.fetchall():
@@ -1283,8 +1300,8 @@ def decide(decision_date: date | None = None) -> int:
         cur.execute("""
             SELECT s.name, d.close, p.rsi14, p.chg5d, p.chg25d
             FROM stocks s
-            LEFT JOIN daily_prices d ON d.code = s.code AND d.date = %s
-            LEFT JOIN price_stats p ON p.code = s.code
+            LEFT JOIN price_history d ON d.code = s.code AND d.date = %s
+            LEFT JOIN price_stats_current p ON p.code = s.code
             WHERE s.code = %s
         """, (latest, code))
         r = cur.fetchone()
@@ -1310,7 +1327,7 @@ def decide(decision_date: date | None = None) -> int:
         # 利益保全: 取得後高値が+PROFIT_ARM_PCT%超 → 高値-PROFIT_TRAIL_PCT%まで陥落したら売り
         # （プレイブックのトレール切替。-15%はテーマ相場を長く乗るための実測値）
         cur.execute("""
-            SELECT MAX(COALESCE(adj_close, close)) FROM daily_prices
+            SELECT MAX(COALESCE(adj_close, close)) FROM price_history
             WHERE code = %s AND date >= %s
         """, (p["code"], p["buy_date"]))
         r = cur.fetchone()
@@ -1325,7 +1342,7 @@ def decide(decision_date: date | None = None) -> int:
 
     # ── TOPIXレジーム（モメンタム系ビューのゲート。実測: 200日線割れではRS戦略の勝率24%） ──
     cur.execute("""
-        SELECT COALESCE(adj_close, close) FROM daily_prices
+        SELECT COALESCE(adj_close, close) FROM price_history
         WHERE code = %s ORDER BY date DESC LIMIT 200
     """, (BENCH_CODE,))
     bench_px = [float(r2[0]) for r2 in cur.fetchall()]
@@ -1408,7 +1425,7 @@ def decide(decision_date: date | None = None) -> int:
     inflow_themes = "、".join(f"{r2[0]}(Z{float(r2[1]):.1f})" for r2 in cur.fetchall())
 
     cur.execute("""
-        SELECT p.code, s.name, p.chg5d FROM price_stats p
+        SELECT p.code, s.name, p.chg5d FROM price_stats_current p
         JOIN stocks s ON s.code = p.code AND s.is_active = 1
         WHERE p.turnover_20d >= 5 ORDER BY p.chg5d DESC LIMIT 10
     """)
@@ -1586,7 +1603,7 @@ def decide(decision_date: date | None = None) -> int:
             bseen.add(c["code"])
     cur.execute("DELETE FROM ai_fund_bench WHERE bench_date = %s", (today,))
     for i, (c, style, reason) in enumerate(bench_rows, 1):
-        cur.execute("SELECT close FROM daily_prices WHERE code=%s AND date=%s", (c, latest))
+        cur.execute("SELECT close FROM price_history WHERE code=%s AND date=%s", (c, latest))
         r = cur.fetchone()
         close_at = float(r[0]) if r and r[0] else None
         cur.execute("""

@@ -183,7 +183,10 @@
     const revision = ++state.chartRevision;
     if (window.Plotly) Plotly.purge('wl-chart'); $('wl-chart-status').textContent = '株価を読み込み中…';
     try {
-      if (!state.chartCache.has(code)) { const response = await fetch('/api/watchlist/chart/' + encodeURIComponent(code)); if (!response.ok) throw new Error('株価を取得できませんでした'); state.chartCache.set(code, await response.json()); }
+      const response = await fetch('/api/watchlist/chart/' + encodeURIComponent(code), { cache: 'no-store' });
+      const payload = await response.json();
+      if (!response.ok) { state.chartCache.delete(code); throw new Error(payload.error || '株価を取得できませんでした'); }
+      if (revision === state.chartRevision) state.chartCache.set(code, payload);
       if (revision === state.chartRevision && code === state.code) drawChart();
     } catch (error) { if (revision !== state.chartRevision) return; $('wl-chart-status').replaceChildren(document.createTextNode(error.message + ' ')); const retry = make('button', 'btn-sm', '再試行'); retry.onclick = () => loadChart(code); $('wl-chart-status').append(retry); }
   }
@@ -287,7 +290,8 @@
     renderAddChecks(); syncAddButton();
     if (state.code) renderSettings(byCode.get(state.code));
   }
-  window.addEventListener('pageshow', restoreControls);
+  window.addEventListener('pageshow', e => { restoreControls(); if (e.persisted && state.code) loadChart(state.code); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && state.code) loadChart(state.code); });
   window.addEventListener('popstate', () => { const p = new URLSearchParams(location.search); state.list = p.get('list') || 'all'; state.query = p.get('q') || ''; state.sort = p.get('sort') || 'added'; select(byCode.has(p.get('code')) ? p.get('code') : ''); restoreControls(); renderPills(); renderList(); });
   if (!['all', 'unclassified', ...data.lists.map(l => String(l.id))].includes(state.list)) state.list = 'all';
   const initial = params.get('code') || location.hash.replace('#wl-', '');

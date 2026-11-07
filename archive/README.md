@@ -8,6 +8,7 @@
 
 | ファイル | 元の役割 | 現在の代替 |
 |---|---|---|
+| `splits_legacy_2026_07.py` / `split_backfill_legacy_2026_07.py` | 段差検証・価格への後掛け補正 | `corporate_actions` / `price_pipeline` / `price_store` / `price_verification` |
 | `prices.py` | J-Quants日次価格取得 | `prices_yahoo.py`（J-Quants無料枠は12週のみのため移行） |
 | `backfill_yahoo.py` | Yahoo過去2年分の一括バックフィル | 完了済みの一回きり作業 |
 | `fetch_historical_prices.py` | J-Quants過去分の一括取得 | 同上 |

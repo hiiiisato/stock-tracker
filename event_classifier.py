@@ -103,7 +103,7 @@ def _load_continuation(cur, codes: list[str], ranking_date: date) -> dict:
 
 
 def _topix_change(cur, ranking_date: date) -> float | None:
-    cur.execute("SELECT change_pct FROM daily_prices WHERE code='1306' AND date=%s", (ranking_date,))
+    cur.execute("SELECT change_pct FROM price_history WHERE code='1306' AND date=%s", (ranking_date,))
     r = cur.fetchone()
     return float(r[0]) if r and r[0] is not None else None
 

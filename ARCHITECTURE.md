@@ -74,8 +74,8 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 
 1. 主要指数更新 (`market_indices`)
 2. 銘柄マスタ・取引カレンダー (`master`) → 直後に**銘柄名の名寄せインデックス** (`stock_aliases`) を張り直す
-3. 価格取得 Yahoo差分 (`prices_yahoo`) — adj_close含む
-4. **分割対応** (`splits`) — J-Quants公式AdjFactor/AdjCが正。価格急変ヒューリスティックは誤判定するため廃止済み
+3. **公式権利台帳更新** (`corporate_actions`) — JPX予定表・月報・TDnet本文。全体の取得失敗時は価格公開を次便へ持ち越す
+4. 価格取得・正規化・公開 (`prices_yahoo` → `price_pipeline` → `price_store`) — 原本から当時値と分割調整済みOHLCVを銘柄別トランザクションで更新し、台帳との整合性を検査する
 5. 【月曜のみ】配当 (`dividends`)・財務 (`financials`)・ファンダ (`fundamentals`)・TDnet短信の広域取込 (`financials_tdnet` 過去30日)
 6. テーマスコア (`theme_score`)
 7. PER/PBR等の最新値再計算 (`fundamentals.recompute_price_metrics`)
@@ -96,7 +96,8 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 - `config.py` — DB接続・bulk_upsert・APIキー・理論株価の係数テーブル。**設定値は必ずここに置く**
   - `with db() as cur:` — 例外時も必ずrollback+closeする接続。**app.py（常駐プロセス）の新規コードはこちらを使う**。`get_conn()`は自前でclose管理する既存コード・バッチ用
 - `batch_dates.py` — GitHub Actionsの遅延・UTCホスト差を吸収するJST時刻、直近日曜、イブニング対象営業日の共通ルール
-- `render.yaml` — Render.com のサービス定義（本番のスケジューラ）
+- `render.yaml` — Render.com のWebサービス定義（定期処理は持たない）
+- `infra/cloudflare-scheduler/` — 本番の一次スケジューラ。JST実行表を1本のCloudflare Cronに集約し、GitHub Actionsを起動
 
 ### データ取得
 - `master.py` — 銘柄マスタ・取引カレンダー（J-Quants）
@@ -110,16 +111,18 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
   「フジ」等の曖昧な別名では誤リンクさせない。更新は**追記型**（社名変更後も旧社名で引ける。
   正規化ルールを変えた時のみ `python stock_aliases.py --rebuild`）。
   利用側: `youtube_insights._resolve_code` / `/api/search`
-- `prices_yahoo.py` — 日次価格（Yahoo Finance chart API・並列・差分）。大引けデータ確定前の手動救済は
+- `prices_yahoo.py` — 日次価格（Yahoo Finance chart API・並列）。DB全体のMAX日付だけに依存せず、
+  **直近14日を全銘柄で毎回再取得・UPSERT**して、数日停止と途中終了（一部銘柄だけ最新）の両方を自己修復する。
+  公式営業日の価格件数が有効銘柄の90%未満なら成功扱いにせず次便へ再試行する。大引けデータ確定前の手動救済は
   `batch_dates.price_fetch_end_date` により前日までに限定し、Yahooが`period2`境界より後の足を返しても
   レスポンス側で要求範囲外を除外して当日の未確定日足を保存しない
-- `splits.py` — 株式分割・併合。CRSP等の業界標準（生値＋調整係数分離・イベントは公式コーポレートアクション由来）に倣った多層防御:
-  1. **J-Quants公式**(AdjFactor/AdjC)が正（12週遅延）。AdjC採用日には係数を重ねない
-  2. 直近窓はYahoo splitsで暫定検知 → **TDnet適時開示（disclosures・事前公表）で裏取り**。
-     裏取りあり=通常帯(0.7-1.4)/なし=厳格帯(0.85-1.18)で `_verify_split_reflected()` の段差検証
-  3. 係数の**適用時にも毎回検証**（登録済みイベントでもcloseに段差が無ければ適用しない＝最後の防波堤）
-  4. `run_integrity_check()` — 「closeは正常なのにadjだけ跳ねる」箇所を毎晩スキャン→自動修復（daily_runから呼出）
-- `split_backfill.py` — splits.py から `recompute_change_pct` が使われる（他は初期バックフィルの名残）
+- `corporate_actions.py` — JPX予定表（権利落ち日）、月報（確定比率）、TDnet本文（直近の比率・訂正・取消）を公式台帳へ取り込む。PDF/XLS原本も保持。TDnetの短期URL失効時はJPXの同じ開示番号へ切り替える。
+- `price_adjustments.py` — Decimalによる価格・株数係数と基準判定。隣接日の値動きではなく、同日の公式当時値と提供値を比較。価格と出来高を別々に判定し、配当込みadjcloseは使わない。
+- `price_pipeline.py` — 唯一の価格公開経路。台帳変更・分割・取消・失敗時は過去を取り直して再生成。曖昧なものは保留。`--migrate` → `--sync-actions --history` → `--repair` が初回移行手順。`--codes` で限定可。更新前の旧系列はlegacy原本へ退避する。
+- `price_store.py` — 原本保存・互換マイグレーション・銘柄別の原子的公開。`daily_prices` は当時値と調整済み値を分離して保持し、分析・チャートは **`price_history`**、指標は **`price_stats_current`** を読む。約定再現など当時値が必要な箇所は `raw_price_history` を明示する。WebからDDLは実行しない。
+- `price_verification.py` — J-Quants Freeを12週＋安全余裕1日後に照合。V2のfrom/to・全ページ対応、DBによる全プロセス共通の呼出間隔、処理済み日・不一致の再試行を管理。夜間00:30のmisc_batchが毎日実行。初期移行の参照日は日付指定で全銘柄を取得する。
+- `splits.py` — 既存CLIの互換窓口。旧処理・旧バックフィルは `archive/splits_legacy_2026_07.py` / `archive/split_backfill_legacy_2026_07.py` に保管。
+- `ai_fund_adjustments.py` — 模擬運用の保有株数・取得単価・未約定注文を同じ公式イベントで補正。適用台帳で二重処理を防止し、約定原本・現金は変更しない。端株・ライツ・適用済み情報の訂正は要確認として評価を止める。
 - `dividends.py` — J-Quants 配当
 - `financials.py` — Yahoo Finance の損益/BS（crumb方式）。**穴埋め専用フォールバック**:
   権威データは TDnet(financials_tdnet)。Yahooは日本株の売上/粗利/営業益を欠損時に "0" で返すため
@@ -332,14 +335,20 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 |---|---|---|
 | マスタ | `stocks` `markets` `sectors` `trading_calendar` | master.py |
 | マスタ | `stock_aliases` | stock_aliases.py（社名の読み・別名→コード。EDINET公式コードリストの「提出者名（ヨミ）」＋正式名/英語名。日次バッチのマスタ更新直後に追記更新） |
-| 価格 | `daily_prices` | prices_yahoo.py（adj_close=分割調整済。splits.pyが再計算） |
-| 価格 | `stock_splits` | splits.py（分割イベント。J-Quants公式が正） |
+| 価格 | `daily_prices` | price_pipeline（当時値OHLCV＋調整済みOHLCV・基準・公開版） |
+| 価格・ビュー | `price_history` / `raw_price_history` | 公開可の系列だけを提供。前者は調整済み、後者は当時値。画面側で追加補正しない |
+| 価格 | `price_source_snapshots` | 取得原本・公式文書・移行前の旧系列（圧縮・ハッシュ保存） |
+| 価格 | `corporate_actions` / `corporate_action_history` | 公式権利台帳と改訂履歴。比率・権利落ち日・出典・状態 |
+| 価格 | `price_adjustment_state` | 銘柄別の公開版・適用台帳ハッシュ・価格日・保留理由 |
+| 価格 | `price_official_checks` / `price_sync_state` | J-Quants公式当時値・照合結果・再開位置・共有レート制限 |
+| 価格 | `stock_splits` | 旧CLIとの互換投影。現役の価格判断・通知はcorporate_actionsを使用 |
+| AIファンド | `ai_fund_action_applications` | 保有・未約定注文への権利適用履歴（ai_fund_adjustments。模擬運用の単位を維持） |
 | 価格 | `market_index_prices` | market_indices.py |
 | 財務 | `financials` | financials.py + financials_tdnet.py（TDnet短信XBRL・**未来日付の期=会社予想**）+ financials_edinet.py（有報で欠損穴埋め） |
 | 財務 | `financials_edinet_annual` `financials_edinet_quarterly` | financials_edinet.py（有報の豊富な年次/四半期データ約60項目・生値精密） |
 | 財務 | `financials_edinet_meta` `financials_edinet_qmeta` | financials_edinet.py（年次/四半期の取得済メタ・90日周期で再取得） |
 | 財務 | `financials_forecast` `dividends` `stock_fundamentals` | 各取得モジュール |
-| 指標 | `price_stats` | compute_price_stats.py（最新値のみ） |
+| 指標 | `price_stats` / `price_stats_current` | compute_price_stats（最新値と元の価格版。参照ビューは公開価格と版が一致する指標だけを返す） |
 | 指標 | `price_stats_history` | compute_stats_history.py（週次・バックテスト用） |
 | 指標 | `stock_metrics_history` | 旧方式（archive/compute_metrics_history.py）。現役コードから参照なし・更新停止 |
 | 分析 | `theoretical_values` | compute_theoretical.py |
@@ -376,16 +385,10 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 
 ## 落とし穴（過去に踏んだもの）
 
-- **daily_prices.close は生値とは限らない**。Yahooのcloseは銘柄により生値/調整済みが混在。
-  分割処理は必ず「実際の価格変化と期待比率の照合」(`splits._verify_split_reflected`)を通す。
-  **検証はどの経路でも省略禁止**（2026-07: J-Quants経路と日次検知が無検証で係数を掛け、
-  フジクラ5803等178イベント・約130銘柄のadj_closeが二重調整で汚染された）。教訓3点:
-  (1) Yahooは偽の分割イベントを返す（3/30に51件の偽クラスタ等）
-  (2) 検証の許容帯は狭く。旧0.5〜2.0倍では「1:2分割が未反映(rel≈2.0)」が素通りした（8031で実害）
-  (3) J-QuantsのAdjCは「価格データ窓より未来の除権日」まで反映済み。AdjCの上に係数を重ねない
-- **Yahooのadjcloseは配当・分配金まで調整する**ため採用しない（方針は分割のみ調整）。
-  prices_yahoo は adj_close=close で書き、調整は splits.run_daily が一元管理
-  （大型分配のインフラファンド9282でadjがズレた実害から修正）
+- **取得値のcloseを無条件に当時値とみなさない**。旧DBには生値と分割後基準が混在していた。新方式は原本・公式台帳・公開系列を分離し、同日の公式当時値で基準を確認してから保存する。旧方式の「権利落ち日前後の段差検証」は遅延取得時に失敗するため廃止。登録済みでも適用ハッシュが違えば全履歴を再生成する。
+- **Yahooのadjcloseは配当・分配金込み**。価格源にはquoteを使い、公式台帳から分割・併合等だけを調整する。J-QuantsのAdjCにはさらに係数を掛けない。
+- **無料枠より古い分割で基準確認ができない系列**は、取得できる公式当時値の期間＋全権利実施後の直近価格から再構築する。確認できない古い区間は原本に保持し、正常なチャートへ混ぜない。新方式の公開ビューでは未確認行を除外する。
+- **価格公開後の指標・キャッシュ**: 指標にsource_price_versionを保持し、価格と異なる版はprice_stats_currentで除外。キャッシュはDBの公開状態世代で5秒以内に失効する。ブラウザー復帰時もチャートを再取得する。
 - **financialsに未来日付の期が入っている**（会社予想）。実績として使う時は `period_end <= CURDATE()` で除外
 - **バックテストの先読み防止**: ファンダは期末+45日を公開日とみなす（PIT補正）。price_stats_history生成時に適用済み
 - **業績修正・増配のバックテストは必ず `forecast_revisions.reaction_date` を基準にする**。
@@ -411,8 +414,7 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 ### 株価データ品質の知見（2026-07-06のETF/REITスパイク大規模修復で判明）
 
 - **J-Quantsの `AdjC` は取得時点の全分割を織り込んだ累積調整済み値**。データ窓（無料枠は
-  約12週遅延・過去2年）の外で起きた分割も反映される。ただし窓外の分割は `AdjFactor` 行と
-  しては現れないため、`AdjC/C` 比（=その日以降の全分割の累積乗数）から導出する
+  約12週遅延・過去2年）の外で起きた分割も反映される。ただし窓外の分割は `AdjFactor` 行としては現れないため、公式月報・開示の台帳と合わせて検証する。比だけから日付・イベントを創作しない
 - **Yahoo chart APIの `close` は銘柄により生値/分割調整済みが混在**し、しかも取得時点の
   基準で歴史が書き換わる。DBに過去に書き込んだcloseと今取得するcloseは基準が違うことがある。
   基準判定は「C≠AdjCの判別日」だけで比較すること（C=AdjCの日は判別力ゼロ）

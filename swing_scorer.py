@@ -64,7 +64,7 @@ def _fetch_stocks() -> list[dict]:
             SELECT ps.code, s.name,
                    ps.close, ps.ma50, ps.ma200, ps.ma200_slope,
                    ps.chg126d, ps.vol20_ratio, ps.rsi14, ps.dev_high52w
-            FROM price_stats ps
+            FROM price_stats_current ps
             JOIN stocks s ON s.code = ps.code
             WHERE ps.close IS NOT NULL AND ps.close > 0
               AND s.is_active = 1

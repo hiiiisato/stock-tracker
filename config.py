@@ -1,5 +1,6 @@
 import os
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 import pymysql
 from dotenv import load_dotenv
@@ -23,6 +24,16 @@ STOCK_MEMO_MAX_BYTES = 65535  # 既存のstock_memos.content（TEXT）の容量
 STOCK_MEMO_TITLE_MAX_LENGTH = 200
 STOCK_MEMO_URL_MAX_LENGTH = 2048
 WATCHLIST_CHART_YEARS = 3
+
+# 価格は取得原本・公式権利台帳・公開済み系列を分離する。すべて無料枠内。
+PRICE_HISTORY_START = "2024-01-01"
+PRICE_REPAIR_DAYS = 14
+PRICE_JQUANTS_DELAY_DAYS = 84
+PRICE_JQUANTS_REQUEST_INTERVAL = 13.0  # Free: 5回/分。並列呼出は禁止
+PRICE_JQUANTS_AUDIT_DATES = 3
+PRICE_ACTION_DISCLOSURE_LIMIT = 30
+PRICE_ACTION_HTTP_TIMEOUT = 30
+PRICE_NIGHTLY_REPAIR_CODES = 40
 
 
 def _resolve_ssl_ca() -> str:
@@ -59,11 +70,30 @@ def get_conn():
     return pymysql.connect(**DB_CONFIG)
 
 
+_batch_connection = ContextVar("price_batch_connection", default=None)
+
+
+@contextmanager
+def price_db_session():
+    """価格バッチだけ接続を再利用。各db()のcommit/rollback境界は維持する。"""
+    if _batch_connection.get() is not None:
+        yield
+        return
+    connection = get_conn()
+    token = _batch_connection.set(connection)
+    try:
+        yield
+    finally:
+        _batch_connection.reset(token)
+        connection.close()
+
+
 @contextmanager
 def db():
     """`with db() as cur:` — 例外時も必ず rollback + close する安全な接続。
     正常終了時は自動で commit。常駐プロセス(app.py)の接続リーク防止に使う。"""
-    conn = pymysql.connect(**DB_CONFIG)
+    shared = _batch_connection.get()
+    conn = shared if shared is not None else pymysql.connect(**DB_CONFIG)
     try:
         cur = conn.cursor()
         yield cur
@@ -72,7 +102,8 @@ def db():
         conn.rollback()
         raise
     finally:
-        conn.close()
+        if shared is None:
+            conn.close()
 
 
 def bulk_upsert(cur, table, columns, rows, update_cols=None, batch_size=500, fill_only_cols=None):
