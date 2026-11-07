@@ -37,7 +37,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 60   # パイプライン全体の所要増に合わせて拡大（旧30分では途中killが発生）
+    timeout-minutes: 90   # 全銘柄の公式照合を含む救済便にも余裕を持たせる（通常便は完了時点で終了）
 
     steps:
       - name: Checkout
