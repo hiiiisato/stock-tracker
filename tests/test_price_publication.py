@@ -1,6 +1,6 @@
 """隔離DBで公開・ロールバック・参照経路を通し、取得層の継続処理も検証する。"""
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal as D
 import re
 import sqlite3
@@ -37,6 +37,26 @@ class Cursor:
 
 
 class PublicationTest(unittest.TestCase):
+    def test_theme_reindex_compounds_correctly_across_small_transactions(self):
+        import theme_score
+        conn=Mock();cur=conn.cursor.return_value
+        cur.fetchall.return_value=[(date(2026,9,1)+timedelta(days=i),1,1,100,0.5,999) for i in range(3)]
+        with patch.object(theme_score,'PRICE_DERIVED_COMMIT_ROWS',2), \
+                patch.object(theme_score,'bulk_upsert') as save,patch.object(store,'bump_generation') as changed:
+            self.assertEqual(theme_score._update_derived(conn),3)
+        chunks=[call.args[3] for call in save.call_args_list]
+        self.assertEqual([len(c) for c in chunks],[2,1])
+        self.assertEqual([r[2] for c in chunks for r in c],[100.,101.,102.01])
+        self.assertEqual(conn.commit.call_count,3)
+        changed.assert_called_once_with(cur)
+
+    def test_theme_day_rebuilds_history_when_price_series_revision_changes(self):
+        import theme_score
+        conn=Mock();conn.cursor.return_value.fetchall.return_value=[('historical_prices_revision','2'),('theme_history_revision','1')]
+        with patch.object(theme_score,'get_conn',return_value=conn),patch.object(theme_score,'compute_all') as rebuild:
+            theme_score.compute_day(date(2026,9,29))
+        rebuild.assert_called_once_with()
+
     def setUp(self):
         self.conn = sqlite3.connect(":memory:", detect_types=sqlite3.PARSE_DECLTYPES)
         self.conn.executescript("""

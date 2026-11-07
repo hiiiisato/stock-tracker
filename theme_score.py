@@ -21,7 +21,7 @@ from __future__ import annotations
 import sys
 from collections import defaultdict
 from datetime import date
-from config import get_conn, bulk_upsert
+from config import get_conn, bulk_upsert, PRICE_DERIVED_COMMIT_ROWS
 
 # ═══════════════════════════════════════════════════════════
 #  チューニングパラメータ（変更しやすいよう先頭にまとめる）
@@ -215,13 +215,19 @@ def _update_derived(conn, since: date | None = None) -> int:
             ])
 
     # (date, theme_id) ユニークキーで既存行の派生3列だけ更新（batched・数十万行でも実用速度）
-    bulk_upsert(
-        cur, "theme_daily_stats",
-        ["date", "theme_id", "index_value", "turnover_surge", "heat_score"],
-        out_rows,
-        update_cols=["index_value", "turnover_surge", "heat_score"],
-    )
-    conn.commit()
+    # 無料TiDBで数十万行を同一トランザクションに保持しない。
+    # 再実行は同じ値をUPSERTするため、途中停止から安全に再開できる。
+    for start in range(0,len(out_rows),PRICE_DERIVED_COMMIT_ROWS):
+        bulk_upsert(
+            cur, "theme_daily_stats",
+            ["date", "theme_id", "index_value", "turnover_surge", "heat_score"],
+            out_rows[start:start+PRICE_DERIVED_COMMIT_ROWS],
+            update_cols=["index_value", "turnover_surge", "heat_score"],
+        )
+        conn.commit()
+    if out_rows:
+        from price_store import bump_generation
+        bump_generation(cur);conn.commit()
     cur.close()
     return len(out_rows)
 
@@ -233,6 +239,13 @@ def _update_derived(conn, since: date | None = None) -> int:
 def compute_day(target_date: date = None) -> None:
     """指定日（省略時: daily_prices の最新日）の統計を計算し DB に保存する"""
     conn = get_conn()
+    cur=conn.cursor()
+    cur.execute("SELECT name,value FROM price_sync_state WHERE name IN (%s,%s)",
+                ('historical_prices_revision','theme_history_revision'))
+    versions=dict(cur.fetchall());cur.close()
+    if versions.get('historical_prices_revision') != versions.get('theme_history_revision'):
+        conn.close()
+        return compute_all()
 
     if target_date is None:
         cur = conn.cursor()
@@ -256,9 +269,13 @@ def compute_all() -> None:
     """
     conn = get_conn()
     cur = conn.cursor()
+    cur.execute("SELECT value FROM price_sync_state WHERE name=%s",('historical_prices_revision',))
+    revision=cur.fetchone()
     cur.execute("SELECT DISTINCT date FROM price_history ORDER BY date")
     dates = [r[0] for r in cur.fetchall()]
     cur.close()
+    if not dates:
+        conn.close();return
 
     print(f"  対象期間: {dates[0]} 〜 {dates[-1]}  ({len(dates)} 営業日)")
     theme_stocks = _get_theme_stocks(conn)
@@ -273,6 +290,10 @@ def compute_all() -> None:
     print("  派生値を再計算中...")
     n_der = _update_derived(conn)
     print(f"  派生値: {n_der} 行更新完了")
+    if revision:
+        cur=conn.cursor()
+        bulk_upsert(cur,'price_sync_state',['name','value','error'],[('theme_history_revision',revision[0],None)])
+        conn.commit();cur.close()
     conn.close()
 
 

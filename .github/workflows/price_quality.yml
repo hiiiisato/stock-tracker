@@ -2,9 +2,7 @@ name: 価格データの回帰検証
 
 on:
   push:
-    paths: ['price*.py', 'corporate_actions.py', 'master.py', 'splits.py', 'ai_fund*.py', 'compute_*stats*.py', 'app.py', 'watchlist_workspace.py', 'static/watchlist.js', 'tests/**', 'requirements.txt', '.github/workflows/price_quality.yml']
   pull_request:
-    paths: ['price*.py', 'corporate_actions.py', 'master.py', 'splits.py', 'ai_fund*.py', 'compute_*stats*.py', 'app.py', 'watchlist_workspace.py', 'static/watchlist.js', 'tests/**', 'requirements.txt', '.github/workflows/price_quality.yml']
   workflow_dispatch:
 
 permissions:

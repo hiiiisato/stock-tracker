@@ -610,6 +610,8 @@ def run() -> int:
         ph = ",".join(["%s"] * len(computed_codes))
         cur.execute(f"DELETE FROM theoretical_values WHERE code NOT IN ({ph})",
                     computed_codes)
+        from price_store import bump_generation
+        bump_generation(cur)
         conn.commit()
         cur.close()
         conn.close()

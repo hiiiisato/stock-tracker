@@ -719,6 +719,8 @@ def run() -> int:
     all_cols = ["code", "updated_at"] + STAT_COLS + ["source_price_version"]
     bulk_upsert(cur, "price_stats", all_cols, rows,
                 update_cols=[c for c in all_cols if c != "code"])
+    from price_store import bump_generation
+    bump_generation(cur)
     conn.commit()
     cur.close()
     conn.close()

@@ -373,10 +373,12 @@ def run(backfill=False, weeks=None, latest_only=False):
             total += len(rows)
         print(f"  [{i+1}/{len(snap_dates)}] {D}: {len(rows)}銘柄  (累計 {total})")
     # 全週の保存後にだけ完了を記録する。途中終了した場合は次便で同じ版を再実行できる。
-    if rebuild_codes:
+    if total or rebuild_codes:
         conn = get_conn(); cur = conn.cursor()
         bulk_upsert(cur,"price_sync_state",["name","value","error"],
                     [(f"history_series:{c}",revisions[c],None) for c in sorted(rebuild_codes)])
+        from price_store import bump_generation
+        bump_generation(cur)
         conn.commit(); cur.close(); conn.close()
     print(f"\n完了: {total} 行保存")
     return total

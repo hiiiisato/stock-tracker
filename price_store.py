@@ -261,11 +261,11 @@ def lock_code(cur, code: str) -> None:
     cur.fetchone()
 
 
-def bump_generation(cur) -> None:
+def bump_generation(cur, name: str = "publication_generation") -> None:
     # 公開トランザクションと同時に単調増加。ハッシュ和の衝突へ依存しない。
     cur.execute("""INSERT INTO price_sync_state (name,value) VALUES (%s,%s)
                    ON DUPLICATE KEY UPDATE value=CAST(value AS UNSIGNED)+1""",
-                ("publication_generation", "1"))
+                (name, "1"))
 
 
 def publish(cur, code: str, rows: list[dict], actions: list[Action], basis_date: date,
@@ -301,6 +301,7 @@ def publish(cur, code: str, rows: list[dict], actions: list[Action], basis_date:
                    WHERE code=%s AND (series_revision IS NULL OR %s)""", (version,code,rebuild))
     if rebuild:
         cur.execute("UPDATE price_adjustment_state SET published_from=%s WHERE code=%s",(day(rows[0]['date']),code))
+        bump_generation(cur,"historical_prices_revision")
     bump_generation(cur)
 
 
