@@ -13,6 +13,13 @@ def candle(dt, close, volume=300):
 
 
 class PriceAdjustmentTest(unittest.TestCase):
+    def test_adjusted_values_derive_from_the_values_actually_stored(self):
+        action=Action('285A',date(2026,9,29),D('0.2042'),D(1))
+        row=normalize([candle('2026-09-28',100,58320)],[action],date(2026,10,30),'split_adjusted')[0]
+        self.assertEqual(row['adj_volume'],(D(row['volume'])*action.volume_factor).quantize(D('0.0001')))
+        self.assertEqual(row['adj_close'],(row['close']*action.price_factor).quantize(D('0.0001')))
+        self.assertEqual(row['turnover'],int(row['close']*row['volume']))
+
     def setUp(self):
         self.basis = date(2026, 10, 30)
         self.action = Action("285A", date(2026, 9, 29), D(1), D(3))

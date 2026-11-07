@@ -116,11 +116,11 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
   公式営業日の価格件数が有効銘柄の90%未満なら成功扱いにせず次便へ再試行する。大引けデータ確定前の手動救済は
   `batch_dates.price_fetch_end_date` により前日までに限定し、Yahooが`period2`境界より後の足を返しても
   レスポンス側で要求範囲外を除外して当日の未確定日足を保存しない
-- `corporate_actions.py` — JPX予定表（権利落ち日）、月報（確定比率）、TDnet本文（直近の比率・訂正・取消）を公式台帳へ取り込む。PDF/XLS原本も保持。TDnetの短期URL失効時はJPXの同じ開示番号へ切り替える。
+- `corporate_actions.py` — JPX予定表（権利落ち日）、月報（確定比率）、TDnet本文（直近の比率・訂正・取消）を公式台帳へ取り込む。PDF/XLS原本も保持。予定表の掲載期間を過ぎた提供元候補も、保存済み公式開示の基準日と公式カレンダーで検証する。TDnetの短期URL失効時はJPXの同じ開示番号へ切り替える。
 - `price_adjustments.py` — Decimalによる価格・株数係数と基準判定。隣接日の値動きではなく、同日の公式当時値と提供値を比較。価格と出来高を別々に判定し、配当込みadjcloseは使わない。
 - `price_pipeline.py` — 唯一の価格公開経路。台帳変更・分割・取消・失敗時は過去を取り直して再生成。曖昧なものは保留。`--migrate` → `--sync-actions --history` → `--repair` が初回移行手順。`--codes` で限定可。更新前の旧系列はlegacy原本へ退避する。
-- `price_store.py` — 原本保存・互換マイグレーション・銘柄別の原子的公開。`daily_prices` は当時値と調整済み値を分離して保持し、分析・チャートは **`price_history`**、指標は **`price_stats_current`** を読む。約定再現など当時値が必要な箇所は `raw_price_history` を明示する。WebからDDLは実行しない。
-- `price_verification.py` — J-Quants Freeを12週＋安全余裕1日後に照合。V2のfrom/to・全ページ対応、DBによる全プロセス共通の呼出間隔、処理済み日・不一致の再試行を管理。夜間00:30のmisc_batchが毎日実行。初期移行の参照日は日付指定で全銘柄を取得する。
+- `price_store.py` — 原本保存・互換マイグレーション・銘柄別の原子的公開。`daily_prices` は当時値と調整済み値を分離して保持し、分析・チャートは **`price_history`**、指標は **`price_stats_current`**、週次指標は **`price_stats_history_current`** を読む。約定再現など当時値が必要な箇所は `raw_price_history` を明示する。WebからDDLは実行しない。
+- `price_verification.py` — J-Quants Freeを12週＋安全余裕1日後に照合。V2のfrom/to・全ページ対応、DBによる全プロセス共通の呼出間隔、処理済み日・不一致の再試行を管理。価格・出来高の調整前後のOHLCV全項目を照合し、429の待機期限も全プロセスで共有する。夜間00:30のmisc_batchが毎日実行。初期移行の参照日は日付指定で全銘柄を取得する。
 - `splits.py` — 既存CLIの互換窓口。旧処理・旧バックフィルは `archive/splits_legacy_2026_07.py` / `archive/split_backfill_legacy_2026_07.py` に保管。
 - `ai_fund_adjustments.py` — 模擬運用の保有株数・取得単価・未約定注文を同じ公式イベントで補正。適用台帳で二重処理を防止し、約定原本・現金は変更しない。端株・ライツ・適用済み情報の訂正は要確認として評価を止める。
 - `dividends.py` — J-Quants 配当

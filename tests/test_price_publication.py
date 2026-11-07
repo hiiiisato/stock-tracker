@@ -47,10 +47,10 @@ class PublicationTest(unittest.TestCase):
           CREATE TABLE corporate_actions (code TEXT,ex_date DATE,old_shares DECIMAL,new_shares DECIMAL,
             kind TEXT,status TEXT,source TEXT,source_url TEXT,record_date DATE,effective_date DATE,price_ratio DECIMAL);
           CREATE TABLE price_adjustment_state (code TEXT PRIMARY KEY,status TEXT,action_digest TEXT,
-            published_version TEXT,price_date DATE,basis TEXT,error TEXT,updated_at DATETIME,source_observed_at DATETIME,series_revision TEXT);
+            published_version TEXT,price_date DATE,basis TEXT,error TEXT,updated_at DATETIME,source_observed_at DATETIME,series_revision TEXT,published_from DATE);
           CREATE TABLE price_official_checks (code TEXT,date DATE,open DECIMAL,high DECIMAL,low DECIMAL,close DECIMAL,volume INT,
             official_adj_close DECIMAL,official_adj_open DECIMAL,official_adj_high DECIMAL,official_adj_low DECIMAL,official_adj_volume DECIMAL,
-            status TEXT,error TEXT,checked_at DATETIME);
+            status TEXT,error TEXT,checked_at DATETIME,reference_basis_date DATE);
           CREATE TABLE price_sync_state (name TEXT PRIMARY KEY,value TEXT,error TEXT,checked_at DATETIME);
           CREATE VIEW price_history AS SELECT p.id,p.code,p.date,p.adj_open AS open,p.adj_high AS high,
             p.adj_low AS low,p.adj_close AS close,p.adj_volume AS volume FROM daily_prices p
@@ -112,6 +112,25 @@ class PublicationTest(unittest.TestCase):
         with self.db() as cur:
             store.publish(cur,"285A",self.rows,[self.action],self.basis,"raw","corrected_history",rebuild=True)
         self.assertNotEqual(revision(),first)
+
+    def test_expired_schedule_candidate_needs_official_record_date_and_complete_calendar(self):
+        import corporate_actions as official
+        self.conn.executescript("""CREATE TABLE disclosures (code TEXT,title TEXT,pdf_url TEXT,disclosed_at DATE);
+            CREATE TABLE trading_calendar (date DATE,is_holiday INT);
+            INSERT INTO disclosures VALUES ('1321','受益権分割','https://www2.jpx.co.jp/disc/13210/140120260825525905.pdf','2026-08-25');
+            INSERT INTO trading_calendar VALUES ('2026-10-05',0),('2026-10-06',0);""")
+        document=Mock(); document.__enter__=Mock(return_value=document); document.__exit__=Mock(return_value=False)
+        document.pages=[Mock(extract_text=Mock(return_value='NEXT FUNDS 日経225 (1321) 1口を100口に分割 2026年10月6日 2026年10月7日 NEXT FUNDS 別銘柄 (1328) 1口を50口に分割 2026年10月30日'))]
+        with patch.object(official,'db',self.db),patch.object(official,'get_bytes',return_value=b'pdf'), \
+                patch.object(official,'_remember_document'),patch.object(official,'put_action') as put, \
+                patch('pdfplumber.open',return_value=document):
+            self.assertTrue(official.confirm_disclosed_candidate('1321',date(2026,10,5)))
+            action=put.call_args.args[0]
+            self.assertEqual((action.before,action.after,action.record_date),(D(1),D(100),date(2026,10,6)))
+            document.pages=[Mock(extract_text=Mock(return_value='対象ETF NEXT FUNDS 日経225 (1321) NEXT FUNDS 金 (1328) 分割比率 (1321)1口を100口に分割 (1328)1口を50口に分割 分割基準日/分割効力発生日 (1321)2026年10月6日2026年10月7日 (1328)2026年10月30日2026年11月2日'))]
+            self.assertTrue(official.confirm_disclosed_candidate('1321',date(2026,10,5)))
+            self.conn.execute("DELETE FROM trading_calendar WHERE date='2026-10-06'");self.conn.commit()
+            self.assertFalse(official.confirm_disclosed_candidate('1321',date(2026,10,5)))
 
     def test_historical_technical_close_and_ma_use_the_same_basis(self):
         from compute_price_stats import compute_stock_stats, STAT_COLS

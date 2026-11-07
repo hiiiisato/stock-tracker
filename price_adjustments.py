@@ -144,7 +144,7 @@ def normalize(rows: list[dict], actions: list[Action], basis_date: date, source_
                 value = number(row.get(field))
                 raw = value / pf if value is not None and source_basis == "split_adjusted" else value
                 result[field] = raw.quantize(Decimal("0.0001")) if raw is not None else None
-                result["adj_" + field] = (raw * pf).quantize(Decimal("0.0001")) if raw is not None else None
+                result["adj_" + field] = (result[field] * pf).quantize(Decimal("0.0001")) if raw is not None else None
             close = result["close"]
             if close is None or close <= 0:
                 raise PriceBasisError(f"{dt}: 正の終値が必要です")
@@ -161,8 +161,8 @@ def normalize(rows: list[dict], actions: list[Action], basis_date: date, source_
                 raise PriceBasisError(f"{dt}: 出来高が負です")
             raw_volume = volume / vf if volume is not None and volume_basis == "split_adjusted" else volume
             result["volume"] = int(raw_volume.to_integral_value()) if raw_volume is not None else None
-            result["adj_volume"] = (raw_volume * vf).quantize(Decimal("0.0001")) if raw_volume is not None else None
-            result["turnover"] = int(close * raw_volume) if raw_volume is not None else None
+            result["adj_volume"] = (Decimal(result["volume"]) * vf).quantize(Decimal("0.0001")) if raw_volume is not None else None
+            result["turnover"] = int(close * result["volume"]) if raw_volume is not None else None
             result["change_pct"] = ((result["adj_close"] / previous - 1) * 100).quantize(Decimal("0.0001")) if previous else None
             previous = result["adj_close"]
             out.append(result)

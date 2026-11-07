@@ -85,7 +85,8 @@ def ensure_schema() -> None:
         cur.execute("SHOW COLUMNS FROM price_official_checks")
         check_columns = {r[0] for r in cur.fetchall()}
         for name, definition in {"official_adj_open":"DECIMAL(18,4) NULL", "official_adj_high":"DECIMAL(18,4) NULL",
-                                 "official_adj_low":"DECIMAL(18,4) NULL", "official_adj_volume":"DECIMAL(24,4) NULL"}.items():
+                                 "official_adj_low":"DECIMAL(18,4) NULL", "official_adj_volume":"DECIMAL(24,4) NULL",
+                                 "reference_basis_date":"DATE NULL"}.items():
             if name not in check_columns:
                 cur.execute(f"ALTER TABLE price_official_checks ADD COLUMN `{name}` {definition}")
         cur.execute("""CREATE TABLE IF NOT EXISTS price_sync_state (
@@ -113,6 +114,8 @@ def ensure_schema() -> None:
             # 初回移行: 再生成済みの系列と古い週次指標を区別する。原本は変更しない。
             cur.execute("ALTER TABLE price_adjustment_state ADD COLUMN series_revision CHAR(64) NULL")
             cur.execute("UPDATE price_adjustment_state SET series_revision=published_version WHERE published_version IS NOT NULL")
+        if "published_from" not in state_columns:
+            cur.execute("ALTER TABLE price_adjustment_state ADD COLUMN published_from DATE NULL")
         cur.execute("SHOW COLUMNS FROM price_stats")
         if "source_price_version" not in {r[0] for r in cur.fetchall()}:
             cur.execute("ALTER TABLE price_stats ADD COLUMN source_price_version CHAR(64) NULL")
@@ -147,6 +150,7 @@ def ensure_schema() -> None:
                        WHERE status<>'cancelled' AND ex_date <= DATE(UTC_TIMESTAMP()+INTERVAL 9 HOUR)
                        GROUP BY code) due ON due.code=p.code
             WHERE (s.status IS NULL OR s.status IN ('legacy','published','audit_due'))
+              AND (s.published_from IS NULL OR p.date >= s.published_from)
               AND (p.price_basis='raw' OR due.code IS NULL)
         """)
         cur.execute("""CREATE OR REPLACE VIEW raw_price_history AS
@@ -295,6 +299,8 @@ def publish(cur, code: str, rows: list[dict], actions: list[Action], basis_date:
     # 日々の追記では維持。過去の再生成では週次指標を無効化し、次便で全週を再計算する。
     cur.execute("""UPDATE price_adjustment_state SET series_revision=%s
                    WHERE code=%s AND (series_revision IS NULL OR %s)""", (version,code,rebuild))
+    if rebuild:
+        cur.execute("UPDATE price_adjustment_state SET published_from=%s WHERE code=%s",(day(rows[0]['date']),code))
     bump_generation(cur)
 
 

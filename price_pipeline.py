@@ -10,12 +10,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from decimal import Decimal
 import json
+import re
 import time
 
 from batch_dates import jst_today, price_fetch_end_date
 from config import db, PRICE_HISTORY_START, PRICE_NIGHTLY_REPAIR_CODES, PRICE_REFERENCE_OVERLAP_DAYS, price_db_session
 from price_adjustments import (PriceBasisError, StalePublication, actions_digest, day, factors,
-                               identify_basis, normalize)
+                               identify_basis, normalize, matches)
 from price_store import (ensure_schema, load_actions, backup_legacy, snapshot, publish, hold, lock_code, PricePublicationHeld, iter_price_rows)
 
 
@@ -39,6 +40,14 @@ def _source_events_verified(code: str, rows: list[dict], actions: list, *, allow
         unknown.append(ex)
     if unknown:
         if allow_lookup:
+            from corporate_actions import confirm_disclosed_candidate
+            for ex in unknown:
+                confirm_disclosed_candidate(code,day(ex))
+            try:
+                _source_events_verified(code,rows,load_actions(code=code).get(code,[]),allow_lookup=False)
+                return
+            except PriceBasisError:
+                pass
             from price_verification import free_cutoff, free_start
             mature = [day(ex) for ex in unknown if free_start() <= day(ex) <= free_cutoff()]
             if mature:
@@ -117,9 +126,17 @@ def publish_yahoo_code(code: str, rows: list[dict], *, until: date,
         state = (prior_digest, prior_status) if prior_status else None
     if allow_official_lookup:
         with db() as cur:
-            cur.execute("SELECT 1 FROM price_official_checks WHERE code=%s AND status=%s LIMIT 1", (code,"mismatch"))
-            needs_official_history = cur.fetchone() is not None
+            cur.execute("SELECT error FROM price_official_checks WHERE code=%s AND status=%s", (code,"mismatch"))
+            mismatches=[r[0] or '' for r in cur.fetchall()]
+            needs_official_history=any('adjusted_close' in e or 'adjusted_volume' in e or
+                                       re.search(r'(?: |,)close(?:,|$)',e) for e in mismatches)
+            if mismatches and all(e.endswith(': no_trade') for e in mismatches):
+                cur.execute("SELECT 1 FROM price_official_checks WHERE code=%s AND close > 0 LIMIT 1",(code,))
+                if cur.fetchone() is None:
+                    raise PriceBasisError(f'{code}: 保存済みの公式市場データに約定を確認できません。提供元の価格を保留します')
         if needs_official_history:
+            from corporate_actions import confirm_disclosed_candidate
+            confirm_disclosed_candidate(code,None)
             # 台帳に欠けた古いイベントも、公式の不一致から銘柄履歴を取り直して発見する。
             obtain_anchors(code,earliest)
             actions = load_actions(code=code).get(code,[])
@@ -171,8 +188,21 @@ def publish_yahoo_code(code: str, rows: list[dict], *, until: date,
             rows = official_window_candidate(official,rows,actions,today,cutoff,anchors,_volume_anchors(code))
             basis, official_window, full = "raw", True, True
             earliest = day(official[0]["date"])
-    volume_basis = "raw" if official_window or not due_actions else identify_basis(
-        rows, actions, today, _volume_anchors(code), field="volume", absolute=Decimal(1))
+    try:
+        volume_basis = "raw" if official_window or not due_actions else identify_basis(
+            rows, actions, today, _volume_anchors(code), field="volume", absolute=Decimal(1))
+    except PriceBasisError:
+        if not allow_official_lookup:raise
+        anchors=obtain_anchors(code,earliest)
+        actions=load_actions(code=code).get(code,[])
+        cutoff=free_cutoff()
+        with db() as cur:
+            cur.execute("""SELECT date,open,high,low,close,volume FROM price_official_checks
+                           WHERE code=%s AND date BETWEEN %s AND %s AND close > 0 ORDER BY date""",(code,free_start(),cutoff))
+            official=[dict(zip(("date","open","high","low","close","volume"),r),code=code) for r in cur.fetchall()]
+        rows=official_window_candidate(official,rows,actions,today,cutoff,anchors,_volume_anchors(code))
+        basis,volume_basis,official_window,full="raw","raw",True,True
+        earliest=day(official[0]['date'])
     # 空のOHLCを補完するために原本を加工しない。公式で確認できる欠落日だけ補う。
     dates = {str(r["date"]) for r in rows}
     supplemental = []
@@ -182,6 +212,12 @@ def publish_yahoo_code(code: str, rows: list[dict], *, until: date,
                            WHERE p.code=%s AND c.is_holiday=FALSE AND p.close IS NOT NULL
                              AND p.date BETWEEN %s AND %s""", (code, earliest, until))
             missing = [r[0] for r in cur.fetchall() if str(r[0]) not in dates]
+            if any(d < free_start() and str(d) not in no_trade_dates for d in missing):
+                # 再取得不能な古い欠落を架空の足で埋めない。確認可能な期間から再構築し、
+                # 古い原本はbackup_legacyへ残して公開範囲から外す。
+                rows = [r for r in rows if day(r['date']) >= free_start()]
+                missing = [d for d in missing if d >= free_start()]
+                earliest = free_start()
             if allow_official_lookup and any(free_start() <= d <= free_cutoff() for d in missing):
                 cur.execute("SELECT date FROM price_official_checks WHERE code=%s",(code,))
                 recorded = {r[0] for r in cur.fetchall()}
@@ -238,6 +274,18 @@ def publish_yahoo_code(code: str, rows: list[dict], *, until: date,
         for row in normalized:
             row["change_pct"] = ((row["adj_close"] / prev - 1) * 100).quantize(Decimal("0.0001")) if prev else None
             prev = row["adj_close"]
+    # 同じ基準日に取得した独立公式値がある場合は、公開前にも照合する。
+    # 未登録イベントが残ったまま「修復成功」として一時公開しない。
+    with db() as cur:
+        cur.execute("""SELECT date,official_adj_open,official_adj_high,official_adj_low,official_adj_close,official_adj_volume
+                       FROM price_official_checks WHERE code=%s AND reference_basis_date=%s""",(code,today))
+        references={str(r[0]):r[1:] for r in cur.fetchall()}
+    for row in normalized:
+        expected=references.get(row['date'])
+        if not expected:continue
+        for field,value in zip(('adj_open','adj_high','adj_low','adj_close','adj_volume'),expected):
+            if value is not None and (row[field] is None or not matches(row[field],value,Decimal('0.00001'),Decimal(1) if field=='adj_volume' else Decimal('0.06'))):
+                raise PriceBasisError(f"{code} {row['date']}: {field}が同じ基準日の公式値と一致しません")
     with db() as cur:
         lock_code(cur, code)
         backup_legacy(cur, code)

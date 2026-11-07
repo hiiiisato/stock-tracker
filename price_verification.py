@@ -99,9 +99,9 @@ def remember_bars(rows: list[dict], *, update_actions: bool = True) -> None:
         flattened = [r for bars in grouped.values() for r in bars]
         snapshot(cur, next(iter(grouped)) if len(grouped) == 1 else "", "jquants", "raw_and_adjusted", flattened)
         values = [(r["code"], r["date"], r.get("O"), r.get("H"), r.get("L"), r.get("C"),
-                   r.get("Vo"), r.get("AdjFactor"), r.get("AdjC"),r.get("AdjO"),r.get("AdjH"),r.get("AdjL"),r.get("AdjVo")) for bars in grouped.values() for r in bars]
+                   r.get("Vo"), r.get("AdjFactor"), r.get("AdjC"),r.get("AdjO"),r.get("AdjH"),r.get("AdjL"),r.get("AdjVo"),jst_today()) for bars in grouped.values() for r in bars]
         bulk_upsert(cur, "price_official_checks", ["code", "date", "open", "high", "low", "close", "volume", "official_factor", "official_adj_close",
-                                                  "official_adj_open","official_adj_high","official_adj_low","official_adj_volume"], values)
+                                                  "official_adj_open","official_adj_high","official_adj_low","official_adj_volume","reference_basis_date"], values)
     if not update_actions:
         return
     for code, bars in grouped.items():
@@ -172,7 +172,8 @@ def audit_date(target: date, *, refetch: bool = True) -> dict:
                               q.open,q.high,q.low,q.close,q.volume,q.official_adj_close,
                               q.official_adj_open,q.official_adj_high,q.official_adj_low,q.official_adj_volume
                        FROM daily_prices p JOIN price_official_checks q ON q.code=p.code AND q.date=p.date
-                       WHERE p.date=%s""", (target,))
+                       LEFT JOIN price_adjustment_state s ON s.code=p.code
+                       WHERE p.date=%s AND (s.published_from IS NULL OR p.date >= s.published_from)""", (target,))
         records = cur.fetchall()
         if not records:
             raise RuntimeError(f"{target}: 照合対象が0件でした。照合済みにはしません")

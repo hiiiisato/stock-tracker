@@ -116,6 +116,7 @@ def parse_disclosure_ratio(text: str, action: Action, title: str = "") -> Action
     patterns = [
         r"(?:普通株式|当社株式|投資口)?(\d+(?:\.\d+)?)(?:株|口)(?:につき|に付き|に対し|を)[、,]?(\d+(?:\.\d+)?)(?:株|口)(?:の割合|に分割|に併合)",
         r"(\d+(?:\.\d+)?)対(\d+(?:\.\d+)?)の(?:割合|株式分割|株式併合)",
+        r"(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)の(?:比率|割合)で併合",
     ]
     ratios = set()
     for pattern in patterns:
@@ -333,3 +334,66 @@ def resolve_disclosures(*, limit: int = 30) -> dict:
             if action.ex_date <= jst_today():
                 errors.append(f"{action.code} {action.ex_date}: {last_error}")
     return {"changed": changed, "errors": errors}
+
+
+def confirm_disclosed_candidate(code: str, ex_date: date | None) -> bool:
+    """予定表の掲載期間を過ぎた候補も、公式開示の基準日＋公式カレンダーで検証する。"""
+    import pdfplumber
+    with db() as cur:
+        cur.execute("""SELECT title,pdf_url FROM disclosures WHERE code=%s
+                       AND disclosed_at BETWEEN %s AND %s
+                       AND (title LIKE %s OR title LIKE %s OR title LIKE %s)
+                       ORDER BY disclosed_at DESC LIMIT 8""",
+                    (code,(ex_date or jst_today())-timedelta(days=730),jst_today()+timedelta(days=1),
+                     "%分割%","%併合%","%無償割当%"))
+        documents=cur.fetchall()
+    for title,url in documents:
+        if not url or not re.fullmatch(r"https://(?:www\.release\.tdnet\.info/inbs/|www2\.jpx\.co\.jp/disc/[0-9A-Z]+/)[0-9]+\.pdf",url):
+            continue
+        try:
+            try:
+                content=get_bytes(url)
+            except requests.HTTPError as exc:
+                match=re.fullmatch(r"https://www\.release\.tdnet\.info/inbs/(\d+)\.pdf",url)
+                if not match or exc.response.status_code!=404:raise
+                url=f"https://www2.jpx.co.jp/disc/{code}0/{match[1]}.pdf"
+                content=get_bytes(url)
+            _remember_document(url,content,0,processed=False)
+            with pdfplumber.open(io.BytesIO(content)) as pdf:
+                text="\n".join(p.extract_text() or "" for p in pdf.pages[:8])
+            compact=re.sub(r"\s+","",unicodedata.normalize("NFKC",text))
+            etf=re.search(r"\("+re.escape(code)+r"\)(.{0,240}?)(?=NEXTFUNDS|$)",compact)
+            # 野村の複数ETF開示は「比率表」と「日程表」が別。冒頭の対象一覧から日付を取らない。
+            timetable=compact.split('分割基準日/分割効力発生日',1)
+            if len(timetable)==2:
+                dated_row=re.search(r"\("+re.escape(code)+r"\)((?:\d{4}年\d{1,2}月\d{1,2}日){1,2})",timetable[1])
+                if dated_row:etf=dated_row
+            if etf:
+                dates=re.findall(r"(\d{4})年(\d{1,2})月(\d{1,2})日",etf[1])[:1]
+            else:
+                dates=re.findall(r"(\d{4})年(\d{1,2})月(\d{1,2})日(?:\([^)]*\))?を(?:分割)?基準日",compact)
+                dates+=re.findall(r"(?:分割)?基準日[：:]?(\d{4})年(\d{1,2})月(\d{1,2})日",compact)
+            kind="rights" if "新株予約権" in title else "bonus" if "無償割当" in title else "consolidation" if "併合" in title else "split"
+            explicit=re.findall((r"併合" if kind=='consolidation' else r"分割")+r"基準日[：:]?(\d{4})年(\d{1,2})月(\d{1,2})日",compact)
+            if explicit and not etf:dates=explicit
+            confirmed=[]
+            for record in {date(*map(int,d)) for d in dates}:
+                if ex_date and not ex_date < record <= ex_date+timedelta(days=10):continue
+                with db() as cur:
+                    start=ex_date or record-timedelta(days=10)
+                    cur.execute("SELECT date,is_holiday FROM trading_calendar WHERE date BETWEEN %s AND %s ORDER BY date",(start,record))
+                    calendar=cur.fetchall()
+                business=[d for d,holiday in calendar if not holiday]
+                if len(calendar)!=(record-start).days+1 or len(business)<2:continue
+                verified_ex=business[-2]
+                if ex_date and verified_ex!=ex_date:continue
+                action=Action(code,verified_ex,Decimal(1),Decimal(1),kind,"needs_ratio",source="tdnet",source_url=url,record_date=record)
+                confirmed.append(parse_disclosure_ratio(text,action,title))
+            if len(confirmed)==1:
+                put_action(confirmed[0],correction="訂正" in title)
+                _remember_document(url,content,1)
+                return confirmed[0].status=="confirmed"
+        except Exception:
+            if any(word in title for word in ("訂正","中止","撤回")):
+                return False  # 最新訂正を飛ばして過去の比率を採用しない。
+    return False
