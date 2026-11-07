@@ -111,6 +111,10 @@ def publish_yahoo_code(code: str, rows: list[dict], *, until: date,
     from price_verification import anchors_for, obtain_anchors, free_cutoff, free_start
     if not rows:
         raise RuntimeError(f"{code}: 価格を取得できません")
+    with db() as cur:
+        # 台帳が未確定・既存公式値と不一致の場合も、今回受け取った原本を失わない。
+        snapshot(cur,code,"yahoo","provider_observation",rows,
+                 split_events=getattr(rows,"split_events",[]))
     today = jst_today()
     actions = (action_cache if action_cache is not None else load_actions()).get(code, [])
     digest = actions_digest(actions, today)
@@ -401,6 +405,7 @@ def refresh_derived() -> None:
     from compute_theoretical import run as theoretical
     from rankings import compute_daily_rankings, compute_weekly_rankings
     from theme_score import compute_day
+    from money_flow import compute as compute_money_flow
     from compute_stats_history import run as snapshot_stats
     recompute_price_metrics()
     compute_stats()
@@ -408,6 +413,7 @@ def refresh_derived() -> None:
     compute_daily_rankings()
     compute_weekly_rankings()
     compute_day()
+    compute_money_flow()
     snapshot_stats(latest_only=True)
 
 

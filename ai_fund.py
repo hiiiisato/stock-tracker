@@ -538,12 +538,13 @@ def record_nav() -> float | None:
     pos = cur.fetchall()
     mv = 0.0
     for code, shares in pos:
-        cur.execute("SELECT close FROM raw_price_history WHERE code=%s AND date=%s", (code, today))
+        cur.execute("SELECT close FROM price_history WHERE code=%s AND date=%s", (code, today))
         r = cur.fetchone()
         if r and r[0]:
             mv += int(shares) * float(r[0])
         else:  # 当日値なし→直近値
-            cur.execute("SELECT close FROM raw_price_history WHERE code=%s AND date<=%s ORDER BY date DESC LIMIT 1", (code, today))
+            # 売買停止で最終約定が分割前でも、調整後の保有株数と同じ基準で評価する。
+            cur.execute("SELECT close FROM price_history WHERE code=%s AND date<=%s ORDER BY date DESC LIMIT 1", (code, today))
             r2 = cur.fetchone()
             if r2 and r2[0]:
                 mv += int(shares) * float(r2[0])

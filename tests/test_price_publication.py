@@ -53,8 +53,9 @@ class PublicationTest(unittest.TestCase):
             status TEXT,error TEXT,checked_at DATETIME,reference_basis_date DATE);
           CREATE TABLE price_sync_state (name TEXT PRIMARY KEY,value TEXT,error TEXT,checked_at DATETIME);
           CREATE VIEW price_history AS SELECT p.id,p.code,p.date,p.adj_open AS open,p.adj_high AS high,
-            p.adj_low AS low,p.adj_close AS close,p.adj_volume AS volume FROM daily_prices p
-            JOIN price_adjustment_state s ON s.code=p.code WHERE s.status='published';
+            p.adj_low AS low,p.adj_close AS close,p.adj_volume AS volume,p.adj_close AS adj_close FROM daily_prices p
+            JOIN price_adjustment_state s ON s.code=p.code WHERE s.status='published'
+            AND (s.published_from IS NULL OR p.date>=s.published_from);
           INSERT INTO corporate_actions (code,ex_date,old_shares,new_shares,kind,status,source,source_url)
             VALUES ('285A','2026-09-29',1,3,'split','confirmed','jpx_monthly','https://www.jpx.co.jp/');
         """)
@@ -112,6 +113,13 @@ class PublicationTest(unittest.TestCase):
         with self.db() as cur:
             store.publish(cur,"285A",self.rows,[self.action],self.basis,"raw","corrected_history",rebuild=True)
         self.assertNotEqual(revision(),first)
+
+    def test_limited_rebuild_retains_but_does_not_publish_unverified_older_rows(self):
+        self.publish()
+        with self.db() as cur:
+            store.publish(cur,'285A',self.rows[-1:],[self.action],self.basis,'raw','verified_window',rebuild=True)
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM daily_prices').fetchone()[0],2)
+        self.assertEqual([r['date'] for r in store.load_candles(['285A'],date(2026,9,1))['285A']],['2026-09-29'])
 
     def test_expired_schedule_candidate_needs_official_record_date_and_complete_calendar(self):
         import corporate_actions as official

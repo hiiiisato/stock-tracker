@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal as D
 import unittest
+from unittest.mock import Mock,patch
 
 import test_price_publication as fixtures
 from ai_fund_adjustments import apply_actions, adjusted_units
@@ -8,6 +9,20 @@ from price_adjustments import Action, PriceBasisError
 
 
 class FundUnitsTest(unittest.TestCase):
+    def test_nav_uses_adjusted_last_price_when_no_trade_occurs_after_split(self):
+        import ai_fund
+        import price_store
+        self.conn.executescript('CREATE TABLE ai_fund_nav (date DATE PRIMARY KEY,nav DOUBLE,cash DOUBLE,n_pos INT,bench DOUBLE,created_at DATETIME);')
+        self.conn.create_function('NOW',0,lambda:'2026-09-29 08:00:00')
+        with self.db() as cur:
+            price_store.publish(cur,'285A',self.rows[:1],[self.action],self.basis,'raw','halted_stock')
+        cursor=Mock(wraps=fixtures.Cursor(self.conn));cursor.close=Mock()
+        connection=Mock();connection.cursor.return_value=cursor;connection.commit.side_effect=self.conn.commit
+        with patch.object(ai_fund,'ensure_tables'),patch.object(ai_fund,'get_conn',return_value=connection), \
+                patch.object(ai_fund,'_latest_trading_date',return_value=date(2026,9,29)), \
+                patch.object(ai_fund,'_get_state',return_value={'cash':1000000}):
+            self.assertEqual(ai_fund.record_nav(),1600000.)
+
     def setUp(self):
         fixtures.PublicationTest.setUp(self)
         self.conn.executescript("""
