@@ -78,6 +78,7 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
 2. 銘柄マスタ・取引カレンダー (`master`) → 直後に**銘柄名の名寄せインデックス** (`stock_aliases`) を張り直す
 3. **公式権利台帳更新** (`corporate_actions`) — JPX予定表・月報・TDnet本文。全体の取得失敗時は価格公開を次便へ持ち越す
 4. 価格取得・正規化・公開 (`prices_yahoo` → `price_pipeline` → `price_store`) — 原本から当時値と分割調整済みOHLCVを銘柄別トランザクションで更新し、台帳との整合性を検査する
+   - 全銘柄公開は銘柄ロックを保った6並列。workerごとにDB接続を1本だけ再利用し、TiDB無料枠と60分ジョブ上限の両方を守る
 5. 【月曜のみ】配当 (`dividends`)・財務 (`financials`)・ファンダ (`fundamentals`)・TDnet短信の広域取込 (`financials_tdnet` 過去30日)
 6. テーマスコア (`theme_score`)
 7. PER/PBR等の最新値再計算 (`fundamentals.recompute_price_metrics`)

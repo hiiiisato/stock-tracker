@@ -14,7 +14,8 @@ import re
 import time
 
 from batch_dates import jst_today, price_fetch_end_date
-from config import db, PRICE_HISTORY_START, PRICE_NIGHTLY_REPAIR_CODES, PRICE_REFERENCE_OVERLAP_DAYS, price_db_session
+from config import (db, PRICE_HISTORY_START, PRICE_NIGHTLY_REPAIR_CODES,
+                    PRICE_PUBLISH_WORKERS, PRICE_REFERENCE_OVERLAP_DAYS, price_db_session)
 from price_adjustments import (PriceBasisError, StalePublication, actions_digest, day, factors,
                                identify_basis, normalize, matches)
 from price_store import (ensure_schema, load_actions, backup_legacy, snapshot, publish, hold, lock_code, PricePublicationHeld, iter_price_rows)
@@ -317,17 +318,38 @@ def store_yahoo_batches(batches: dict[str, list[dict]], until: date) -> int:
                        LEFT JOIN price_adjustment_state s ON s.code=p.code
                        GROUP BY p.code,s.action_digest,s.status""")
         metadata = {r[0]: r[1:] for r in cur.fetchall()}
+    def publish_one(code: str, rows: list[dict]) -> int:
+        # ContextVarの接続はスレッドをまたがない。各worker内で1接続を再利用し、
+        # db()ごとのcommit/rollback境界と銘柄ロックは従来どおり維持する。
+        with price_db_session():
+            return publish_yahoo_code(
+                code,
+                rows,
+                until=until,
+                action_cache=action_cache,
+                metadata=metadata.get(code, (None, None, None)),
+            )
+
     count, errors = 0, {}
-    for code, rows in batches.items():
-        try:
-            count += publish_yahoo_code(code, rows, until=until, action_cache=action_cache,
-                                        metadata=metadata.get(code, (None, None, None)))
-        except StalePublication:
-            continue
-        except Exception as exc:
-            # 他銘柄は進めるが、不一致の銘柄は読取ビューから保留する。
-            hold(code, str(exc), attempted=True)
-            errors[code] = str(exc)
+    with ThreadPoolExecutor(max_workers=PRICE_PUBLISH_WORKERS) as executor:
+        futures = {
+            executor.submit(publish_one, code, rows): code
+            for code, rows in batches.items()
+        }
+        completed = 0
+        for future in as_completed(futures):
+            code = futures[future]
+            completed += 1
+            try:
+                count += future.result()
+            except StalePublication:
+                pass
+            except Exception as exc:
+                # 他銘柄は進めるが、不一致の銘柄は読取ビューから保留する。
+                hold(code, str(exc), attempted=True)
+                errors[code] = str(exc)
+            if completed % 500 == 0:
+                print(f"    価格公開: {completed}/{len(batches)} 銘柄完了")
     if errors:
         raise PricePublicationHeld(count,errors)
     return count
