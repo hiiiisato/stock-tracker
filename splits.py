@@ -24,12 +24,15 @@ def rebuild(codes4=None, full=True, use_jquants=True):
 
 def run_daily(weeks=16):
     from price_pipeline import check_integrity, repair_codes
+    from price_store import watched_codes
     result = check_integrity()
     if not result['held']:
         return 0
     repaired = repair_codes(result['held'])
     if repaired['errors']:
-        raise RuntimeError(str(repaired['errors']))
+        print('  分割補正の個別保留（公開対象から除外・次便で再試行）: ' + str(repaired['errors']))
+        if watched := watched_codes(repaired['errors']):
+            raise RuntimeError('ウォッチリストの価格補正を保留: ' + ','.join(sorted(watched)))
     return len(repaired['repaired'])
 
 

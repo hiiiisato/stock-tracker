@@ -11,7 +11,7 @@ import app
 import price_store as store
 import price_verification as verification
 from price_pipeline import _with_official_values
-from corporate_actions import parse_monthly_pdf, parse_disclosure_ratio
+from corporate_actions import parse_monthly_pdf, parse_disclosure_ratio, resolve_disclosures
 from price_adjustments import Action, PriceBasisError, StalePublication, normalize
 
 
@@ -127,6 +127,22 @@ class PublicationTest(unittest.TestCase):
 
 
 class OfficialFetchTest(unittest.TestCase):
+    def test_unparsed_later_correction_blocks_old_ratio_instead_of_republishing_it(self):
+        action=Action("285A",date(2026,9,29),D(1),D(3),record_date=date(2026,9,30))
+        cur=Mock();cur.fetchall.side_effect=[[("285A",)],[("（訂正）株式分割のお知らせ","https://www2.jpx.co.jp/disc/example.pdf")]]
+        @contextmanager
+        def db(): yield cur
+        pdf=Mock();pdf.pages=[Mock()];pdf.pages[0].extract_text.return_value="2026年9月30日を基準日とする株式分割の比率を訂正します。詳細は別表。"
+        with patch("corporate_actions.load_actions",return_value={"285A":[action]}),patch("corporate_actions.db",db), \
+             patch("corporate_actions.get_bytes",return_value=b"pdf"),patch("corporate_actions._remember_document"), \
+             patch("corporate_actions.put_action",return_value=True) as put,patch("pdfplumber.open") as open_pdf:
+            open_pdf.return_value.__enter__.return_value=pdf
+            result=resolve_disclosures()
+        self.assertTrue(result["errors"])
+        self.assertEqual(put.call_args.args[0].status,"conflict")
+        end=cur.execute.call_args.args[1][2]
+        self.assertGreater(end.date(),action.record_date)  # 実施後の訂正も読む。
+
     def test_expired_free_window_dates_do_not_block_the_new_verification_queue(self):
         cur=Mock()
         cur.fetchall.side_effect=[[(date(2026,8,13),),(date(2026,8,14),)],

@@ -24,6 +24,16 @@ from batch_dates import (
     resolve_evening_business_date,
 )
 from config import get_conn
+from price_store import PricePublicationHeld, watched_codes
+
+
+def _record_price_hold(error: PricePublicationHeld) -> list[str]:
+    """個別保留を成功0件にせず記録。監視対象・全体取得失敗は確定処理を止める。"""
+    _log("prices", "partial", error.published_rows, str(error))
+    watched = watched_codes(error.errors)
+    if not error.published_rows or watched:
+        return [f"prices: {error}"]
+    return []
 
 
 def _jst_now() -> datetime:
@@ -331,9 +341,15 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
             fetch_and_store_day(_jst_now().date())
             action_result = sync_official_actions()
             official_coverage_ok = action_result["coverage_ok"]
-            _log("corporate_actions", "done", action_result["changed"])
             if action_result["errors"]:
-                raise RuntimeError(" / ".join(action_result["errors"]))
+                if not official_coverage_ok:
+                    raise RuntimeError(" / ".join(action_result["errors"]))
+                unresolved = {message.split()[0].rstrip(":") for message in action_result["errors"]}
+                if watched_codes(unresolved):
+                    raise RuntimeError(" / ".join(action_result["errors"]))
+                _log("corporate_actions", "partial", action_result["changed"], " / ".join(action_result["errors"]))
+            else:
+                _log("corporate_actions", "done", action_result["changed"])
         except Exception as e:
             _log("corporate_actions", "failed", error=str(e))
             critical_failures.append(f"corporate_actions: {e}")
@@ -351,6 +367,9 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
             # （ARCHITECTURE.md記載の「幽霊行」= 休場日でもstale値の行を返すことがあるため、
             #  Yahooの取得結果で公式休場日を営業日に書き換えるのは危険）。
             _log("prices", "done", n2)
+        except PricePublicationHeld as e:
+            print(f"  個別銘柄を保留: {e}")
+            critical_failures.extend(_record_price_hold(e))
         except Exception as e:
             print(f"  エラー: {e}")
             traceback.print_exc()

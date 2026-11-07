@@ -16,7 +16,7 @@ from batch_dates import jst_today, price_fetch_end_date
 from config import db, PRICE_HISTORY_START, PRICE_NIGHTLY_REPAIR_CODES, price_db_session
 from price_adjustments import (PriceBasisError, StalePublication, actions_digest, day, factors,
                                identify_basis, normalize)
-from price_store import (ensure_schema, load_actions, backup_legacy, snapshot, publish, hold, lock_code)
+from price_store import (ensure_schema, load_actions, backup_legacy, snapshot, publish, hold, lock_code, PricePublicationHeld)
 
 
 def _source_events_verified(code: str, rows: list[dict], actions: list, *, allow_lookup: bool) -> None:
@@ -228,7 +228,7 @@ def store_yahoo_batches(batches: dict[str, list[dict]], until: date) -> int:
                        LEFT JOIN price_adjustment_state s ON s.code=p.code
                        GROUP BY p.code,s.action_digest,s.status""")
         metadata = {r[0]: r[1:] for r in cur.fetchall()}
-    count, errors = 0, []
+    count, errors = 0, {}
     for code, rows in batches.items():
         try:
             count += publish_yahoo_code(code, rows, until=until, action_cache=action_cache,
@@ -238,9 +238,9 @@ def store_yahoo_batches(batches: dict[str, list[dict]], until: date) -> int:
         except Exception as exc:
             # 他銘柄は進めるが、不一致の銘柄は読取ビューから保留する。
             hold(code, str(exc), attempted=True)
-            errors.append(f"{code}: {exc}")
+            errors[code] = str(exc)
     if errors:
-        raise RuntimeError(f"価格公開を保留: {len(errors)}銘柄 / " + " | ".join(errors[:12]))
+        raise PricePublicationHeld(count,errors)
     return count
 
 

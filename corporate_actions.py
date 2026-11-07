@@ -249,6 +249,7 @@ def resolve_disclosures(*, limit: int = 30) -> dict:
         revised_codes = {r[0] for r in cur.fetchall()}
     pending = [a for aa in all_actions.values() for a in aa
                if a.status == "needs_ratio" or a.code in revised_codes]
+    latest_ex = {code:max(a.ex_date for a in aa) for code,aa in all_actions.items()}
     pending.sort(key=lambda a: a.ex_date)
     changed, errors = 0, []
     for action in pending[:limit]:
@@ -257,14 +258,15 @@ def resolve_disclosures(*, limit: int = 30) -> dict:
                            AND disclosed_at BETWEEN %s AND %s
                            AND (title LIKE %s OR title LIKE %s OR title LIKE %s)
                            ORDER BY disclosed_at DESC LIMIT 8""",
-                        (action.code, datetime.combine(action.ex_date - timedelta(days=150), datetime.min.time()),
-                         datetime.combine(action.record_date or action.ex_date, datetime.max.time()),
+                        (action.code, datetime.combine(action.ex_date - timedelta(days=730), datetime.min.time()),
+                         datetime.combine(jst_today(), datetime.max.time()),
                          "%分割%", "%併合%", "%投資口分割%"))
             documents = cur.fetchall()
         last_error = "公式の分割比率を含む開示がまだありません"
         resolved = None
         corrected_effective = None
         for title, url in documents:
+            text = ""
             if not url or not url.startswith("https://"):
                 continue
             try:
@@ -287,16 +289,27 @@ def resolve_disclosures(*, limit: int = 30) -> dict:
                 resolved = parse_disclosure_ratio(text, replace(action, source_url=url), title)
                 if corrected_effective:
                     resolved = replace(resolved,effective_date=corrected_effective)
-                changed += int(put_action(resolved, correction="訂正" in title))
+                changed += int(put_action(resolved, correction=bool(corrected_effective) or "訂正" in title))
                 _remember_document(url, content, 1)
                 break
             except Exception as exc:
                 last_error = str(exc)
                 if "訂正" in title or any(w in title for w in ("中止", "撤回")):
                     # 解読できない最新訂正を飛ばして古い比率へ戻さない。
+                    compact = re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
+                    record = action.record_date
+                    matches_record = record and f"{record.year}年{record.month}月{record.day}日" in compact
+                    matches_other = any(a.record_date and a.ex_date != action.ex_date and
+                        f"{a.record_date.year}年{a.record_date.month}月{a.record_date.day}日" in compact
+                        for a in all_actions[action.code])
+                    if not matches_record and matches_other:
+                        continue
+                    if not matches_record and action.ex_date != latest_ex[action.code]:
+                        continue  # 同社の別の権利日に対する訂正を過去イベントへ誤適用しない。
+                    changed += int(put_action(replace(action,status="conflict",source="tdnet",source_url=url),correction=True))
                     break
         else:
-            if action.ex_date <= jst_today():
+            if action.ex_date <= jst_today() and action.status != "confirmed":
                 errors.append(f"{action.code} {action.ex_date}: {last_error}")
             continue
         if resolved is None:

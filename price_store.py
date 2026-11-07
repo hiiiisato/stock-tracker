@@ -22,6 +22,22 @@ _ready = False
 _generation_cache = (0.0, None)
 
 
+class PricePublicationHeld(RuntimeError):
+    """個別銘柄は公開せず、公開できた件数と失敗銘柄を呼出元へ返す。"""
+    def __init__(self, published_rows: int, errors: dict[str,str]):
+        self.published_rows = published_rows
+        self.errors = errors
+        super().__init__(f"価格公開を保留: {len(errors)}銘柄 / " + " | ".join(f"{c}: {e}" for c,e in list(errors.items())[:12]))
+
+
+def watched_codes(codes) -> set[str]:
+    if not codes:
+        return set()
+    with db() as cur:
+        cur.execute("SELECT code FROM watchlist")
+        return set(codes) & {r[0] for r in cur.fetchall()}
+
+
 def ensure_schema() -> None:
     global _ready
     if _ready:

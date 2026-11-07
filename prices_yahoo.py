@@ -219,17 +219,23 @@ def fetch_and_store_yahoo(max_workers: int = 10, date_to: date | None = None) ->
     coverage_from = max(date_from, date_to - timedelta(days=ROLLING_REPAIR_DAYS - 1))
 
     if not batches:
-        _validate_recent_price_coverage(coverage_from, date_to)
-        return 0
+        raise RuntimeError("Yahoo価格が全銘柄0件でした。取得成功にはしません")
 
     # 原本→検証→当時値と調整済み値の同時公開。adj_close=closeの直接上書きは禁止。
     from price_pipeline import store_yahoo_batches
-    written = store_yahoo_batches(batches, date_to)
+    from price_store import PricePublicationHeld
+    held = None
+    try:
+        written = store_yahoo_batches(batches, date_to)
+    except PricePublicationHeld as exc:
+        held, written = exc, exc.published_rows
 
     coverage = _validate_recent_price_coverage(coverage_from, date_to)
     if coverage:
         summary = ", ".join(f"{day}:{count:,}" for day, count, _ in coverage)
         print(f"  価格充足確認: {summary}")
+    if held:
+        raise held
     return written
 
 
