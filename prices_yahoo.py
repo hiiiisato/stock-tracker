@@ -11,19 +11,29 @@ Yahoo Finance APIで日本株の日次価格を取得してTiDBに保存。
 import time
 import requests
 from datetime import date, datetime, timedelta
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import get_conn, bulk_upsert
 
 YAHOO_API = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; stock-tracker/1.0)"}
 
+# 最新日だけを差分取得すると、途中失敗で「一部銘柄だけ最新日まで保存」された場合に
+# DB全体のMAX(date)が進み、残りの銘柄が永久に補完されない。毎回この期間を全銘柄
+# 再取得してUPSERTすることで、PC停止・API一時障害・途中終了を次回実行時に自己修復する。
+ROLLING_REPAIR_DAYS = 14
+MIN_PRICE_COVERAGE_RATIO = 0.90
+
 
 def _get_missing_date_range(
     conn,
     date_to: date | None = None,
-) -> Tuple[Optional[date], Optional[date]]:
-    """DBに不足している日付範囲を返す（Yahoo Finance補完用）。"""
+    repair_days: int = ROLLING_REPAIR_DAYS,
+) -> Tuple[date, date]:
+    """DBの未取得期間と直近の自己修復期間を合わせた取得範囲を返す。"""
+    if repair_days < 1:
+        raise ValueError("repair_days must be at least 1")
+
     cur = conn.cursor()
     cur.execute("SELECT MAX(date) FROM daily_prices")
     last_date = cur.fetchone()[0]
@@ -33,10 +43,65 @@ def _get_missing_date_range(
 
     if last_date is None:
         return date(2024, 3, 30), target_end
-    if last_date >= target_end:
-        return None, None
 
-    return last_date + timedelta(days=1), target_end
+    repair_start = target_end - timedelta(days=repair_days - 1)
+    first_missing = last_date + timedelta(days=1)
+    return min(first_missing, repair_start), target_end
+
+
+def _validate_recent_price_coverage(
+    date_from: date,
+    date_to: date,
+    min_ratio: float = MIN_PRICE_COVERAGE_RATIO,
+) -> list[tuple[date, int, int]]:
+    """公式営業日の価格件数が有効銘柄数の閾値を満たすことを確認する。
+
+    売買停止・上場直後・Yahoo未対応銘柄を考慮して100%一致は要求しない。一方、
+    API障害や途中終了で数百〜数千銘柄が欠けた日を成功扱いにはしない。
+    """
+    if not 0 < min_ratio <= 1:
+        raise ValueError("min_ratio must be in (0, 1]")
+
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT COUNT(*) FROM stocks WHERE is_active = TRUE")
+        active_count = int(cur.fetchone()[0] or 0)
+        if active_count == 0:
+            raise RuntimeError("有効銘柄が0件のため価格充足率を検証できません")
+
+        cur.execute(
+            """
+            SELECT tc.date, COUNT(DISTINCT s.code) AS price_count
+            FROM trading_calendar tc
+            LEFT JOIN daily_prices dp
+              ON dp.date = tc.date AND dp.close IS NOT NULL
+            LEFT JOIN stocks s
+              ON s.code = dp.code AND s.is_active = TRUE
+            WHERE tc.date BETWEEN %s AND %s
+              AND tc.is_holiday = FALSE
+            GROUP BY tc.date
+            ORDER BY tc.date
+            """,
+            (date_from, date_to),
+        )
+        coverage = [(row[0], int(row[1] or 0), active_count) for row in cur.fetchall()]
+    finally:
+        cur.close()
+        conn.close()
+
+    minimum = int(active_count * min_ratio)
+    if not coverage:
+        raise RuntimeError(
+            f"{date_from}〜{date_to}に検証可能な営業日がありません。取引カレンダーを確認してください"
+        )
+    insufficient = [(day, count) for day, count, _ in coverage if count < minimum]
+    if insufficient:
+        details = ", ".join(f"{day}={count:,}件" for day, count in insufficient)
+        raise RuntimeError(
+            f"価格データ不足: {details}（有効銘柄{active_count:,}件、最低{minimum:,}件）"
+        )
+    return coverage
 
 
 def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
@@ -112,17 +177,14 @@ def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
 
 
 def fetch_and_store_yahoo(max_workers: int = 10, date_to: date | None = None) -> int:
-    """差分更新: Yahoo Finance APIで不足している直近データを全銘柄取得してUPSERT。"""
+    """Yahoo Financeの未取得期間＋直近14日を全銘柄再取得してUPSERT。"""
     conn = get_conn()
     date_from, date_to = _get_missing_date_range(conn, date_to)
+    conn.close()
 
-    if date_from is None:
-        print("  Yahoo: 価格データは最新です。更新不要。")
-        conn.close()
-        return 0
+    print(f"  Yahoo取得範囲: {date_from} 〜 {date_to}（直近{ROLLING_REPAIR_DAYS}日を自己修復）")
 
-    print(f"  Yahoo取得範囲: {date_from} 〜 {date_to}")
-
+    conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT code FROM stocks WHERE is_active = TRUE ORDER BY code")
     codes = [r[0] for r in cur.fetchall()]
@@ -153,7 +215,12 @@ def fetch_and_store_yahoo(max_workers: int = 10, date_to: date | None = None) ->
 
     print(f"  取得完了: {len(all_rows)} 件, データなし: {len(failed)} 銘柄")
 
+    # 現在の有効銘柄数を基準にする充足率は、新規上場前まで遡る長期初期取得には
+    # 適用できない。自己修復対象の直近窓だけを厳格検証する。
+    coverage_from = max(date_from, date_to - timedelta(days=ROLLING_REPAIR_DAYS - 1))
+
     if not all_rows:
+        _validate_recent_price_coverage(coverage_from, date_to)
         return 0
 
     db_rows = [(
@@ -193,6 +260,11 @@ def fetch_and_store_yahoo(max_workers: int = 10, date_to: date | None = None) ->
 
     cur.close()
     conn.close()
+
+    coverage = _validate_recent_price_coverage(coverage_from, date_to)
+    if coverage:
+        summary = ", ".join(f"{day}:{count:,}" for day, count, _ in coverage)
+        print(f"  価格充足確認: {summary}")
     return len(db_rows)
 
 

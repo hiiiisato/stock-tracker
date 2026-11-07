@@ -1,0 +1,30 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "stock-tracker-scheduler",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-07",
+  "compatibility_flags": ["nodejs_compat"],
+  "upload_source_maps": true,
+  "workers_dev": false,
+  "preview_urls": false,
+  "vars": {
+    "GITHUB_OWNER": "hiiiisato",
+    "GITHUB_REPO": "stock-tracker",
+    "GITHUB_REF": "master"
+  },
+  "triggers": {
+    // 無料枠のCron Trigger数を1本に集約し、JSTの時刻判定はWorker内で行う。
+    "crons": ["*/5 * * * *"]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.05
+    }
+  }
+}

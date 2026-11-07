@@ -18,6 +18,19 @@ on:
         type: choice
         options: [edinet_texts, fund_watch, youtube, youtube_recovery, consensus]
         default: edinet_texts
+      source:
+        description: '起動元（cloudflare / manual）'
+        type: string
+        default: manual
+      scheduled_for:
+        description: '予定実行時刻（ISO 8601・監査用）'
+        type: string
+        default: ''
+
+# 複数の起動元が重なっても、外部サイトへの定期取得を並列実行しない。
+concurrency:
+  group: misc-batch-pipeline
+  cancel-in-progress: false
 
 jobs:
   batch:

@@ -335,6 +335,7 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
             print(f"  エラー: {e}")
             traceback.print_exc()
             _log("prices", "failed", error=str(e))
+            critical_failures.append(f"prices: {e}")
 
     # 休場日・遅延ガード: 同日または翌16時前までの最新営業日だけ後段へ進める。
     # 元データが更新されていないのに指標再計算・AI調査・レポート保存が走るのを防ぐ。
@@ -613,10 +614,12 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
         print("\n[日次レポート] 生成・保存中...")
         try:
             from daily_report import save_report
-            saved = save_report(target_date, final=True)
+            # 価格・主要指標・ランキングのどれかが欠けた状態を「確定版」にすると、
+            # 次の救済便が重複ガードで止まってしまう。失敗時は速報版のまま残す。
+            saved = save_report(target_date, final=not critical_failures)
             if saved != target_date:
                 raise RuntimeError(f"日次レポート保存日不一致: expected={target_date}, actual={saved}")
-            _log("daily_report", "done", 1)
+            _log("daily_report" if not critical_failures else "daily_report_interim", "done", 1)
         except Exception as e:
             print(f"  エラー: {e}")
             _log("daily_report", "failed", error=str(e))

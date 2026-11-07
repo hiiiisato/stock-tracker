@@ -10,6 +10,14 @@ on:
         description: 'LINE送信せず対象と本文だけ確認する'
         type: boolean
         default: true
+      source:
+        description: '起動元（cloudflare / manual）'
+        type: string
+        default: manual
+      scheduled_for:
+        description: '予定実行時刻（ISO 8601・監査用）'
+        type: string
+        default: ''
 
 concurrency:
   group: price-alert-morning

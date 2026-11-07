@@ -1,0 +1,2 @@
+# 型生成・ローカル試験専用。実際のトークンは `wrangler secret put` で登録する。
+GITHUB_TOKEN=replace-with-local-test-token

@@ -16,6 +16,19 @@ on:
         type: choice
         options: [main, evening, notify_test, youtube_daily]
         default: main
+      source:
+        description: '起動元（cloudflare / codex / manual）'
+        type: string
+        default: manual
+      scheduled_for:
+        description: '予定実行時刻（ISO 8601・監査用）'
+        type: string
+        default: ''
+
+# Cloudflare一次便・GitHub保険便・手動便が重なっても、同じDB更新を並列実行しない。
+concurrency:
+  group: daily-market-pipeline
+  cancel-in-progress: false
 
 jobs:
   update:
@@ -76,4 +89,4 @@ jobs:
 
       - name: 結果サマリー
         if: always()
-        run: echo "日次市場データ更新 ${{ job.status }}"
+        run: echo "日次市場データ更新 ${{ job.status }} / source=${{ inputs.source || github.event_name }} / scheduled_for=${{ inputs.scheduled_for || github.event.schedule }}"

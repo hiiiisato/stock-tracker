@@ -1,8 +1,12 @@
 .env
+.venv/
 __pycache__/
 *.pyc
 *.log
 .DS_Store
+node_modules/
+.wrangler/
+.dev.vars
 # ローカル生成HTMLは除外（大きいファイル、サーバーでは動的生成）
 *.html
 # Flaskが配信に必要とするテンプレートはソースとして管理する。
