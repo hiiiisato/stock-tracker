@@ -52,9 +52,9 @@ WATCH_ALERT_PCT = 3.0   # ウォッチリスト銘柄のハイライト閾値（
 
 def _latest_trading_date(cur, d: date | None) -> date | None:
     if d:
-        cur.execute("SELECT MAX(date) FROM daily_prices WHERE date <= %s", (d,))
+        cur.execute("SELECT MAX(date) FROM price_history WHERE date <= %s", (d,))
     else:
-        cur.execute("SELECT MAX(date) FROM daily_prices")
+        cur.execute("SELECT MAX(date) FROM price_history")
     r = cur.fetchone()
     return r[0] if r else None
 
@@ -88,16 +88,16 @@ def _fetch_breadth(cur, target: date) -> dict:
     cur.execute("""
         SELECT SUM(change_pct > 0), SUM(change_pct < 0), SUM(change_pct = 0),
                SUM(COALESCE(turnover, volume * close)) / 1e12
-        FROM daily_prices dp
+        FROM price_history dp
         JOIN stocks s ON s.code = dp.code AND s.market_id IN (2, 3, 4)
         WHERE dp.date = %s
     """, (target,))
     up, down, flat, tv = cur.fetchone()
     cur.execute("""
         SELECT SUM(COALESCE(turnover, volume * close)) / 1e12
-        FROM daily_prices dp
+        FROM price_history dp
         JOIN stocks s ON s.code = dp.code AND s.market_id IN (2, 3, 4)
-        WHERE dp.date = (SELECT MAX(date) FROM daily_prices WHERE date < %s)
+        WHERE dp.date = (SELECT MAX(date) FROM price_history WHERE date < %s)
     """, (target,))
     tv_prev = cur.fetchone()[0]
     return {"up": int(up or 0), "down": int(down or 0), "flat": int(flat or 0),
@@ -198,7 +198,7 @@ def _fetch_movers(cur, target: date) -> dict:
         cur.execute(f"""
             SELECT dp.code, s.name, dp.change_pct, f.market_cap,
                    pe.ai_summary, pe.reason_category
-            FROM daily_prices dp
+            FROM price_history dp
             JOIN stocks s ON s.code = dp.code AND s.is_active = 1 AND s.market_id IN (2,3,4)
             JOIN stock_fundamentals f ON f.code = dp.code AND f.market_cap >= 5e9
             LEFT JOIN price_events pe
@@ -221,7 +221,7 @@ def _fetch_movers(cur, target: date) -> dict:
         ph = ",".join(["%s"] * len(codes))
         cur.execute(f"""
             SELECT code, date, COALESCE(adj_close, close)
-            FROM daily_prices
+            FROM price_history
             WHERE code IN ({ph}) AND date > %s AND date <= %s AND close > 0
             ORDER BY code, date
         """, (*codes, target - timedelta(days=45), target))
@@ -241,9 +241,9 @@ def _fetch_triggers(cur, target: date) -> dict:
     cur.execute("""
         SELECT ps.code, s.name, dp.change_pct, ps.vol20_ratio, ps.dev_high52w,
                ps.break_20d, ps.chg25d, f.market_cap
-        FROM price_stats ps
+        FROM price_stats_current ps
         JOIN stocks s ON s.code = ps.code AND s.is_active = 1 AND s.market_id IN (2,3,4)
-        JOIN daily_prices dp ON dp.code = ps.code AND dp.date = %s
+        JOIN price_history dp ON dp.code = ps.code AND dp.date = %s
         LEFT JOIN stock_fundamentals f ON f.code = ps.code
         WHERE ps.vol20_ratio >= 1.5
     """, (target,))
@@ -265,7 +265,7 @@ def _fetch_triggers(cur, target: date) -> dict:
         SELECT d.code, s.name, dp.change_pct, d.category, d.title
         FROM disclosures d
         JOIN stocks s ON s.code = d.code
-        JOIN daily_prices dp ON dp.code = d.code AND dp.date = %s
+        JOIN price_history dp ON dp.code = d.code AND dp.date = %s
         WHERE DATE(d.disclosed_at) = %s AND d.sentiment = 1
           AND dp.change_pct >= 5
         ORDER BY dp.change_pct DESC
@@ -280,7 +280,7 @@ def _fetch_triggers(cur, target: date) -> dict:
 def _fetch_revisions(cur, target: date) -> list[dict]:
     """業績修正・増配（当日+前営業日の発表）を当日の株価反応と合わせて返す。
     前営業日の引け後発表は当日（target）の値動きに現れるため、両日分を対象にする。"""
-    cur.execute("SELECT MAX(date) FROM daily_prices WHERE date < %s", (target,))
+    cur.execute("SELECT MAX(date) FROM price_history WHERE date < %s", (target,))
     r = cur.fetchone()
     prev_day = r[0] if r and r[0] else target
     cur.execute("""
@@ -290,7 +290,7 @@ def _fetch_revisions(cur, target: date) -> list[dict]:
                dp.change_pct, r.session
         FROM forecast_revisions r
         JOIN stocks s ON s.code = r.code
-        LEFT JOIN daily_prices dp ON dp.code = r.code AND dp.date = %s
+        LEFT JOIN price_history dp ON dp.code = r.code AND dp.date = %s
         WHERE r.announced_at IN (%s, %s)
         ORDER BY r.direction DESC, ABS(COALESCE(r.op_chg_pct, r.ord_chg_pct, r.net_chg_pct, 0)) DESC
     """, (target, target, prev_day))
@@ -329,7 +329,7 @@ def _attach_series(cur, target: date, items: list[dict]) -> None:
     ph = ",".join(["%s"] * len(codes))
     cur.execute(f"""
         SELECT code, COALESCE(adj_close, close)
-        FROM daily_prices
+        FROM price_history
         WHERE code IN ({ph}) AND date > %s AND date <= %s AND close > 0
         ORDER BY code, date
     """, (*codes, target - timedelta(days=45), target))
@@ -383,8 +383,8 @@ def _fetch_watchlist(cur, target: date) -> list[dict]:
         SELECT w.code, s.name, dp.change_pct, dp.close, ps.chg5d
         FROM watchlist w
         JOIN stocks s ON s.code = w.code
-        LEFT JOIN daily_prices dp ON dp.code = w.code AND dp.date = %s
-        LEFT JOIN price_stats ps ON ps.code = w.code
+        LEFT JOIN price_history dp ON dp.code = w.code AND dp.date = %s
+        LEFT JOIN price_stats_current ps ON ps.code = w.code
         ORDER BY ABS(COALESCE(dp.change_pct, 0)) DESC
     """, (target,))
     return [{"code": str(r[0]), "name": r[1],
@@ -552,7 +552,7 @@ def _fetch_ai_fund(cur, target: date) -> dict | None:
     # 保有中のベスト/ワースト
     cur.execute("""
         SELECT p.code, s.name, p.avg_cost,
-               (SELECT close FROM daily_prices d WHERE d.code = p.code AND d.date <= %s ORDER BY d.date DESC LIMIT 1)
+               (SELECT close FROM price_history d WHERE d.code = p.code AND d.date <= %s ORDER BY d.date DESC LIMIT 1)
         FROM ai_fund_positions p JOIN stocks s ON s.code = p.code
     """, (target,))
     pos = [(c, n, (float(cl) / float(ac) - 1) * 100) for c, n, ac, cl in cur.fetchall() if cl]
@@ -926,8 +926,8 @@ def save_report(target_date: date | None = None, *, final: bool = False) -> date
     html = build_report_html(target_date)
     conn = get_conn()
     cur  = conn.cursor()
-    cur.execute("SELECT MAX(date) FROM daily_prices" if not target_date else
-                "SELECT MAX(date) FROM daily_prices WHERE date <= %s",
+    cur.execute("SELECT MAX(date) FROM price_history" if not target_date else
+                "SELECT MAX(date) FROM price_history WHERE date <= %s",
                 () if not target_date else (target_date,))
     d = cur.fetchone()[0]
     if not d:

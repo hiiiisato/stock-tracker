@@ -24,6 +24,16 @@ from batch_dates import (
     resolve_evening_business_date,
 )
 from config import get_conn
+from price_store import PricePublicationHeld, watched_codes
+
+
+def _record_price_hold(error: PricePublicationHeld) -> list[str]:
+    """個別保留を成功0件にせず記録。監視対象・全体取得失敗は確定処理を止める。"""
+    _log("prices", "partial", error.published_rows, str(error))
+    watched = watched_codes(error.errors)
+    if not error.published_rows or watched:
+        return [f"prices: {error}"]
+    return []
 
 
 def _jst_now() -> datetime:
@@ -320,9 +330,35 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
             _log("calendar_lookahead", "failed", error=str(e))
             critical_failures.append(f"calendar_lookahead: {e}")
 
-        # 3. 価格データ取得（Yahoo Finance のみ、差分更新）
+        # 2.8 公式の権利台帳を先に更新。価格の段差から分割を認定しない。
+        print("\n[権利台帳] JPX予定表・月報・TDnet本文を確認...")
+        official_coverage_ok = False
+        try:
+            from price_store import ensure_schema as ensure_price_schema
+            from corporate_actions import sync_official_actions
+            from disclosures import fetch_and_store_day
+            ensure_price_schema()
+            fetch_and_store_day(_jst_now().date())
+            action_result = sync_official_actions()
+            official_coverage_ok = action_result["coverage_ok"]
+            if action_result["errors"]:
+                if not official_coverage_ok:
+                    raise RuntimeError(" / ".join(action_result["errors"]))
+                unresolved = {message.split()[0].rstrip(":") for message in action_result["errors"]}
+                if watched_codes(unresolved):
+                    raise RuntimeError(" / ".join(action_result["errors"]))
+                _log("corporate_actions", "partial", action_result["changed"], " / ".join(action_result["errors"]))
+            else:
+                _log("corporate_actions", "done", action_result["changed"])
+        except Exception as e:
+            _log("corporate_actions", "failed", error=str(e))
+            critical_failures.append(f"corporate_actions: {e}")
+
+        # 3. 取得原本から正規化・分割調整して一括公開
         print(f"\n[3/4] 価格データ取得...")
         try:
+            if not official_coverage_ok:
+                raise RuntimeError("公式の権利情報を更新できなかったため、価格公開を次便へ持ち越します")
             # 手動救済が大引け前に走っても当日の未確定日足を保存しない。
             n2 = fetch_and_store_yahoo(max_workers=10, date_to=price_fetch_end_date())
             print(f"  Yahoo Finance: {n2} 件")
@@ -331,6 +367,9 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
             # （ARCHITECTURE.md記載の「幽霊行」= 休場日でもstale値の行を返すことがあるため、
             #  Yahooの取得結果で公式休場日を営業日に書き換えるのは危険）。
             _log("prices", "done", n2)
+        except PricePublicationHeld as e:
+            print(f"  個別銘柄を保留: {e}")
+            critical_failures.extend(_record_price_hold(e))
         except Exception as e:
             print(f"  エラー: {e}")
             traceback.print_exc()
@@ -356,12 +395,10 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
         _log("daily_batch", "failed", error=message)
         return False
 
-    # 3.5. 株式分割・併合 対応（JPX公式 J-Quants ベース）
-    #   - 直近窓の新規分割を Yahoo splits で暫定検知し、該当銘柄の adj_close を再計算。
-    #   - 週次で J-Quants 公式(AdjC)に同期して確定・上書き（splits.run_daily 内は日次の暫定のみ）。
-    #   価格急変ヒューリスティックは値幅制限撤廃等で誤判定するため廃止。
+    # 3.5. 公式台帳と公開係数を検査し、未処理・途中失敗を原本から再生成。
+    # 12週後のJ-Quants全銘柄照合はmisc_batchの夜間ジョブで毎日実行する。
     if not rankings_only:
-        print("\n[分割対応] 直近窓の新規分割を確認中（J-Quants/Yahoo・TDnet裏取り）...")
+        print("\n[分割対応] 公式台帳と公開済み価格の整合性を確認中...")
         try:
             from splits import run_daily as splits_run_daily
             n_changed = splits_run_daily()
@@ -370,15 +407,7 @@ def run(init: bool = False, rankings_only: bool = False, force: bool = False) ->
             print(f"  エラー: {e}")
             traceback.print_exc()
             _log("splits_daily", "failed", error=str(e))
-
-        # 調整アーティファクト監視（closeは正常なのにadjだけ跳ねる箇所を検出→自動修復）
-        try:
-            from splits import run_integrity_check
-            n_fixed = run_integrity_check()
-            _log("splits_integrity", "done", n_fixed)
-        except Exception as e:
-            print(f"  エラー: {e}")
-            _log("splits_integrity", "failed", error=str(e))
+            critical_failures.append(f"splits_daily: {e}")
 
         # 分割検証後の確定終値で価格リマインダーを判定する。
         print("\n[価格リマインダー] 終値到達を判定中...")

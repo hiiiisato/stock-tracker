@@ -171,7 +171,7 @@ def recompute_price_metrics(latest_date=None) -> int:
     cur  = conn.cursor()
 
     if not latest_date:
-        cur.execute("SELECT MAX(date) FROM daily_prices WHERE close IS NOT NULL")
+        cur.execute("SELECT MAX(date) FROM price_history WHERE close IS NOT NULL")
         latest_date = cur.fetchone()[0]
 
     if not latest_date:
@@ -183,7 +183,7 @@ def recompute_price_metrics(latest_date=None) -> int:
     #   → Yahoo予想(dividend_rate) → 実績(annual_dps)
     cur.execute("""
         UPDATE stock_fundamentals sf
-        JOIN daily_prices dp ON dp.code = sf.code AND dp.date = %s
+        JOIN price_history dp ON dp.code = sf.code AND dp.date = %s
         LEFT JOIN (
             SELECT code, div_per_share FROM (
                 SELECT code, div_per_share,

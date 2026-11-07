@@ -71,6 +71,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Cloudflare一次時計・GHA保険便のどちらも同じ処理を実行。
+      # Freeで取得可能になった日付を記録して、12週後の公式照合を順番に進める。
+      - name: 分割台帳と12週後の公式価格照合
+        id: price_quality
+        if: ${{ github.event.schedule == '30 15 * * *' || inputs.job == 'edinet_texts' }}
+        continue-on-error: true
+        run: python price_pipeline.py --sync-actions --audit --check
+
       # 月次（5,15,25日）はファンドレポート取込のみ。手動実行で job=fund_watch を選んだ場合も同様。
       - name: ファンド月次レポート取込
         if: ${{ github.event.schedule == '0 21 4,14,24 * *' || inputs.job == 'fund_watch' }}
@@ -131,3 +139,7 @@ jobs:
       - name: YouTube週報 生成・送信漏れ救済
         if: ${{ github.event.schedule == '30 20 * * 0' || inputs.job == 'youtube_recovery' }}
         run: python youtube_insights.py --weekly-recovery
+
+      - name: 価格品質の失敗をジョブ結果へ反映
+        if: ${{ always() && steps.price_quality.outcome == 'failure' }}
+        run: exit 1

@@ -110,7 +110,7 @@ def _load_groups(cur) -> tuple[dict, dict]:
         FROM stocks s
         LEFT JOIN sectors sec ON s.sector_id = sec.id
         LEFT JOIN stock_fundamentals f ON f.code = s.code
-        LEFT JOIN price_stats ps ON ps.code = s.code
+        LEFT JOIN price_stats_current ps ON ps.code = s.code
         WHERE s.is_active = 1 AND s.market_id IN (2, 3, 4)
     """)
     for code, sec_name, mc, dy, per, pbr, roe, revg, opg, close in cur.fetchall():
@@ -206,7 +206,7 @@ def compute(weeks: int = LOOKBACK_WEEKS) -> int:
                SUM(COALESCE(turnover, volume * close))                         AS tv,
                SUBSTRING_INDEX(GROUP_CONCAT(
                    COALESCE(adj_close, close) ORDER BY date DESC), ',', 1)     AS wk_close
-        FROM daily_prices
+        FROM price_history
         WHERE date >= %s AND close IS NOT NULL AND close > 0
         GROUP BY code, YEARWEEK(date, 3)
     """, (from_dt,))

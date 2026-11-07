@@ -25,7 +25,7 @@ def check_alerts(price_date: date | None = None) -> int:
     conn = get_conn(); cur = conn.cursor()
     try:
         if price_date is None:
-            cur.execute("SELECT MAX(date) FROM daily_prices WHERE close IS NOT NULL")
+            cur.execute("SELECT MAX(date) FROM price_history WHERE close IS NOT NULL")
             row = cur.fetchone()
             price_date = row[0] if row else None
         if price_date is None:
@@ -33,13 +33,13 @@ def check_alerts(price_date: date | None = None) -> int:
         cur.execute("""
             SELECT a.id, a.code, a.direction, a.target_price, a.version, dp.close,
                    EXISTS(
-                     SELECT 1 FROM stock_splits sp
-                     WHERE sp.code = a.code
+                     SELECT 1 FROM corporate_actions sp
+                     WHERE sp.code = a.code AND sp.status='confirmed'
                        AND sp.ex_date >= a.effective_from
                        AND sp.ex_date <= %s
                    ) AS has_split
             FROM price_alerts a
-            JOIN daily_prices dp ON dp.code = a.code AND dp.date = %s
+            JOIN price_history dp ON dp.code = a.code AND dp.date = %s
             WHERE a.status = 'active' AND a.effective_from <= %s AND dp.close IS NOT NULL
         """, (price_date, price_date, price_date))
         triggered = 0

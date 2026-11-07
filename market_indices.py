@@ -236,20 +236,6 @@ def get_latest_values() -> list:
     return results
 
 
-def _split_factor_map(cur, sym: str, from_date) -> dict:
-    """ETF(.T)の株式分割・併合の調整係数を daily_prices から取得する。
-    daily_prices は J-Quants公式AdjustmentFactorで adj_close が調整済み。
-    factor(日) = adj_close / close（併合前<1・調整不要日=1）を返し、生OHLCに掛けて調整する。
-    market_index_prices は生値OHLCのため、これを掛けないと併合日でチャートが崩れる
-    （例: 1306は2026-03-30に10:1併合し 3827→376 に段差）。"""
-    code = sym[:-2] if sym.endswith(".T") else sym   # "1306.T" -> "1306"
-    cur.execute("""
-        SELECT date, close, adj_close FROM daily_prices
-        WHERE code = %s AND date >= %s AND close IS NOT NULL AND close > 0 AND adj_close IS NOT NULL
-    """, (code, from_date))
-    return {r[0]: float(r[2]) / float(r[1]) for r in cur.fetchall() if r[1]}
-
-
 def get_history_for_chart(days: int = 90) -> dict:
     """
     ローソク足チャート用に各指数の直近 N 日間の OHLC データを返す。
@@ -262,6 +248,14 @@ def get_history_for_chart(days: int = 90) -> dict:
     cur  = conn.cursor()
     result = {}
     for sym, cfg in INDEX_CONFIGS.items():
+        if sym.endswith(".T"):
+            # 国内ETFも個別株と同じ公開済み価格を使う。別取得した指数価格への係数再適用はしない。
+            from price_store import load_candles
+            candles = load_candles([sym[:-2]], from_date, cur).get(sym[:-2], [])
+            if candles:
+                result[sym] = {"name": cfg["name"], "dates": [p["date"] for p in candles],
+                               **{field: [p[field[:-1]] for p in candles] for field in ("opens", "highs", "lows", "closes")}}
+            continue
         cur.execute("""
             SELECT date, open, high, low, close
             FROM market_index_prices
@@ -272,7 +266,7 @@ def get_history_for_chart(days: int = 90) -> dict:
         if not rows:
             continue
         # ETFは分割・併合を調整（indexや為替は対象外＝係数マップが空で恒等）
-        fmap = _split_factor_map(cur, sym, from_date) if sym.endswith(".T") else {}
+        fmap = {}
 
         def _adj(r, i):
             v = r[i] if r[i] is not None else r[4]

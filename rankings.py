@@ -31,7 +31,7 @@ def compute_daily_rankings(target_date: date = None, top_n: int = 15) -> int:
 
     cur = conn.cursor()
 
-    cur.execute("SELECT COUNT(*) FROM daily_prices WHERE date = %s", (target_date,))
+    cur.execute("SELECT COUNT(*) FROM price_history WHERE date = %s", (target_date,))
     if cur.fetchone()[0] == 0:
         print(f"  {target_date} の価格データなし（休場日の可能性）")
         cur.close()
@@ -45,7 +45,7 @@ def compute_daily_rankings(target_date: date = None, top_n: int = 15) -> int:
                 dp.code,
                 dp.`{order_col}` AS value,
                 ROW_NUMBER() OVER (ORDER BY dp.`{order_col}` DESC) AS `rank`
-            FROM daily_prices dp
+            FROM price_history dp
             JOIN stocks s ON dp.code = s.code
             LEFT JOIN markets m ON s.market_id = m.id
             WHERE dp.date = %s
@@ -96,7 +96,7 @@ def compute_weekly_rankings(week_ending: date = None, top_n: int = 15) -> int:
                     PARTITION BY code ORDER BY date
                     ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
                 ) AS last_close
-            FROM daily_prices
+            FROM price_history
             WHERE date BETWEEN %s AND %s
         ),
         weekly AS (

@@ -1,19 +1,18 @@
 """
 Yahoo Finance APIで日本株の日次価格を取得してTiDBに保存。
 
-取得値:
-  close     … 実際の終値（画面表示用）
-  adj_close … 株式分割・配当調整済終値（指標計算・チャート用）
-  adj_factor… 調整係数 = adj_close / close（1.0=未調整、0.1=10:1分割）
+取得値は提供元の観測値。原本を保存してprice_pipelineが当時値・調整済み値へ正規化する。
+Yahooのadjclose（配当込み）は使わない。
 
 取得タイミング: 東京市場終了後 (15:30 JST) 以降に実行すること
 """
 import time
 import requests
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from config import get_conn, bulk_upsert
+from zoneinfo import ZoneInfo
+from config import get_conn, PRICE_REPAIR_DAYS
 
 YAHOO_API = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; stock-tracker/1.0)"}
@@ -21,8 +20,16 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; stock-tracker/1.0)"}
 # 最新日だけを差分取得すると、途中失敗で「一部銘柄だけ最新日まで保存」された場合に
 # DB全体のMAX(date)が進み、残りの銘柄が永久に補完されない。毎回この期間を全銘柄
 # 再取得してUPSERTすることで、PC停止・API一時障害・途中終了を次回実行時に自己修復する。
-ROLLING_REPAIR_DAYS = 14
+ROLLING_REPAIR_DAYS = PRICE_REPAIR_DAYS
 MIN_PRICE_COVERAGE_RATIO = 0.90
+
+
+class QuoteBatch(list):
+    """同時に取得した分割イベントと価格観測。原本の取得基準を失わない。"""
+    def __init__(self, rows=(), *, split_events=()):
+        super().__init__(rows)
+        self.split_events = list(split_events)
+        self.observed_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _get_missing_date_range(
@@ -74,7 +81,7 @@ def _validate_recent_price_coverage(
             """
             SELECT tc.date, COUNT(DISTINCT s.code) AS price_count
             FROM trading_calendar tc
-            LEFT JOIN daily_prices dp
+            LEFT JOIN price_history dp
               ON dp.date = tc.date AND dp.close IS NOT NULL
             LEFT JOIN stocks s
               ON s.code = dp.code AND s.is_active = TRUE
@@ -105,17 +112,18 @@ def _validate_recent_price_coverage(
 
 
 def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
-    """Yahoo Finance APIから1銘柄の日次データを取得（adjclose込み）。"""
+    """Yahooのquote（配当調整なし）とsplitイベントを同じ応答から取得。"""
     ticker = f"{code4}.T"
     url = YAHOO_API.format(ticker=ticker)
 
-    import_from = int(datetime.combine(date_from, datetime.min.time()).timestamp())
-    import_to   = int(datetime.combine(date_to,   datetime.min.time()).timestamp()) + 86400
+    jst = ZoneInfo("Asia/Tokyo")
+    import_from = int(datetime.combine(date_from, datetime.min.time(), tzinfo=jst).timestamp())
+    import_to = int(datetime.combine(date_to + timedelta(days=1), datetime.min.time(), tzinfo=jst).timestamp())
 
     for attempt in range(3):
         try:
             r = requests.get(url,
-                params={"interval": "1d", "period1": import_from, "period2": import_to},
+                params={"interval": "1d", "period1": import_from, "period2": import_to, "events": "splits"},
                 headers=HEADERS,
                 timeout=15,
             )
@@ -143,34 +151,25 @@ def _fetch_yahoo(code4: str, date_from: date, date_to: date) -> List[dict]:
                 close = closes[i] if i < len(closes) else None
                 if close is None:
                     continue
-                dt = datetime.fromtimestamp(ts).date()
+                dt = datetime.fromtimestamp(ts, jst).date()
                 # Yahoo chart APIはperiod2境界の次日（当日進行中の足を含む）を
                 # 返すことがある。要求範囲外はレスポンス受領後にも必ず除外する。
                 if not date_from <= dt <= date_to:
                     continue
 
-                # adj_close は close と同値で書く（調整はしない）。
-                # 理由: Yahoo の adjclose は「配当・分配金」まで調整に含めるため、
-                # 本システムの方針（分割のみ調整）と食い違う。大型分配のある銘柄
-                # （例: 9282 インフラファンドの分配落ち-14%）で adj がズレる実害が出た。
-                # 分割の調整は同じ夜間バッチの後段 splits.run_daily が一元管理する
-                # （取得窓が分割除権日をまたいだ場合も、Yahoo splits 検知→検証→
-                #  該当銘柄の adj_close 再構築で自己修復される）。
-                adj_c = round(close, 4)
-                adj_factor = 1.0
-
                 rows.append({
                     "code":       code4,
                     "date":       str(dt),
-                    "open":       round(opens[i],  2) if i < len(opens)  and opens[i]  else None,
-                    "high":       round(highs[i],  2) if i < len(highs)  and highs[i]  else None,
-                    "low":        round(lows[i],   2) if i < len(lows)   and lows[i]   else None,
-                    "close":      round(close,     2),
-                    "volume":     int(volumes[i])     if i < len(volumes) and volumes[i] else None,
-                    "adj_close":  adj_c,
-                    "adj_factor": adj_factor,
+                    "open":       opens[i] if i < len(opens) else None,
+                    "high":       highs[i] if i < len(highs) else None,
+                    "low":        lows[i] if i < len(lows) else None,
+                    "close":      close,
+                    "volume":     volumes[i] if i < len(volumes) else None,
                 })
-            return rows
+            events = [{"date": str(datetime.fromtimestamp(s["date"], jst).date()),
+                       "numerator": s["numerator"], "denominator": s["denominator"]}
+                      for s in res.get("events", {}).get("splits", {}).values()]
+            return QuoteBatch(rows, split_events=events)
         except Exception:
             time.sleep(1)
     return []
@@ -193,7 +192,7 @@ def fetch_and_store_yahoo(max_workers: int = 10, date_to: date | None = None) ->
 
     print(f"  対象銘柄: {len(codes)} 件 (並列{max_workers}本)")
 
-    all_rows: List[dict] = []
+    batches: dict[str, list[dict]] = {}
     failed: List[str] = []
 
     def fetch(code4):
@@ -209,63 +208,35 @@ def fetch_and_store_yahoo(max_workers: int = 10, date_to: date | None = None) ->
             if not rows:
                 failed.append(code4)
             else:
-                all_rows.extend(rows)
+                batches[code4] = rows
             if done % 1000 == 0:
                 print(f"    進捗: {done}/{len(codes)} 銘柄完了")
 
-    print(f"  取得完了: {len(all_rows)} 件, データなし: {len(failed)} 銘柄")
+    print(f"  取得完了: {sum(map(len,batches.values()))} 件, データなし: {len(failed)} 銘柄")
 
     # 現在の有効銘柄数を基準にする充足率は、新規上場前まで遡る長期初期取得には
     # 適用できない。自己修復対象の直近窓だけを厳格検証する。
     coverage_from = max(date_from, date_to - timedelta(days=ROLLING_REPAIR_DAYS - 1))
 
-    if not all_rows:
-        _validate_recent_price_coverage(coverage_from, date_to)
-        return 0
+    if not batches:
+        raise RuntimeError("Yahoo価格が全銘柄0件でした。取得成功にはしません")
 
-    db_rows = [(
-        r["code"], r["date"], r["open"], r["high"],
-        r["low"], r["close"], r["volume"], r["adj_close"], r["adj_factor"],
-    ) for r in all_rows]
-
-    conn = get_conn()
-    cur = conn.cursor()
-    bulk_upsert(cur, "daily_prices",
-        ["code", "date", "open", "high", "low", "close", "volume", "adj_close", "adj_factor"],
-        db_rows,
-        update_cols=["open", "high", "low", "close", "volume", "adj_close", "adj_factor"])
-    conn.commit()
-
-    # 前日比をadj_closeベースで更新（株式分割の影響を除外）
-    cur.execute("""
-        UPDATE daily_prices dp
-        JOIN (
-            SELECT code, date,
-                   LAG(adj_close) OVER (PARTITION BY code ORDER BY date) AS prev_adj
-            FROM daily_prices
-            WHERE date >= DATE_SUB(%s, INTERVAL 7 DAY)
-              AND date <= %s
-              AND adj_close IS NOT NULL
-        ) sub ON dp.code = sub.code AND dp.date = sub.date
-        SET dp.change_pct = CASE
-            WHEN sub.prev_adj IS NULL OR sub.prev_adj = 0 THEN NULL
-            WHEN ABS((dp.adj_close - sub.prev_adj) / sub.prev_adj * 100) > 9999 THEN NULL
-            ELSE ROUND((dp.adj_close - sub.prev_adj) / sub.prev_adj * 100, 4)
-        END
-        WHERE dp.date >= %s
-          AND sub.prev_adj IS NOT NULL
-          AND sub.prev_adj > 0
-    """, (date_from, date_to, date_from))
-    conn.commit()
-
-    cur.close()
-    conn.close()
+    # 原本→検証→当時値と調整済み値の同時公開。adj_close=closeの直接上書きは禁止。
+    from price_pipeline import store_yahoo_batches
+    from price_store import PricePublicationHeld
+    held = None
+    try:
+        written = store_yahoo_batches(batches, date_to)
+    except PricePublicationHeld as exc:
+        held, written = exc, exc.published_rows
 
     coverage = _validate_recent_price_coverage(coverage_from, date_to)
     if coverage:
         summary = ", ".join(f"{day}:{count:,}" for day, count, _ in coverage)
         print(f"  価格充足確認: {summary}")
-    return len(db_rows)
+    if held:
+        raise held
+    return written
 
 
 if __name__ == "__main__":

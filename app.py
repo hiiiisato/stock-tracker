@@ -27,7 +27,7 @@ from datetime import date, timedelta, datetime
 
 import requests as _requests
 from bs4 import BeautifulSoup as _BS
-from flask import Flask, abort, redirect, request, jsonify, make_response
+from flask import Flask, abort, redirect, request, jsonify, make_response, g, has_request_context
 
 from config import QUARTER_MOMENTUM_THRESHOLD_PCT, get_conn, db
 from quarter_analysis import assess_quarter
@@ -41,14 +41,26 @@ CACHE_TTL = 3600  # 1時間
 
 
 def _get(key: str):
+    from price_store import publication_generation
+    generation = publication_generation()
+    if has_request_context():
+        if not hasattr(g, "price_cache_starts"):
+            g.price_cache_starts = {}
+        g.price_cache_starts[key] = generation
     with _lock:
         e = _cache.get(key)
-        return e["v"] if e and time.time() - e["t"] < CACHE_TTL else None
+    if e and time.time() - e["t"] < CACHE_TTL:
+        return e["v"] if e.get("price_generation") == generation else None
+    return None
 
 
 def _set(key: str, val):
+    from price_store import publication_generation
+    generation = publication_generation()
+    if has_request_context() and getattr(g, "price_cache_starts", {}).get(key, generation) != generation:
+        return  # 生成中に公開版が変わった結果を新しい版のキャッシュへ入れない。
     with _lock:
-        _cache[key] = {"v": val, "t": time.time()}
+        _cache[key] = {"v": val, "t": time.time(), "price_generation": generation}
 
 
 def _bust_prefix(prefix: str):
@@ -817,7 +829,7 @@ def _build_home() -> str:
     cur  = conn.cursor()
 
     # 最新日付
-    cur.execute("SELECT MAX(date) FROM daily_prices WHERE close IS NOT NULL")
+    cur.execute("SELECT MAX(date) FROM price_history WHERE close IS NOT NULL")
     latest_date: date = cur.fetchone()[0]
 
     # 市場概況
@@ -826,7 +838,7 @@ def _build_home() -> str:
           SUM(CASE WHEN change_pct > 0 THEN 1 ELSE 0 END) AS up,
           SUM(CASE WHEN change_pct < 0 THEN 1 ELSE 0 END) AS dn,
           SUM(CASE WHEN change_pct = 0 THEN 1 ELSE 0 END) AS flat
-        FROM daily_prices
+        FROM price_history
         WHERE date = %s AND close IS NOT NULL AND change_pct IS NOT NULL
     """, (latest_date,))
     row = cur.fetchone()
@@ -840,7 +852,7 @@ def _build_home() -> str:
     # 本日の値上がりTOP5（株式分割等の異常値を除外）
     cur.execute("""
         SELECT dp.code, s.name, dp.close, dp.change_pct
-        FROM daily_prices dp
+        FROM price_history dp
         JOIN stocks s ON dp.code = s.code
         WHERE dp.date = %s
           AND dp.close IS NOT NULL
@@ -855,7 +867,7 @@ def _build_home() -> str:
     # 本日の値下がりTOP5（株式分割等の異常値を除外）
     cur.execute("""
         SELECT dp.code, s.name, dp.close, dp.change_pct
-        FROM daily_prices dp
+        FROM price_history dp
         JOIN stocks s ON dp.code = s.code
         WHERE dp.date = %s
           AND dp.close IS NOT NULL
@@ -872,7 +884,7 @@ def _build_home() -> str:
         SELECT w.code, s.name, dp.close, dp.change_pct, w.added_at
         FROM watchlist w
         JOIN stocks s ON w.code = s.code
-        LEFT JOIN daily_prices dp ON dp.code = w.code AND dp.date = %s
+        LEFT JOIN price_history dp ON dp.code = w.code AND dp.date = %s
         ORDER BY dp.change_pct DESC
     """, (latest_date,))
     watchlist = cur.fetchall()
@@ -1377,7 +1389,7 @@ def _build_event_picks_html(days: int = 60, min_mcap_oku: float = 50, top_n: int
         FROM price_events pe
         JOIN stocks s ON pe.code = s.code
         LEFT JOIN stock_fundamentals f  ON pe.code = f.code
-        LEFT JOIN price_stats ps        ON pe.code = ps.code
+        LEFT JOIN price_stats_current ps        ON pe.code = ps.code
         LEFT JOIN theoretical_values tv ON pe.code = tv.code
         WHERE pe.direction = 'up'
           AND pe.event_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
@@ -1397,7 +1409,7 @@ def _build_event_picks_html(days: int = 60, min_mcap_oku: float = 50, top_n: int
     ph = ",".join(["%s"] * len(codes))
     cur.execute(f"""
         SELECT code, date, COALESCE(adj_close, close)
-        FROM daily_prices
+        FROM price_history
         WHERE code IN ({ph}) AND date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
           AND close IS NOT NULL
         ORDER BY code, date
@@ -1518,7 +1530,7 @@ def _build_rank_tables(period: str, target) -> str:
     if period == "daily":
         cur.execute("""
             SELECT dp.code, s.name, dp.change_pct
-            FROM daily_prices dp JOIN stocks s ON dp.code = s.code
+            FROM price_history dp JOIN stocks s ON dp.code = s.code
             WHERE dp.date = %s AND dp.change_pct IS NOT NULL
               AND ABS(dp.change_pct) <= 50 AND s.is_active = TRUE
             ORDER BY dp.change_pct DESC LIMIT 20
@@ -1526,7 +1538,7 @@ def _build_rank_tables(period: str, target) -> str:
         gainers = cur.fetchall()
         cur.execute("""
             SELECT dp.code, s.name, dp.change_pct
-            FROM daily_prices dp JOIN stocks s ON dp.code = s.code
+            FROM price_history dp JOIN stocks s ON dp.code = s.code
             WHERE dp.date = %s AND dp.change_pct IS NOT NULL
               AND ABS(dp.change_pct) <= 50 AND s.is_active = TRUE
             ORDER BY dp.change_pct ASC LIMIT 20
@@ -1535,7 +1547,7 @@ def _build_rank_tables(period: str, target) -> str:
         cur.execute("""
             SELECT dp.code, s.name,
                    COALESCE(dp.turnover, dp.volume * dp.close) / 1e8 AS tv
-            FROM daily_prices dp JOIN stocks s ON dp.code = s.code
+            FROM price_history dp JOIN stocks s ON dp.code = s.code
             WHERE dp.date = %s AND dp.close IS NOT NULL AND s.is_active = TRUE
             ORDER BY tv DESC LIMIT 20
         """, (target,))
@@ -1549,7 +1561,7 @@ def _build_rank_tables(period: str, target) -> str:
                     LAST_VALUE(COALESCE(adj_close, close)) OVER (
                         PARTITION BY code ORDER BY date
                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS lc
-                FROM daily_prices
+                FROM price_history
                 WHERE date BETWEEN %s AND %s AND close > 0
             ), wk AS (
                 SELECT w.code, s.name,
@@ -2800,7 +2812,7 @@ def _build_swing_page() -> str:
                ps.chg5d
         FROM swing_scores ss
         JOIN stocks s ON s.code = ss.code
-        LEFT JOIN price_stats ps ON ps.code = ss.code
+        LEFT JOIN price_stats_current ps ON ps.code = ss.code
         WHERE ss.scored_at = %s AND ss.score >= 0
         ORDER BY ss.score DESC, ss.code
     """, (scored_at,))
@@ -3499,7 +3511,7 @@ def _compute_theme_scores() -> list[dict]:
     hi1y = {r[0]: float(r[1] or 0) for r in cur.fetchall()}
     # TOPIX(1306)の同期間リターン（超過リターン算出用）
     def _tpx_at(dt):
-        cur.execute("SELECT COALESCE(adj_close, close) FROM daily_prices "
+        cur.execute("SELECT COALESCE(adj_close, close) FROM price_history "
                     "WHERE code='1306' AND date <= %s ORDER BY date DESC LIMIT 1", (dt,))
         r = cur.fetchone()
         return float(r[0]) if r and r[0] else None
@@ -3524,7 +3536,7 @@ def _compute_theme_scores() -> list[dict]:
     mcap_by_theme = {r[0]: float(r[1] or 0) / 1e12 for r in cur.fetchall()}
     cur.execute("""
         SELECT tm.theme_id, ps.op_growth FROM theme_members tm
-        JOIN price_stats ps ON ps.code = tm.code
+        JOIN price_stats_current ps ON ps.code = tm.code
         WHERE tm.tier >= 2 AND ps.op_growth IS NOT NULL
     """)
     _g: dict[int, list] = {}
@@ -3651,7 +3663,7 @@ def _score_theme_stocks(theme_id: int, limit: int = 40) -> list[dict]:
                f.market_cap, tv.upside_pct
         FROM theme_members tm
         JOIN stocks s ON tm.code = s.code
-        LEFT JOIN price_stats ps ON tm.code = ps.code
+        LEFT JOIN price_stats_current ps ON tm.code = ps.code
         LEFT JOIN stock_fundamentals f ON tm.code = f.code
         LEFT JOIN theoretical_values tv ON tm.code = tv.code
         WHERE tm.theme_id = %s AND tm.tier >= 2 AND s.is_active = TRUE
@@ -4785,7 +4797,7 @@ _AIFUND_CSS = """
 def _af_sparkline(cur, code: str, buy_date, buy_price: float) -> str:
     """保有銘柄カード用ミニチャート（直近75日・買値の点線・取得日マーカー付き）"""
     cur.execute("""
-        SELECT date, COALESCE(adj_close, close) FROM daily_prices
+        SELECT date, COALESCE(adj_close, close) FROM price_history
         WHERE code = %s AND date >= DATE_SUB(CURDATE(), INTERVAL 75 DAY)
           AND close > 0 ORDER BY date
     """, (code,))
@@ -4833,14 +4845,14 @@ def _build_aifund_page() -> str:
         return _page_html("AIファンド", body, active="aifund")
     cash, inception, last_decided = float(st[0]), st[1], st[2]
 
-    cur.execute("SELECT MAX(date) FROM daily_prices")
+    cur.execute("SELECT MAX(date) FROM price_history")
     latest = cur.fetchone()[0]
 
     # 保有ポジション（現値・評価）
     cur.execute("""
         SELECT p.code, s.name, p.shares, p.avg_cost, p.buy_date, p.buy_reason, p.thesis, p.style, p.catalyst,
                p.strategy,
-               (SELECT close FROM daily_prices d WHERE d.code = p.code ORDER BY d.date DESC LIMIT 1)
+               (SELECT close FROM price_history d WHERE d.code = p.code ORDER BY d.date DESC LIMIT 1)
         FROM ai_fund_positions p JOIN stocks s ON s.code = p.code
     """)
     positions = []
@@ -4884,7 +4896,7 @@ def _build_aifund_page() -> str:
     try:
         cur.execute("""
             SELECT b.rank_no, b.code, s.name, b.style, b.reason, b.close_at, b.bench_date,
-                   (SELECT close FROM daily_prices d WHERE d.code = b.code ORDER BY d.date DESC LIMIT 1)
+                   (SELECT close FROM price_history d WHERE d.code = b.code ORDER BY d.date DESC LIMIT 1)
             FROM ai_fund_bench b JOIN stocks s ON s.code = b.code
             WHERE b.bench_date = (SELECT MAX(bench_date) FROM ai_fund_bench)
             ORDER BY b.rank_no
@@ -7184,18 +7196,14 @@ def _build_stock_page(code: str) -> str:
     except Exception:
         pass
 
-    # 価格データ（直近3年）— adj_closeで連続チャートを表示（株式分割対応）
-    # close/adj_closeの比率をopen/high/lowにも適用し、分割前後で連続した表示にする
+    # 株価・OHLC・出来高は公開済みの共通系列をそのまま読む。
     from_dt = date.today() - timedelta(days=365 * 3)
     cur.execute("""
         SELECT date,
-               ROUND(open * COALESCE(adj_close, close) / close, 2) AS open,
-               ROUND(high * COALESCE(adj_close, close) / close, 2) AS high,
-               ROUND(low  * COALESCE(adj_close, close) / close, 2) AS low,
-               COALESCE(adj_close, close)                           AS close,
+               open, high, low, close,
                volume,
                change_pct
-        FROM daily_prices
+        FROM price_history
         WHERE code = %s AND date >= %s AND close IS NOT NULL AND close > 0
         ORDER BY date
     """, (code, from_dt))
@@ -8117,8 +8125,8 @@ def _build_stock_page(code: str) -> str:
         "high":   float(p[2] or 0),
         "low":    float(p[3] or 0),
         "close":  float(p[4] or 0),
-        "volume": int(p[5] or 0),
-    } for p in prices]) if prices else "[]"
+        "volume": float(p[5]) if p[5] is not None else None,
+    } for p in prices if all(v is not None for v in p[1:5])]) if prices else "[]"
 
     chart_div = f"""
 <div class="chart-controls">
@@ -8224,6 +8232,10 @@ def _build_stock_page(code: str) -> str:
   renderChart();
 }})();
 </script>""" if prices else '<p class="muted" style="padding:40px;text-align:center">価格データなし</p>'
+    if not prices:
+        from price_store import state_for
+        if state_for(code)["status"] == "held":
+            chart_div = '<p class="muted" style="padding:40px;text-align:center">株式分割などの価格補正を確認中です。検証完了後に自動更新します。</p>'
 
     # ─ 詳細指標パネル ─
     def _mp_row(key, val, color=""):
@@ -9223,11 +9235,11 @@ def api_screen():
         LEFT JOIN stock_fundamentals f ON s.code = f.code
         LEFT JOIN (
             SELECT dp.code, dp.close, dp.change_pct
-            FROM daily_prices dp
-            JOIN (SELECT code, MAX(date) AS max_date FROM daily_prices GROUP BY code) mx
+            FROM price_history dp
+            JOIN (SELECT code, MAX(date) AS max_date FROM price_history GROUP BY code) mx
               ON dp.code = mx.code AND dp.date = mx.max_date
         ) lp ON s.code = lp.code
-        LEFT JOIN price_stats ps ON s.code = ps.code
+        LEFT JOIN price_stats_current ps ON s.code = ps.code
         LEFT JOIN theoretical_values tv ON s.code = tv.code
         LEFT JOIN (
             SELECT DISTINCT code FROM disclosures
@@ -9368,7 +9380,7 @@ def api_period_stats():
     to_s   = request.args.get("to", "").strip()
 
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT MAX(date) FROM daily_prices")
+    cur.execute("SELECT MAX(date) FROM price_history")
     latest = cur.fetchone()[0]
     if latest is None:
         cur.close(); conn.close()
@@ -9407,12 +9419,12 @@ def api_period_stats():
             SELECT code, MIN(date) AS d0, MAX(date) AS d1,
                    MAX(COALESCE(adj_close, close)) AS hi,
                    MIN(COALESCE(adj_close, close)) AS lo
-            FROM daily_prices
+            FROM price_history
             WHERE date >= %s AND date <= %s AND close IS NOT NULL AND close > 0
             GROUP BY code
         ) g
-        JOIN daily_prices s ON s.code = g.code AND s.date = g.d0
-        JOIN daily_prices e ON e.code = g.code AND e.date = g.d1
+        JOIN price_history s ON s.code = g.code AND s.date = g.d0
+        JOIN price_history e ON e.code = g.code AND e.date = g.d1
     """, (start_req, end_req))
 
     stats = {}
@@ -9449,7 +9461,7 @@ def screen():
 def api_backtest_dates():
     """バックテストで選択可能な週次スナップショット日の一覧。"""
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history ORDER BY snapshot_date")
+    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history_current ORDER BY snapshot_date")
     dates = [str(r[0]) for r in cur.fetchall()]
     cur.close(); conn.close()
     return _json.dumps(dates), 200, {"Content-Type": "application/json"}
@@ -9467,7 +9479,7 @@ def api_screen_asof():
         return cached, 200, {"Content-Type": "application/json"}
 
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history ORDER BY snapshot_date")
+    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history_current ORDER BY snapshot_date")
     dates = [r[0] for r in cur.fetchall()]
     if not dates:
         cur.close(); conn.close()
@@ -9482,7 +9494,7 @@ def api_screen_asof():
     col_list = ", ".join("h.`" + c + "`" for c in cols)
     cur.execute(f"""
         SELECT {col_list}, s.name
-        FROM price_stats_history h JOIN stocks s ON h.code = s.code
+        FROM price_stats_history_current h JOIN stocks s ON h.code = s.code
         WHERE h.snapshot_date = %s
     """, (snap,))
     rows = cur.fetchall()
@@ -9544,7 +9556,7 @@ def _prices_asof(cur, dt, lookback_days=40):
         SELECT code, adj_close, dt FROM (
             SELECT code, COALESCE(adj_close, close) AS adj_close, date AS dt,
                    ROW_NUMBER() OVER (PARTITION BY code ORDER BY date DESC) AS rn
-            FROM daily_prices
+            FROM price_history
             WHERE date <= %s AND date >= %s AND close IS NOT NULL AND close > 0
         ) t WHERE rn = 1
     """, (dt, frm))
@@ -9582,7 +9594,7 @@ def api_backtest():
             SELECT code, adj_close FROM (
                 SELECT code, COALESCE(adj_close, close) AS adj_close,
                        ROW_NUMBER() OVER (PARTITION BY code ORDER BY date DESC) AS rn
-                FROM daily_prices
+                FROM price_history
                 WHERE code IN ({ph}) AND date <= %s AND close IS NOT NULL AND close > 0
             ) t WHERE rn = 1
         """, missing + [d2])
@@ -9825,7 +9837,7 @@ def _build_earnings_page() -> str:
                p.turnover_20d, f.per, f.market_cap
         FROM earnings_schedule es
         JOIN stocks s ON s.code = es.code AND s.is_active = 1
-        JOIN price_stats p ON p.code = es.code
+        JOIN price_stats_current p ON p.code = es.code
         LEFT JOIN stock_fundamentals f ON f.code = es.code
         WHERE es.announce_date BETWEEN %s AND %s AND p.turnover_20d >= 1
         ORDER BY es.announce_date, p.turnover_20d DESC
@@ -9841,7 +9853,7 @@ def _build_earnings_page() -> str:
     if codes:
         ph = ",".join(["%s"] * len(codes))
         cur.execute(f"""
-            SELECT code, volume, change_pct FROM daily_prices
+            SELECT code, volume, change_pct FROM price_history
             WHERE code IN ({ph}) AND date >= %s ORDER BY code, date
         """, (*codes, today - timedelta(days=500)))
         series: dict = {}
@@ -10318,7 +10330,7 @@ def theme_page(theme_id: int):
     dates  = [r[0].isoformat() for r in idx_rows]
     idxs   = [float(r[1]) for r in idx_rows]
     cur.execute("""
-        SELECT date, COALESCE(adj_close, close) FROM daily_prices
+        SELECT date, COALESCE(adj_close, close) FROM price_history
         WHERE code = '1306' AND close IS NOT NULL AND date >= %s ORDER BY date
     """, (idx_rows[0][0] if idx_rows else date.today(),))
     tpx_map = {r[0].isoformat(): float(r[1]) for r in cur.fetchall()}
@@ -10340,8 +10352,8 @@ def theme_page(theme_id: int):
         ph = ",".join(["%s"] * len(codes))
         cur.execute(f"""
             SELECT dp.code, dp.close, dp.change_pct, f.div_yield
-            FROM daily_prices dp
-            JOIN (SELECT code, MAX(date) mx FROM daily_prices WHERE code IN ({ph}) GROUP BY code) t
+            FROM price_history dp
+            JOIN (SELECT code, MAX(date) mx FROM price_history WHERE code IN ({ph}) GROUP BY code) t
               ON dp.code = t.code AND dp.date = t.mx
             LEFT JOIN stock_fundamentals f ON f.code = dp.code
         """, codes)
@@ -10349,7 +10361,7 @@ def theme_page(theme_id: int):
         # ミニチャート用: 直近3ヶ月の終値（分割調整済み）
         from datetime import timedelta as _td
         cur.execute(f"""
-            SELECT code, date, COALESCE(adj_close, close) FROM daily_prices
+            SELECT code, date, COALESCE(adj_close, close) FROM price_history
             WHERE code IN ({ph}) AND date >= %s AND close IS NOT NULL
             ORDER BY code, date
         """, (*codes, date.today() - _td(days=95)))
@@ -10537,7 +10549,7 @@ def api_chart_grid():
     ph = ",".join(["%s"] * len(codes))
     cur.execute(f"""
         SELECT dp.code, s.name, dp.date, dp.open, dp.high, dp.low, dp.close
-        FROM daily_prices dp
+        FROM price_history dp
         JOIN stocks s ON dp.code = s.code
         WHERE dp.code IN ({ph}) AND dp.date >= %s AND dp.close IS NOT NULL
         ORDER BY dp.code, dp.date
@@ -10548,8 +10560,8 @@ def api_chart_grid():
         SELECT lp.code, lp.close, lp.change_pct, f.market_cap, f.per, f.pbr, f.div_yield
         FROM (
             SELECT dp.code, dp.close, dp.change_pct
-            FROM daily_prices dp
-            JOIN (SELECT code, MAX(date) AS mx FROM daily_prices GROUP BY code) t
+            FROM price_history dp
+            JOIN (SELECT code, MAX(date) AS mx FROM price_history GROUP BY code) t
               ON dp.code = t.code AND dp.date = t.mx
             WHERE dp.code IN ({ph})
         ) lp
@@ -10566,6 +10578,8 @@ def api_chart_grid():
     price_map = _dd(list)
     name_map  = {}
     for code, name, dt, o, h, l, c in rows:
+        if any(v is None for v in (o, h, l, c)):
+            continue
         name_map[code] = name
         price_map[code].append({
             "date":  str(dt),
@@ -10590,7 +10604,7 @@ def api_chart_grid():
             "prices":     price_map.get(code, []),
         })
 
-    return _json.dumps(result, ensure_ascii=False, default=str)
+    return _json.dumps(result, ensure_ascii=False, default=str), 200, {"Content-Type": "application/json", "Cache-Control": "no-store"}
 
 
 @app.route("/api/perf_grid")
@@ -10731,13 +10745,19 @@ def api_watchlist_memos(code: str):
 def api_watchlist_chart(code: str):
     if not _valid_code(code):
         return jsonify(error="銘柄コードが不正です"), 400
-    key = f"watchlist_chart_{code}"
+    from price_store import state_for
+    price_state = state_for(code)
+    if price_state["status"] not in ("published", "audit_due"):
+        return jsonify(error="株式分割などの価格補正を確認中です。検証完了後に自動更新します。"), 503
+    key = f"watchlist_chart_{code}_{price_state.get('version')}"
     prices = _get(key)
     if prices is None:
         from watchlist_workspace import load_chart
         prices = load_chart(code)
         _set(key, prices)
-    return jsonify(prices)
+    response = jsonify(prices)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def _safe_next(default: str = "/watchlist") -> str:
@@ -11305,17 +11325,17 @@ def _build_portfolio_page() -> str:
         div_events: dict = {}
         if stock_codes:
             ph = ",".join(["%s"] * len(stock_codes))
-            cur.execute(f"""SELECT dp.code, dp.close FROM daily_prices dp
-                JOIN (SELECT code, MAX(date) md FROM daily_prices
+            cur.execute(f"""SELECT dp.code, dp.close FROM price_history dp
+                JOIN (SELECT code, MAX(date) md FROM price_history
                       WHERE code IN ({ph}) AND close IS NOT NULL GROUP BY code) m
                   ON dp.code = m.code AND dp.date = m.md""", stock_codes)
             live = {r[0]: float(r[1]) for r in cur.fetchall()}
-            cur.execute("SELECT MAX(date) FROM daily_prices WHERE close IS NOT NULL")
+            cur.execute("SELECT MAX(date) FROM price_history WHERE close IS NOT NULL")
             latest_pd = cur.fetchone()[0]
 
             # ヘルスチェック用のテクニカル＋F-score（現在値は live を使う）
             cur.execute(f"""SELECT code, ma50, ma200_slope, rsi14, gc_75_200, dev_ma25, fscore
-                            FROM price_stats WHERE code IN ({ph})""", stock_codes)
+                            FROM price_stats_current WHERE code IN ({ph})""", stock_codes)
             for r in cur.fetchall():
                 stats_map[r[0]] = {"ma50": _f(r[1]), "ma200_slope": _f(r[2]),
                                    "rsi14": _f(r[3]), "gc_75_200": r[4],
@@ -11338,7 +11358,7 @@ def _build_portfolio_page() -> str:
             cutoff = (latest_pd - timedelta(days=400)) if latest_pd else None
             series_codes = stock_codes + ["1306"]
             ph2 = ",".join(["%s"] * len(series_codes))
-            cur.execute(f"""SELECT code, date, adj_close, close FROM daily_prices
+            cur.execute(f"""SELECT code, date, adj_close, close FROM price_history
                             WHERE code IN ({ph2}) AND date >= %s AND adj_close IS NOT NULL
                             ORDER BY code, date""", series_codes + [cutoff])
             for code, d, adj, cl in cur.fetchall():
