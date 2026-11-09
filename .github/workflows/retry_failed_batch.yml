@@ -7,8 +7,7 @@ name: 失敗バッチの自動リトライ
 # コンセンサス 140件/日 等）が丸ごと失われる。cron を増やす方式は正常日にも二重実行して
 # みんかぶ/IFIS へ余計なアクセスをかけるため、**失敗した時だけ**再実行する方式にする。
 #
-# gh run rerun --failed は元のイベントペイロード（github.event.schedule）を保持して
-# 再実行するため、どの便が落ちたかに応じた正しいステップだけが走る。
+# 再実行は元の workflow_dispatch 入力を保持するため、同じ処理だけを再開する。
 on:
   workflow_run:
     workflows:
@@ -26,7 +25,7 @@ jobs:
     # run_attempt == 1 の時だけ再実行する。再実行(attempt 2)がまた失敗しても
     # ここは発火しないので、無限リトライにはならない（1回だけ救済）。
     if: >-
-      ${{ github.event.workflow_run.conclusion == 'failure'
+      ${{ contains(fromJSON('["failure","cancelled"]'), github.event.workflow_run.conclusion)
           && github.event.workflow_run.run_attempt == 1 }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -36,6 +35,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID:   ${{ github.event.workflow_run.id }}
           RUN_NAME: ${{ github.event.workflow_run.name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           echo "リトライ対象: $RUN_NAME (run_id=$RUN_ID)"
-          gh run rerun "$RUN_ID" --failed --repo "$GITHUB_REPOSITORY"
+          if [ "$CONCLUSION" = "cancelled" ]; then
+            gh run rerun "$RUN_ID" --repo "$GITHUB_REPOSITORY"
+          else
+            gh run rerun "$RUN_ID" --failed --repo "$GITHUB_REPOSITORY"
+          fi

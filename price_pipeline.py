@@ -331,8 +331,14 @@ def publish_yahoo_code(code: str, rows: list[dict], *, until: date,
     return len(normalized)
 
 
-@price_db_session()
 def store_yahoo_batches(batches: dict[str, list[dict]], until: date) -> int:
+    """取得済み日足を銘柄単位で公開する。
+
+    この関数全体ではDB接続を共有しない。数千銘柄のworker処理中に親スレッドの
+    接続が長時間アイドルになり、個別保留の記録時に切断済み接続を再利用して
+    全体が中断した障害（2026-11-09）の再発を防ぐ。各workerはpublish_one内で
+    接続を再利用し、親スレッドの照会・保留記録は短い独立接続にする。
+    """
     from price_verification import free_cutoff as official_free_cutoff
 
     ensure_schema()

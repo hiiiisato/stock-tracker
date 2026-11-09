@@ -1,16 +1,7 @@
 name: その他の定期バッチ（EDINETテキスト・ファンドウォッチ）
 
-# Render無料プランは cron ジョブ非対応のため、render.yaml にあった定期処理をこちらに移植。
+# 時刻の正本は Cloudflare Scheduler。GitHub Actions は実行基盤だけを担当する。
 on:
-  schedule:
-    # edinetdb.jp の日次枠は 00:00 JST(=15:00 UTC)にリセットされるため、その直後に走らせて
-    # フレッシュな100枠を使い切る。旧設定(23:45 JST)はリセット15分前で使いかけの窓を掴んでいた。
-    - cron: '30 15 * * *'       # 00:30 JST 毎日: EDINET財務取得＋テーママスタ同期(みんかぶ)＋会社概要
-    - cron: '0 20 * * *'        # 05:00 JST 毎日: アナリストコンセンサス取得(みんかぶ)。
-                                #   テーマ同期と時間帯を分け、みんかぶへの同時多発アクセス(403)を回避
-    - cron: '0 21 4,14,24 * *'  # 5,15,25日 6:00 JST: ファンド月次レポート取込
-    - cron: '0 13 * * 0'        # 日曜 22:00 JST: YouTube株動画の週次巡回(youtube_insights)
-    - cron: '30 20 * * 0'       # 月曜 05:30 JST: 週報の生成/送信漏れ救済（二重送信防止付き）
   workflow_dispatch:
     inputs:
       job:
@@ -27,9 +18,9 @@ on:
         type: string
         default: ''
 
-# 複数の起動元が重なっても、外部サイトへの定期取得を並列実行しない。
+# 同じ種類だけ直列化し、EDINET・コンセンサス・週報など無関係な処理は互いを待たせない。
 concurrency:
-  group: misc-batch-pipeline
+  group: misc-batch-${{ inputs.job }}
   cancel-in-progress: false
 
 jobs:
@@ -74,22 +65,14 @@ jobs:
       # 週報で使うSDK/API契約だけを本処理前に検証する。依存更新で互換性が壊れた場合、
       # 動画分析やDB更新を始める前に止め、無料枠と実行時間を浪費しない。
       - name: YouTube週報のGemini互換性テスト
-        if: ${{ github.event.schedule == '0 13 * * 0' || github.event.schedule == '30 20 * * 0' || inputs.job == 'youtube' || inputs.job == 'youtube_recovery' }}
+        if: ${{ inputs.job == 'youtube' || inputs.job == 'youtube_recovery' }}
         run: |
           python -c "import importlib.metadata as m; assert m.version('google-genai') == '2.33.0', m.version('google-genai')"
           python -m unittest tests/test_youtube_weekly_resilience.py
 
-      # Cloudflare一次時計・GHA保険便のどちらも同じ処理を実行。
-      # Freeで取得可能になった日付を記録して、12週後の公式照合を順番に進める。
-      - name: 分割台帳と12週後の公式価格照合
-        id: price_quality
-        if: ${{ github.event.schedule == '30 15 * * *' || inputs.job == 'edinet_texts' }}
-        continue-on-error: true
-        run: python price_pipeline.py --sync-actions --audit --check
-
       # 月次（5,15,25日）はファンドレポート取込のみ。手動実行で job=fund_watch を選んだ場合も同様。
       - name: ファンド月次レポート取込
-        if: ${{ github.event.schedule == '0 21 4,14,24 * *' || inputs.job == 'fund_watch' }}
+        if: ${{ inputs.job == 'fund_watch' }}
         run: python fund_watch.py
 
       # 【一時停止中】EDINET本文テキスト・事業セグメントは edinetdb.jp 無料枠(100件/日)を消費するため、
@@ -107,47 +90,51 @@ jobs:
       # financials_edinet_annual に蓄積。texts/segments 停止中は 100件/日フル枠を使い最短でキャッチアップ。
       # Tier1=op欠損優先 → Tier2=未取得銘柄の付随データ収集。残枠が尽きたら自動停止。
       - name: 業績欠損の穴埋め＋有報データ蓄積（EDINET）
-        if: ${{ github.event.schedule == '30 15 * * *' || inputs.job == 'edinet_texts' }}
+        if: ${{ inputs.job == 'edinet_texts' }}
         run: python financials_edinet.py
 
       # 統一テーママスタ同期（みんかぶの関連度付きテーマを正とする。120テーマ/日≒週1周）。
       # みんかぶがGHAのIPを遮断した場合は既存データ維持でログに残る（壊れない設計）。
       - name: テーママスタ同期（みんかぶ）
-        if: ${{ github.event.schedule == '30 15 * * *' || inputs.job == 'edinet_texts' }}
+        if: ${{ inputs.job == 'edinet_texts' }}
         run: python theme_master.py
 
       # アナリスト業績コンセンサス取得（みんかぶ・140件/日）。テーマ同期(00:30)と別枠の
       # 05:00 JST 単独実行にして、みんかぶへの同時多発アクセス(403)を避ける。
       # 目標株価/レーティング/会社予想vsコンセンサス乖離をDB化。403検知で当日打ち切り。
       - name: アナリストコンセンサス取得（みんかぶ）
-        if: ${{ github.event.schedule == '0 20 * * *' || inputs.job == 'consensus' }}
+        if: ${{ inputs.job == 'consensus' }}
         run: python analyst_consensus.py
 
       # 四半期アナリストコンセンサス取得（IFIS株予報・60件/日≒月1周）。四半期毎の経常利益
       # コンセンサス累計(1Q/2Q/3Q/通期)を取得し、今期進捗の「四半期目安(SBIの赤三角相当)」に使う。
       # みんかぶとは別ドメインだが負荷配慮で低頻度・間隔ランダム化。403検知で当日打ち切り。
       - name: 四半期コンセンサス取得（IFIS株予報）
-        if: ${{ github.event.schedule == '0 20 * * *' || inputs.job == 'consensus' }}
+        if: ${{ inputs.job == 'consensus' }}
         run: python quarterly_consensus.py
 
       # 会社概要・kabutanテーマタグの定期メンテ（150件/日 ≒ 月次で全銘柄一巡）。
       # 市場時間と無関係なので夕方のメイン便ではなく夜間に実行する。
       - name: 会社概要・テーマタグ取得
-        if: ${{ github.event.schedule == '30 15 * * *' || inputs.job == 'edinet_texts' }}
+        if: ${{ inputs.job == 'edinet_texts' }}
         run: python company_profile.py
 
       # YouTube株動画の週次巡回（日曜22時JST）。Gemini動画理解で各動画を構造化し、
       # 全チャンネルを集約した1本の週次レポートを生成 → /youtube で表示・LINE通知
       - name: YouTube株動画 週次巡回
-        if: ${{ github.event.schedule == '0 13 * * 0' || inputs.job == 'youtube' }}
+        if: ${{ inputs.job == 'youtube' }}
         run: python youtube_insights.py
 
       # 本便のGemini集約やLINE APIが一時失敗しても、解析済み動画から再集約。
       # youtube_weekly.notified_at を見るため、本便成功時は何も送らず安全に終了する。
       - name: YouTube週報 生成・送信漏れ救済
-        if: ${{ github.event.schedule == '30 20 * * 0' || inputs.job == 'youtube_recovery' }}
+        if: ${{ inputs.job == 'youtube_recovery' }}
         run: python youtube_insights.py --weekly-recovery
 
-      - name: 価格品質の失敗をジョブ結果へ反映
-        if: ${{ always() && steps.price_quality.outcome == 'failure' }}
-        run: exit 1
+      # 当日データとは分離し、EDINET等を完了させた後に最大15分だけ過去データを補修する。
+      # 40銘柄/便の上限があり、失敗しても翌日に再開する。全銘柄の --check は本線で行わない。
+      - name: 分割台帳と12週後の公式価格照合（時間上限付き）
+        if: ${{ inputs.job == 'edinet_texts' }}
+        continue-on-error: true
+        timeout-minutes: 15
+        run: python price_pipeline.py --sync-actions --audit

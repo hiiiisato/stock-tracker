@@ -233,7 +233,7 @@ def parse_consensus(html: str) -> dict:
 
 
 class Blocked(Exception):
-    """みんかぶに403(アクセス制限)された。以降のリクエストは諦める。"""
+    """みんかぶにアクセス制限された。直接取得からプロキシへ切り替える。"""
 
 
 def _proxy_token() -> str | None:
@@ -256,11 +256,13 @@ def _fetch_html(session: requests.Session, code: str, via_proxy: bool) -> tuple[
 
 
 def fetch_one(session: requests.Session, code: str, via_proxy: bool = False) -> dict | None:
-    """1銘柄のコンセンサスを取得。ページ無し/未カバレッジは {} を返す。403は Blocked。"""
+    """1銘柄を取得。ページ無しは {}、GHA IPへの拒否は Blocked。"""
     status, text = _fetch_html(session, code, via_proxy)
     if status == 404:
         return {}
-    if status in (403, 429):
+    # みんかぶはGitHub hosted runnerを403だけでなく405で拒否することがある。
+    # どちらも同じRenderプロキシ切替対象として扱う。
+    if status in (403, 405, 429):
         raise Blocked(f"HTTP {status}")
     if status != 200:
         raise RuntimeError(f"HTTP {status}")
@@ -381,7 +383,9 @@ def main() -> None:
     ap.add_argument("--codes", type=str, default="")
     args = ap.parse_args()
     codes = [c.strip() for c in args.codes.split(",") if c.strip()] or None
-    run(limit=args.limit, only_codes=codes)
+    stats = run(limit=args.limit, only_codes=codes)
+    if stats["fetched"] == 0 and (stats["failed"] or stats["blocked"]):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

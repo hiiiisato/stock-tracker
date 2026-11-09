@@ -3,7 +3,7 @@
 実行順: 銘柄マスタ → カレンダー → 価格データ → テーマスコア → ランキング
 
 一次スケジューラは Cloudflare Cron → GitHub Actions（.github/workflows/daily.yml）:
-  16:05 JST メイン / 20:30 JST イブニング便（GitHub cronは保険として残す）
+  16:05 JST メイン / 18:00 JST 未完了時の再実行 / 20:30 JST イブニング便
 
 使い方:
   python daily_run.py              # 通常の日次更新（当日完了済みならスキップ）
@@ -467,21 +467,11 @@ def run(
             _log("daily_batch", "failed", error=message)
             return False
 
-    # 3.5. 公式台帳と公開係数を検査し、未処理・途中失敗を原本から再生成。
-    # 12週後のJ-Quants全銘柄照合はmisc_batchの夜間ジョブで毎日実行する。
+    # 過去全期間の価格整合性監査・保留銘柄修復は misc_batch の夜間処理へ分離する。
+    # 当日便で全保留銘柄を再生成すると当日データの派生指標まで到達できないため、
+    # ここでは直前に公開した当日系列だけを正として後段へ進む。
     if not rankings_only:
-        print("\n[分割対応] 公式台帳と公開済み価格の整合性を確認中...")
-        try:
-            from splits import run_daily as splits_run_daily
-            n_changed = splits_run_daily()
-            _log("splits_daily", "done", n_changed)
-        except Exception as e:
-            print(f"  エラー: {e}")
-            traceback.print_exc()
-            _log("splits_daily", "failed", error=str(e))
-            critical_failures.append(f"splits_daily: {e}")
-
-        # 分割検証後の確定終値で価格リマインダーを判定する。
+        # 公式権利台帳を反映して公開済みの確定終値で価格リマインダーを判定する。
         print("\n[価格リマインダー] 終値到達を判定中...")
         try:
             from price_alerts import check_alerts

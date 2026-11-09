@@ -281,7 +281,10 @@ def main() -> None:
     ap.add_argument("--codes", type=str, default="")
     args = ap.parse_args()
     codes = [c.strip() for c in args.codes.split(",") if c.strip()] or None
-    run(limit=args.limit, only_codes=codes)
+    stats = run(limit=args.limit, only_codes=codes)
+    # 全件取得不能を成功扱いすると監視も自動再試行も働かない。
+    if stats["fetched"] == 0 and (stats["failed"] or stats["blocked"]):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

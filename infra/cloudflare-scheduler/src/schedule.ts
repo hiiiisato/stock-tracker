@@ -68,6 +68,14 @@ export const TASKS: readonly ScheduleTask[] = [
     inputs: { mode: "main" },
   },
   {
+    id: "daily-market-retry",
+    hour: 18,
+    minute: 0,
+    weekdays: WEEKDAYS,
+    workflow: "daily.yml",
+    inputs: { mode: "main" },
+  },
+  {
     id: "youtube-daily",
     hour: 19,
     minute: 0,

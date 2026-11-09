@@ -1,14 +1,8 @@
 name: 日次市場データ更新
 
-# GitHub Actions は毎時0分に負荷が集中するため、公式推奨に従い実行分をずらす。
-#  - 16:17 メイン + 17:17 リトライの2本立て（daily_run.py 側の重複ガードで二重実行は防止）
-#  - 20:47 イブニング便で夜間の適時開示を回収し、市況考察・日次レポートを確定版に更新
+# 時刻の正本は Cloudflare Scheduler。GitHub Actions は実行基盤だけを担当する。
+# GitHub cron の遅延・重複を避けるため、定刻起動は workflow_dispatch に一本化する。
 on:
-  schedule:
-    - cron: '17 7 * * 1-5'   # 16:17 JST メイン
-    - cron: '17 8 * * 1-5'   # 17:17 JST リトライ（完了済みならスキップ）
-    - cron: '17 10 * * 1-5'  # 19:17 JST YouTube日次巡回→日次レポート再生成（本編は遅らせない）
-    - cron: '47 11 * * 1-5'  # 20:47 JST イブニング便（開示完全版+レポート確定）
   workflow_dispatch:
     inputs:
       mode:
@@ -29,7 +23,7 @@ on:
         type: string
         default: ''
 
-# Cloudflare一次便・GitHub保険便・手動便が重なっても、同じDB更新を並列実行しない。
+# Cloudflare便・自動再試行・手動便が重なっても、同じDB更新を並列実行しない。
 concurrency:
   group: daily-market-pipeline
   cancel-in-progress: false
@@ -83,11 +77,11 @@ jobs:
               exit 2
             fi
             python daily_run.py --catch-up "$TARGET_DATE"
-          elif [ "${{ github.event.schedule }}" = "17 10 * * 1-5" ] || [ "${{ inputs.mode }}" = "youtube_daily" ]; then
+          elif [ "${{ inputs.mode }}" = "youtube_daily" ]; then
             # YouTube日次巡回 → 日次レポートを再生成して要約を反映（本編バッチは遅らせない）
             python youtube_insights.py --daily
             python -c "import daily_report; daily_report.save_report()"
-          elif [ "${{ github.event.schedule }}" = "47 11 * * 1-5" ] || [ "${{ inputs.mode }}" = "evening" ]; then
+          elif [ "${{ inputs.mode }}" = "evening" ]; then
             # LINE失敗でも後続のYouTube救済・最終保存は実行し、最後に元の終了コードを返す。
             evening_status=0
             if [ -n "$SCHEDULED_FOR" ]; then
@@ -114,4 +108,4 @@ jobs:
 
       - name: 結果サマリー
         if: always()
-        run: echo "日次市場データ更新 ${{ job.status }} / source=${{ inputs.source || github.event_name }} / scheduled_for=${{ inputs.scheduled_for || github.event.schedule }}"
+        run: echo "日次市場データ更新 ${{ job.status }} / source=${{ inputs.source || github.event_name }} / scheduled_for=${{ inputs.scheduled_for }}"

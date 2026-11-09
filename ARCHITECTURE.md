@@ -22,13 +22,14 @@ J-Quants 無料枠・EDINET）のみで構成。
 
 **Webサイト**: Render.com（`render.yaml`）の `kabushiki-tracker`（`gunicorn app:app`・常駐）のみ。
 
-**定期バッチはすべて GitHub Actions**（Render無料プランはcron非対応のため）:
+**定期時刻はすべて Cloudflare Scheduler、実処理は GitHub Actions**
+（Render無料プランはcron非対応。GitHub Actions自身のcronは使わない）:
 
 | ワークフロー | スケジュール(JST) | コマンド | 役割 |
 |---|---|---|---|
 | daily.yml | 平日16:05 メイン（Cloudflare一次便） | `python daily_run.py --scheduled-for ...` | 日次バッチ本体（価格→指標→ランキング→開示→AI調査→レポート保存） |
-| daily.yml | 平日17:00 リトライ | 同上 | GHA cron遅延・失敗への保険。daily_run側の重複ガードで完了済みならスキップ |
-| daily.yml | 平日19:17 YouTube日次 | `python youtube_insights.py --daily` | YouTube日次巡回後、レポートを再生成（確定状態は変更しない） |
+| daily.yml | 平日18:00 同日リトライ（Cloudflare） | 同上 | 16:05便が未完了の時だけ再実行。daily_run側の重複ガードで完了済みならスキップ |
+| daily.yml | 平日19:00 YouTube日次 | `python youtube_insights.py --daily` | YouTube日次巡回後、レポートを再生成（確定状態は変更しない） |
 | daily.yml | 平日20:30 イブニング便 | `python daily_run.py --evening` | 夜間の適時開示回収→市況考察→日次レポート確定版を上書き保存→**確定版をLINE通知**→AIファンド意思決定 |
 | price_alerts.yml | 毎日7:30 | `python price_alerts.py --migrate --send` | 前営業日の終値で到達した価格リマインダーをLINEへまとめて通知（金曜分は土曜朝） |
 | misc_batch.yml | ~~毎日23:45~~ **一時停止中** | `python edinet_texts.py --all` | EDINET本文ドリップ（`if:false`。財務キャッチアップ中は枠譲渡） |
@@ -37,16 +38,17 @@ J-Quants 無料枠・EDINET）のみで構成。
 | misc_batch.yml | 5/15/25日 6:00 | `python fund_watch.py` | ファンド月次レポート取込 |
 | misc_batch.yml | 日曜 22:00 | `python youtube_insights.py` | YouTube株動画の週次巡回（Gemini動画理解→構造化→週次サマリー→/youtube→LINE） |
 | misc_batch.yml | 月曜 5:30 | `python youtube_insights.py --weekly-recovery` | 週報の生成/LINE送信漏れを自動救済。`notified_at` により二重通知なし |
-| retry_failed_batch.yml | （上記2つの失敗時に自動発火） | `gh run rerun --failed` | **ランナー割当失敗などでジョブが1ステップも走らずに落ちた時の救済**。`run_attempt==1` の時だけ再実行するので無限リトライにならない |
+| retry_failed_batch.yml | （失敗・キャンセル時に自動発火） | `gh run rerun` | **ランナー割当失敗やタイムアウト時の救済**。`run_attempt==1` の時だけ再実行するので無限リトライにならない |
 
-**GitHub Actions cron の注意**: 発火は数十分〜数時間遅延することがある（実測で7時間超）。
-一次便はCloudflare Cronから16:05 JSTに起動し、`scheduled_for` のJST日付を処理対象日の正本にする。
-このためGitHubランナーの割当が翌日に遅れても対象日は変わらない。GitHub cronの「メイン+リトライ」と
-`timeout-minutes: 90`+イブニング便は保険として残す。通常便が16時前に遅延到着した場合も、価格のMAX日付ではなく
+**GitHub Actions cron は使用しない**: 発火が数十分〜数時間遅延した実績（7時間超）があるため、
+Cloudflare Cronから16:05 JSTに起動し、同日18:00に未完了だけ再実行する。`scheduled_for` のJST日付を
+処理対象日の正本にするため、GitHubランナーの割当が遅れても対象日は変わらない。通常便が16時前に遅延到着した場合も、価格のMAX日付ではなく
 公式取引カレンダーの直前営業日を処理する。欠損日は `daily.yml` の `catch_up` + `target_date` で同じ経路を強制救済する。
 `batch_dates.py` をJST・対象日の共通ルールとする。週報は実行ホストのTZではなくJSTの直近日曜、YouTube日次はDBの最新営業日を使う。
 daily_run.py には (a)対象営業日ごとの確定状態（`daily_reports.completed_at`）による重複実行ガードと
 (b)休場日・古い価格ガード（次回バッチ開始後に当日価格がなければ後段をスキップ）が入っている。
+過去全期間の価格整合性監査・保留銘柄修復は00:30のメンテナンス末尾へ分離し、15分・40銘柄上限で
+翌日へ継続する。当日便が過去修復で止まり、当日の指標・ランキングを作れない構造にはしない。
 
 **取引カレンダーの正本（2026-09-22障害後に再設計）**: `trading_calendar` はJ-Quants公式の
 休日区分（`master.update_trading_calendar`）を過去〜契約範囲まで採用し、それより先（無料枠の
