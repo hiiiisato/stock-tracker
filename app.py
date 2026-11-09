@@ -9789,6 +9789,35 @@ def internal_minkabu_proxy():
         return f"proxy_error: {e}", 502, {"Content-Type": "text/plain; charset=utf-8"}
 
 
+@app.route("/internal/ifis")
+def internal_ifis_proxy():
+    """IFIS株予報取得の内部プロキシ（Render経由、対象ページ限定）。"""
+    import hashlib
+    import os as _os
+    pw = _os.environ.get("TIDB_PASSWORD", "")
+    expected = hashlib.sha256(pw.encode()).hexdigest()[:32] if pw else None
+    if not expected or request.args.get("token", "") != expected:
+        abort(403)
+    path = request.args.get("path", "")
+    if not re.match(r"^index\.php\?action=tp1&sa=report&bcode=[0-9A-Za-z]+$", path):
+        abort(400)
+    try:
+        r = _requests.get(
+            f"https://kabuyoho.ifis.co.jp/{path}",
+            headers={
+                "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                               "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
+                "Referer": "https://kabuyoho.ifis.co.jp/",
+            },
+            timeout=15,
+        )
+        return r.text, r.status_code, {"Content-Type": "text/plain; charset=utf-8"}
+    except Exception as e:
+        return f"proxy_error: {e}", 502, {"Content-Type": "text/plain; charset=utf-8"}
+
+
 @app.route("/health")
 def health():
     try:

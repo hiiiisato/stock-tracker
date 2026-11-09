@@ -32,11 +32,14 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import os
 import random
 import re
 import sys
 import time
 from datetime import date, datetime, timedelta
+from urllib.parse import quote
 
 import requests
 from bs4 import BeautifulSoup
@@ -61,6 +64,7 @@ DELAY_MIN   = 2.5    # リクエスト間隔の下限(秒)
 DELAY_MAX   = 5.0    # 上限。ランダム化して機械的アクセスに見せない
 REFRESH_DAYS = 14    # 取得済みをこの日数は再取得しない
 MAX_403      = 2     # 連続403がこの数に達したら本日打ち切り
+PROXY_BASE = os.environ.get("IFIS_PROXY_BASE", "https://stock-tracker-rfqn.onrender.com")
 
 
 def _sleep() -> None:
@@ -71,7 +75,12 @@ def _sleep() -> None:
 
 
 class Blocked(Exception):
-    """IFISにアクセス制限(403/429)された。以降のリクエストは諦める。"""
+    """IFISへの直接アクセスが拒否・一時停止された。"""
+
+
+def _proxy_token() -> str | None:
+    pw = os.environ.get("TIDB_PASSWORD", "")
+    return hashlib.sha256(pw.encode()).hexdigest()[:32] if pw else None
 
 
 def ensure_table(cur) -> None:
@@ -161,18 +170,25 @@ def parse_quarterly_consensus(html: str) -> dict:
     return d
 
 
-def _fetch_html(session: requests.Session, code: str) -> tuple[int, str]:
-    url = f"{BASE}/index.php?action=tp1&sa=report&bcode={code}"
-    r = session.get(url, headers=IFIS_HEADERS, timeout=20)
+def _fetch_html(session: requests.Session, code: str, via_proxy: bool = False) -> tuple[int, str]:
+    path = f"index.php?action=tp1&sa=report&bcode={code}"
+    if via_proxy:
+        token = _proxy_token()
+        if not token:
+            return 0, ""
+        url = f"{PROXY_BASE}/internal/ifis?token={token}&path={quote(path, safe='')}"
+        r = session.get(url, timeout=25)
+        return r.status_code, r.text
+    r = session.get(f"{BASE}/{path}", headers=IFIS_HEADERS, timeout=20)
     return r.status_code, r.text
 
 
-def fetch_one(session: requests.Session, code: str) -> dict | None:
-    """1銘柄の四半期コンセンサスを取得。ページ無し/未カバレッジは {}。403/429は Blocked。"""
-    status, text = _fetch_html(session, code)
+def fetch_one(session: requests.Session, code: str, via_proxy: bool = False) -> dict | None:
+    """1銘柄を取得。ページ無しは {}、IP拒否・一時停止は Blocked。"""
+    status, text = _fetch_html(session, code, via_proxy)
     if status == 404:
         return {}
-    if status in (403, 429):
+    if status in (403, 405, 429, 503):
         raise Blocked(f"HTTP {status}")
     if status != 200:
         raise RuntimeError(f"HTTP {status}")
@@ -204,14 +220,15 @@ def _targets(cur, limit: int, only_codes: list[str] | None) -> list[str]:
 
 
 def run(limit: int = DAILY_LIMIT, only_codes: list[str] | None = None, verbose: bool = True) -> dict:
-    stats = {"fetched": 0, "saved": 0, "no_data": 0, "failed": 0, "blocked": False}
+    stats = {"fetched": 0, "saved": 0, "no_data": 0, "failed": 0, "blocked": False, "via_proxy": False}
     session = requests.Session()
     conn = get_conn()
     cur = conn.cursor()
     ensure_table(cur)
     conn.commit()
     now = datetime.now().replace(microsecond=0)
-    consec_403 = 0
+    consecutive_blocks = 0
+    via_proxy = False
     # ウォームアップ: トップページを踏んでCookieを得る
     try:
         session.get(f"{BASE}/", headers=IFIS_HEADERS, timeout=15)
@@ -221,14 +238,22 @@ def run(limit: int = DAILY_LIMIT, only_codes: list[str] | None = None, verbose: 
 
     for code in _targets(cur, limit, only_codes):
         try:
-            d = fetch_one(session, code)
-            consec_403 = 0
+            d = fetch_one(session, code, via_proxy)
+            consecutive_blocks = 0
         except Blocked as e:
-            consec_403 += 1
-            if consec_403 >= MAX_403:
+            consecutive_blocks += 1
+            if consecutive_blocks >= MAX_403:
+                if not via_proxy and _proxy_token():
+                    via_proxy = True
+                    consecutive_blocks = 0
+                    stats["via_proxy"] = True
+                    if verbose:
+                        print(f"  直接取得が連続失敗({e})→Renderプロキシ経由に切替")
+                    _sleep()
+                    continue
                 stats["blocked"] = True
                 if verbose:
-                    print(f"  連続ブロック({e})→本日は打ち切り（翌日再開）")
+                    print(f"  プロキシでも連続失敗({e})→本日は打ち切り（自動再試行対象）")
                 break
             time.sleep(random.uniform(20, 40))
             continue
@@ -267,6 +292,7 @@ def run(limit: int = DAILY_LIMIT, only_codes: list[str] | None = None, verbose: 
     if verbose:
         print(f"完了: 取得{stats['fetched']} 保存{stats['saved']} "
               f"未カバレッジ{stats['no_data']} 失敗{stats['failed']}"
+              f"{' / プロキシ経由' if stats['via_proxy'] else ''}"
               f"{' / ブロックで打ち切り' if stats['blocked'] else ''}")
     return stats
 
