@@ -193,6 +193,7 @@ class WeeklyReportResilienceTest(unittest.TestCase):
         with patch.object(yt, "get_conn", return_value=Connection()), \
                 patch.object(yt, "ensure_tables"), \
                 patch.object(yt, "_gemini", return_value=object()), \
+                patch.object(yt, "_gemini_json_preflight", return_value=True), \
                 patch.object(yt, "_crawl_and_analyze", return_value=empty_stats), \
                 patch.object(yt, "jst_today", return_value=date(2026, 9, 7)), \
                 patch.object(yt, "aggregate_weekly", side_effect=aggregate), \
