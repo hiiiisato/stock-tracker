@@ -269,7 +269,8 @@ def bump_generation(cur, name: str = "publication_generation") -> None:
 
 
 def publish(cur, code: str, rows: list[dict], actions: list[Action], basis_date: date,
-            basis: str, snapshot_id: str, observed_at: datetime | None = None, *, rebuild: bool = False) -> None:
+            basis: str, snapshot_id: str, observed_at: datetime | None = None, *,
+            rebuild: bool = False, bump_publication: bool = True) -> None:
     """呼出元の1トランザクション内で、価格・前日比・公開状態を同時更新。"""
     if not rows:
         raise PriceBasisError("公開する価格がありません")
@@ -302,7 +303,8 @@ def publish(cur, code: str, rows: list[dict], actions: list[Action], basis_date:
     if rebuild:
         cur.execute("UPDATE price_adjustment_state SET published_from=%s WHERE code=%s",(day(rows[0]['date']),code))
         bump_generation(cur,"historical_prices_revision")
-    bump_generation(cur)
+    if bump_publication:
+        bump_generation(cur)
 
 
 def load_candles(codes: list[str], since: date, cur=None) -> dict[str, list[dict]]:

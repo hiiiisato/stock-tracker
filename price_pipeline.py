@@ -18,7 +18,8 @@ from config import (db, PRICE_HISTORY_START, PRICE_NIGHTLY_REPAIR_CODES,
                     PRICE_PUBLISH_WORKERS, PRICE_REFERENCE_OVERLAP_DAYS, price_db_session)
 from price_adjustments import (PriceBasisError, StalePublication, actions_digest, day, factors,
                                identify_basis, normalize, matches)
-from price_store import (ensure_schema, load_actions, backup_legacy, snapshot, publish, hold, lock_code, PricePublicationHeld, iter_price_rows)
+from price_store import (ensure_schema, load_actions, backup_legacy, snapshot, publish, hold, lock_code,
+                         bump_generation, PricePublicationHeld, iter_price_rows)
 
 
 def _source_events_verified(code: str, rows: list[dict], actions: list, *, allow_lookup: bool) -> None:
@@ -112,7 +113,8 @@ def official_window_candidate(official: list[dict], provider: list[dict], action
 def publish_yahoo_code(code: str, rows: list[dict], *, until: date,
                        force_full: bool = False, allow_official_lookup: bool = True,
                        action_cache: dict | None = None, metadata: tuple | None = None,
-                       official_cache: dict | None = None) -> int:
+                       official_cache: dict | None = None,
+                       bump_publication: bool = True) -> int:
     from prices_yahoo import _fetch_yahoo
     from price_verification import anchors_for, obtain_anchors, free_cutoff, free_start
     if not rows:
@@ -327,7 +329,7 @@ def publish_yahoo_code(code: str, rows: list[dict], *, until: date,
             cur.execute("""DELETE p FROM daily_prices p JOIN price_official_checks q ON q.code=p.code AND q.date=p.date
                            WHERE p.code=%s AND q.close IS NULL AND q.date <= %s""", (code, free_cutoff()))
         publish(cur, code, normalized, actions, today, "official_window" if official_window else basis, sid, observed_at,
-                rebuild=full)
+                rebuild=full, bump_publication=bump_publication)
     return len(normalized)
 
 
@@ -390,6 +392,7 @@ def store_yahoo_batches(batches: dict[str, list[dict]], until: date) -> int:
                 action_cache=action_cache,
                 metadata=metadata.get(code, (None, None, None)),
                 official_cache=official_cache,
+                bump_publication=False,
             )
 
     def retryable(exc: Exception) -> bool:
@@ -439,6 +442,10 @@ def store_yahoo_batches(batches: dict[str, list[dict]], until: date) -> int:
                 pass
             except Exception as exc:
                 record_failure(code, exc)
+    # 全銘柄が同じ1行を更新するとTiDBでロック待ちになるため、公開世代は便ごとに1回だけ進める。
+    # 各銘柄の価格・公開状態は従来どおり銘柄単位のトランザクションで確定済み。
+    with db() as cur:
+        bump_generation(cur)
     if errors:
         raise PricePublicationHeld(count,errors)
     return count
