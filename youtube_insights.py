@@ -59,6 +59,54 @@ MAX_PER_CHANNEL = 2      # 1チャンネルあたり最大何本（チャンネ�
 MAX_ANALYZE     = 12     # 1回の実行でGemini分析する最大本数（無料枠・GHA50分timeoutに配慮）
 GEMINI_MODEL    = "gemini-2.5-flash"
 
+# Geminiの構造化出力をプロンプト任せにせず、APIにも同じ契約を渡す。
+# 週次・日次は共通の形なので1つのスキーマで管理する。
+AGGREGATE_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "consensus": {"type": "string"},
+        "hot_themes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "theme": {"type": "string"},
+                    "note": {"type": "string"},
+                },
+                "required": ["theme", "note"],
+                "additionalProperties": False,
+            },
+        },
+        "hot_stocks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "code": {"type": "string"},
+                    "note": {"type": "string"},
+                },
+                "required": ["name", "code", "note"],
+                "additionalProperties": False,
+            },
+        },
+        "divergence": {"type": "string"},
+        "report_md": {"type": "string"},
+    },
+    "required": [
+        "summary", "consensus", "hot_themes", "hot_stocks", "divergence", "report_md",
+    ],
+    "additionalProperties": False,
+}
+
+GEMINI_PREFLIGHT_SCHEMA = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}},
+    "required": ["ok"],
+    "additionalProperties": False,
+}
+
 # 日次モード（大引け後の相場解説を巡回・日次レポートに差し込む。平日19:00 JST実行）。
 # 大引け解説を上げる少数チャンネルに絞る（週次の網羅巡回とは別枠）。
 DAILY_CHANNELS: list[dict] = [
@@ -296,7 +344,14 @@ def _fetch_recent(channel_id: str) -> list[dict]:
 
 def _gemini():
     from google import genai
-    return genai.Client(api_key=GEMINI_API_KEY)
+    from google.genai import types
+
+    # google-genai 3.0.0で既定APIがv1beta→v1に変わり、2.5-flashのJSON集約が
+    # 400になった。SDKの既定値に依存せず、動作確認済みAPIを明示する。
+    return genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options=types.HttpOptions(api_version="v1beta"),
+    )
 
 
 def _parse_json(text: str) -> dict | None:
@@ -388,7 +443,8 @@ def _known_codes(digest: list[dict]) -> dict[str, str]:
     return known
 
 
-def _gen_with_retry(client, contents, retries: int = 3, *, json_mode: bool = False):
+def _gen_with_retry(client, contents, retries: int = 3, *, json_mode: bool = False,
+                    json_schema: dict | None = None):
     """Gemini呼び出し。429(無料枠の分間トークン制限)は毎分リセットのため70秒待ち、
     503/500(モデル一時過負荷=UNAVAILABLE/overloaded)は指数バックオフで再試行する。
     503を放置すると日次集約が丸ごと欠落するため（実障害あり）、必ずリトライする。"""
@@ -397,10 +453,12 @@ def _gen_with_retry(client, contents, retries: int = 3, *, json_mode: bool = Fal
         # 動画トークンを約1/4に削減（内容・音声の分析品質には影響小。無料枠のTPM対策）
         "media_resolution": types.MediaResolution.MEDIA_RESOLUTION_LOW,
     }
-    if json_mode:
-        # 集約はMarkdownをJSON文字列に入れるため崩れやすい。MIMEを固定して
-        # 「正常応答だがJSONとして解釈不能」の無言欠落を防ぐ。
+    if json_mode or json_schema is not None:
+        # MIMEとスキーマを両方固定し、SDK/API更新とモデルの自由形式出力で
+        # JSON契約が無言で壊れるのを防ぐ。
         cfg_kwargs["response_mime_type"] = "application/json"
+    if json_schema is not None:
+        cfg_kwargs["response_json_schema"] = json_schema
     cfg = types.GenerateContentConfig(**cfg_kwargs)
     for attempt in range(retries + 1):
         try:
@@ -422,14 +480,20 @@ def _gen_with_retry(client, contents, retries: int = 3, *, json_mode: bool = Fal
 
 
 def _generate_json_with_retry(client, contents, *, label: str,
-                              parse_retries: int = 2) -> dict | None:
+                              parse_retries: int = 2,
+                              json_schema: dict | None = AGGREGATE_JSON_SCHEMA) -> dict | None:
     """Gemini応答をJSONとして検証し、形式不正も再試行対象にする。
 
     API上の429/503は `_gen_with_retry` が扱うが、従来はHTTP 200で壊れたJSONが
     返るとそのままFalseで終了し、GitHub Actionsが成功扱いになっていた。
     """
     for attempt in range(parse_retries + 1):
-        resp = _gen_with_retry(client, contents, json_mode=True)
+        resp = _gen_with_retry(
+            client,
+            contents,
+            json_mode=True,
+            json_schema=json_schema,
+        )
         parsed = _parse_json(resp.text)
         if parsed:
             return parsed
@@ -438,6 +502,25 @@ def _generate_json_with_retry(client, contents, *, label: str,
         if attempt < parse_retries:
             time.sleep(5 * (attempt + 1))
     return None
+
+
+def _gemini_json_preflight(client) -> bool:
+    """動画処理前に、実運用と同じJSON出力経路の互換性を小さい要求で確認する。"""
+    try:
+        result = _generate_json_with_retry(
+            client,
+            'Return exactly one JSON object with the boolean field "ok" set to true.',
+            label="Gemini JSON互換性",
+            parse_retries=0,
+            json_schema=GEMINI_PREFLIGHT_SCHEMA,
+        )
+    except Exception as e:  # noqa: BLE001
+        print(f"  Gemini JSON互換性確認失敗: {str(e)[:160]}")
+        return False
+    if result != {"ok": True}:
+        print(f"  Gemini JSON互換性確認失敗: 想定外の応答 {result!r}")
+        return False
+    return True
 
 
 def analyze_video(cur, client, video: dict) -> bool:
@@ -692,6 +775,11 @@ def run_weekly(max_analyze: int = MAX_ANALYZE, verbose: bool = True) -> dict:
     ensure_tables(cur)
     conn.commit()
     client = _gemini()
+    if not _gemini_json_preflight(client):
+        cur.close()
+        conn.close()
+        return {"videos_found": 0, "analyzed": 0, "failed": 0, "skipped": 0,
+                "report_generated": False, "notified": False}
     stats = _crawl_and_analyze(cur, conn, client, CHANNELS, LOOKBACK_DAYS,
                                MAX_PER_CHANNEL, max_analyze, verbose)
     # 週次集約 → LINE通知。どちらかが失敗した場合は呼び出し元が
@@ -744,7 +832,10 @@ def recover_weekly(week_end: date | None = None, verbose: bool = True) -> bool:
             if verbose:
                 print(f"  youtube_weekly {week_end} は生成済み")
         else:
-            report_generated = aggregate_weekly(cur, _gemini(), week_end)
+            client = _gemini()
+            if not _gemini_json_preflight(client):
+                return False
+            report_generated = aggregate_weekly(cur, client, week_end)
             if report_generated:
                 conn.commit()
                 if verbose:
@@ -771,6 +862,10 @@ def run_daily(max_analyze: int = DAILY_MAX_ANALYZE, verbose: bool = True) -> dic
     ensure_tables(cur)
     conn.commit()
     client = _gemini()
+    if not _gemini_json_preflight(client):
+        cur.close()
+        conn.close()
+        return {"videos_found": 0, "analyzed": 0, "failed": 0, "skipped": 0}
     stats = _crawl_and_analyze(cur, conn, client, DAILY_CHANNELS, DAILY_LOOKBACK_DAYS,
                                DAILY_MAX_PER_CHANNEL, max_analyze, verbose)
     cur.execute("SELECT MAX(date) FROM price_history WHERE date <= %s", (jst_today(),))
@@ -806,7 +901,10 @@ def aggregate_only(day: date | None = None, verbose: bool = True) -> bool:
             if verbose:
                 print(f"  youtube_daily {day} は生成済み・救済不要")
             return False
-        ok = aggregate_daily(cur, _gemini(), day)
+        client = _gemini()
+        if not _gemini_json_preflight(client):
+            return False
+        ok = aggregate_daily(cur, client, day)
         if ok:
             conn.commit()
             if verbose:

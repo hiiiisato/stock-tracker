@@ -11,7 +11,10 @@ mplfinance>=0.12.9b5
 flask>=3.0.0
 gunicorn>=21.0.0
 certifi>=2024.0.0
-google-genai>=1.0.0
+# 3.0.0 changed the Gemini Developer API default from v1beta to v1 and broke
+# the existing gemini-2.5-flash JSON aggregation. Keep production reproducible;
+# upgrade only together with an API compatibility test and code migration.
+google-genai==2.33.0
 pdfplumber>=0.11.0
 openpyxl>=3.1.0
 xlrd>=2.0.2

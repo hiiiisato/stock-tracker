@@ -48,8 +48,10 @@ class WeeklyReportResilienceTest(unittest.TestCase):
         ])
         json_modes = []
 
-        def fake_generate(_client, _contents, _retries=3, *, json_mode=False):
+        def fake_generate(_client, _contents, _retries=3, *, json_mode=False,
+                          json_schema=None):
             json_modes.append(json_mode)
+            self.assertIs(json_schema, yt.AGGREGATE_JSON_SCHEMA)
             return next(responses)
 
         with patch.object(yt, "_gen_with_retry", side_effect=fake_generate), \
@@ -69,6 +71,91 @@ class WeeklyReportResilienceTest(unittest.TestCase):
 
         self.assertIsNone(result)
         self.assertEqual(generate.call_count, 3)
+
+    def test_gemini_client_pins_v1beta_api(self):
+        captured = {}
+        google_stub = types.ModuleType("google")
+        genai_stub = types.ModuleType("google.genai")
+        genai_types_stub = types.ModuleType("google.genai.types")
+
+        class HttpOptions:
+            def __init__(self, *, api_version):
+                self.api_version = api_version
+
+        def client(**kwargs):
+            captured.update(kwargs)
+            return object()
+
+        genai_stub.Client = client
+        genai_stub.types = genai_types_stub
+        genai_types_stub.HttpOptions = HttpOptions
+        google_stub.genai = genai_stub
+
+        with patch.dict(sys.modules, {
+            "google": google_stub,
+            "google.genai": genai_stub,
+            "google.genai.types": genai_types_stub,
+        }):
+            yt._gemini()
+
+        self.assertEqual(captured["api_key"], "test")
+        self.assertEqual(captured["http_options"].api_version, "v1beta")
+
+    def test_json_generation_uses_explicit_schema(self):
+        captured = {}
+        genai_types_stub = types.ModuleType("google.genai.types")
+
+        class GenerateContentConfig:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        class MediaResolution:
+            MEDIA_RESOLUTION_LOW = "low"
+
+        genai_types_stub.GenerateContentConfig = GenerateContentConfig
+        genai_types_stub.MediaResolution = MediaResolution
+        google_stub = types.ModuleType("google")
+        google_genai_stub = types.ModuleType("google.genai")
+        google_genai_stub.types = genai_types_stub
+        google_stub.genai = google_genai_stub
+
+        class Models:
+            @staticmethod
+            def generate_content(*, model, contents, config):
+                captured.update({
+                    "model": model,
+                    "contents": contents,
+                    "config": config,
+                })
+                return types.SimpleNamespace(text='{"summary":"ok"}')
+
+        client = types.SimpleNamespace(models=Models())
+        with patch.dict(sys.modules, {
+            "google": google_stub,
+            "google.genai": google_genai_stub,
+            "google.genai.types": genai_types_stub,
+        }):
+            yt._gen_with_retry(
+                client,
+                "prompt",
+                json_mode=True,
+                json_schema=yt.AGGREGATE_JSON_SCHEMA,
+            )
+
+        self.assertEqual(captured["model"], yt.GEMINI_MODEL)
+        self.assertEqual(captured["config"].response_mime_type, "application/json")
+        self.assertIs(
+            captured["config"].response_json_schema,
+            yt.AGGREGATE_JSON_SCHEMA,
+        )
+
+    def test_preflight_rejects_incompatible_json_mode(self):
+        with patch.object(
+            yt,
+            "_generate_json_with_retry",
+            side_effect=RuntimeError("JSON mode is not enabled"),
+        ):
+            self.assertFalse(yt._gemini_json_preflight(object()))
 
     def test_latest_sunday(self):
         self.assertEqual(yt._latest_sunday(date(2026, 8, 3)), date(2026, 8, 2))
