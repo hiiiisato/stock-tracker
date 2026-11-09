@@ -298,6 +298,7 @@ def run(
     rankings_only: bool = False,
     force: bool = False,
     target_date_override: date | None = None,
+    recovery_only: bool = False,
 ) -> bool:
     start = datetime.now()
     critical_failures: list[str] = []
@@ -497,7 +498,7 @@ def run(
             _log("ai_fund_execute", "failed", error=str(e))
 
     # 4. 配当・財務・ファンダメンタルズ更新（毎週月曜のみ）
-    if target_date and target_date.weekday() == 0 and not rankings_only:
+    if target_date and target_date.weekday() == 0 and not rankings_only and not recovery_only:
         print("\n[4/6] 配当データ更新（週次）...")
         try:
             n = fetch_all_dividends()
@@ -772,5 +773,6 @@ if __name__ == "__main__":
         rankings_only=args.rankings,
         force=args.force or bool(args.catch_up),
         target_date_override=target_date,
+        recovery_only=bool(args.catch_up),
     ):
         sys.exit(1)

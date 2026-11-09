@@ -392,7 +392,23 @@ def store_yahoo_batches(batches: dict[str, list[dict]], until: date) -> int:
                 official_cache=official_cache,
             )
 
-    count, errors = 0, {}
+    def retryable(exc: Exception) -> bool:
+        # TiDBの競合・一時切断は、全銘柄を失敗させず新しい接続で逐次再試行する。
+        args = getattr(exc, "args", ())
+        return bool(args and args[0] in (0, 1205, 1213))
+
+    errors: dict[str, str] = {}
+    deferred: dict[str, list[dict]] = {}
+
+    def record_failure(code: str, exc: Exception) -> None:
+        message = str(exc)
+        try:
+            hold(code, message, attempted=True)
+        except Exception as hold_exc:  # DB障害中でも他銘柄の公開と再試行を止めない。
+            message = f"{message} / 保留記録失敗: {hold_exc}"
+        errors[code] = message
+
+    count = 0
     with ThreadPoolExecutor(max_workers=PRICE_PUBLISH_WORKERS) as executor:
         futures = {
             executor.submit(publish_one, code, rows): code
@@ -407,11 +423,22 @@ def store_yahoo_batches(batches: dict[str, list[dict]], until: date) -> int:
             except StalePublication:
                 pass
             except Exception as exc:
-                # 他銘柄は進めるが、不一致の銘柄は読取ビューから保留する。
-                hold(code, str(exc), attempted=True)
-                errors[code] = str(exc)
+                if retryable(exc):
+                    deferred[code] = batches[code]
+                else:
+                    # 他銘柄は進めるが、不一致の銘柄は読取ビューから保留する。
+                    record_failure(code, exc)
             if completed % 500 == 0:
                 print(f"    価格公開: {completed}/{len(batches)} 銘柄完了")
+    if deferred:
+        print(f"    一時DB競合 {len(deferred)} 銘柄を逐次再試行")
+        for code, rows in deferred.items():
+            try:
+                count += publish_one(code, rows)
+            except StalePublication:
+                pass
+            except Exception as exc:
+                record_failure(code, exc)
     if errors:
         raise PricePublicationHeld(count,errors)
     return count
