@@ -103,15 +103,33 @@ jobs:
       # 05:00 JST 単独実行にして、みんかぶへの同時多発アクセス(403)を避ける。
       # 目標株価/レーティング/会社予想vsコンセンサス乖離をDB化。403検知で当日打ち切り。
       - name: アナリストコンセンサス取得（みんかぶ）
+        id: analyst_consensus
         if: ${{ inputs.job == 'consensus' }}
+        continue-on-error: true
         run: python analyst_consensus.py
 
       # 四半期アナリストコンセンサス取得（IFIS株予報・60件/日≒月1周）。四半期毎の経常利益
       # コンセンサス累計(1Q/2Q/3Q/通期)を取得し、今期進捗の「四半期目安(SBIの赤三角相当)」に使う。
-      # みんかぶとは別ドメインだが負荷配慮で低頻度・間隔ランダム化。403検知で当日打ち切り。
+      # みんかぶとは別ドメインなので、片方が遮断されても必ず独立して実行する。
       - name: 四半期コンセンサス取得（IFIS株予報）
+        id: quarterly_consensus
         if: ${{ inputs.job == 'consensus' }}
+        continue-on-error: true
         run: python quarterly_consensus.py
+
+      # スクレイピング元の一方だけが一時遮断された場合は既存データを維持し、翌日に再試行する。
+      # 両方とも取得不能の場合だけジョブを失敗にして自動リトライ・通知の対象にする。
+      - name: コンセンサス取得結果を判定
+        if: ${{ always() && inputs.job == 'consensus' }}
+        env:
+          ANALYST_OUTCOME: ${{ steps.analyst_consensus.outcome }}
+          QUARTERLY_OUTCOME: ${{ steps.quarterly_consensus.outcome }}
+        run: |
+          echo "みんかぶ: $ANALYST_OUTCOME / IFIS: $QUARTERLY_OUTCOME"
+          if [ "$ANALYST_OUTCOME" != "success" ] && [ "$QUARTERLY_OUTCOME" != "success" ]; then
+            echo "両方のコンセンサス取得元が失敗しました" >&2
+            exit 1
+          fi
 
       # 会社概要・kabutanテーマタグの定期メンテ（150件/日 ≒ 月次で全銘柄一巡）。
       # 市場時間と無関係なので夕方のメイン便ではなく夜間に実行する。
