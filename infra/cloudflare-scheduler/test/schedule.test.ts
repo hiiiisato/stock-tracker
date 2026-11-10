@@ -21,6 +21,11 @@ describe("JST schedule", () => {
     expect(tasks.map((task) => task.id)).toEqual(["daily-market-retry"]);
   });
 
+  it("does not schedule blocked consensus scrapers", () => {
+    const tasks = matchingTasks(utc("2026-11-05T20:00:00Z"));
+    expect(tasks.map((task) => task.id)).not.toContain("analyst-consensus");
+  });
+
   it("handles Monday recovery across the UTC date boundary", () => {
     const tasks = matchingTasks(utc("2026-11-08T20:30:00Z"));
     expect(tasks.map((task) => task.id)).toContain("youtube-weekly-recovery");

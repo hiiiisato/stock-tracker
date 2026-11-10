@@ -24,3 +24,5 @@ GitHub Actionsの定期発火遅延を避けるため、Cloudflare Cron Trigger�
 - 実行履歴はCloudflare Workers LogsとGitHub Actionsの双方で確認できる。
 - 時刻の正本はこのWorkerだけとし、GitHub Actions自身のcronやMac/Codexローカル便は使わない。
 - GitHub Actionsは`workflow_dispatch`の実行基盤であり、失敗・キャンセル時だけ1回自動再実行する。
+- みんかぶ・IFISコンセンサスは両サイトがサーバー取得を拒否しているため定期発火を停止中。
+  既存データは保持し、対応APIまたは許可された取得経路を確保するまで手動診断だけに限定する。

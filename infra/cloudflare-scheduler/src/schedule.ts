@@ -30,13 +30,6 @@ export const TASKS: readonly ScheduleTask[] = [
     inputs: { job: "edinet_texts" },
   },
   {
-    id: "analyst-consensus",
-    hour: 5,
-    minute: 0,
-    workflow: "misc_batch.yml",
-    inputs: { job: "consensus" },
-  },
-  {
     id: "youtube-weekly-recovery",
     hour: 5,
     minute: 30,

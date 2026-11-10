@@ -66,7 +66,7 @@ Yahooで覆すのは危険なため）。`master.calendar_lookahead_days()` が�
 
 **ジョブがそもそも起動しない失敗**: `The job was not acquired by Runner of type hosted even after
 multiple attempts`（GitHub側のホストランナー割当失敗）は、ログすら残らず全ジョブが cancelled になる。
-misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日・コンセンサス 140件/日）なので
+misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日）なので
 1回落ちるとその日の枠が丸ごと消える。cron を増やす方式は正常日にも二重実行してみんかぶ/IFISへ
 余計なアクセスをかけるため、**失敗時のみ発火する `retry_failed_batch.yml`** で救済する。
 `gh run rerun --failed` は元のイベントペイロード（`github.event.schedule`）を保持するため、
@@ -175,13 +175,16 @@ misc_batch は cron が1日1回の巡回枠（EDINET 100件/日・会社概要 1
   (強気買い/買い/中立/売り/強気売りの人数)・**今期のアナリスト予想 vs 会社予想**(売上/営業益/
   経常益/純益/EPS)を取得 → `analyst_consensus` テーブル。会社予想がコンセンサスを下回る
   ＝上方修正余地を定量化。時価総額大きい順に日次250件巡回(全体≒2週間で一巡・misc_batch)。
-  UA判定あり(MINKABU_HEADERS)。取得失敗は既存維持。銘柄ページにコンセンサスカードを表示
+  UA判定あり(MINKABU_HEADERS)。取得失敗は既存維持。銘柄ページにコンセンサスカードを表示。
+  **2026-11-10現在、GitHub=HTTP 405・Render=HTTP 403で自動取得を拒否されるため定期実行は停止中**。
+  `misc_batch.yml` の手動 `job=consensus` は取得経路の再診断用に残す。
 - `quarterly_consensus.py` — **四半期アナリストコンセンサス取得（2026-07新設・IFIS株予報）**。
   index.php?sa=report&bcode=<code> の「経常利益四半期進ちょく」表から、今期の四半期毎コンセンサス
   累計(1Q/2Q/3Q/通期・百万円)を取得 → `quarterly_consensus` テーブル(metric='ordinary')。
   四半期毎のアナリスト予想を無料提供するのはIFISのみ(みんかぶ/Yahoo/株探は通期のみ)。銘柄ページの
   今期進捗チャートに「四半期の目安(SBIの赤三角相当)」として表示。時価総額大きい順に日次60件巡回
-  (≒月1周・misc_batch consensus便)。robots.txt尊重・間隔ランダム化・403で当日打ち切り
+  (≒月1周・misc_batch consensus便)。robots.txt尊重・間隔ランダム化・403で当日打ち切り。
+  **2026-11-10現在、Render経由もHTTP 503のため、みんかぶ便と同様に定期実行は停止中**。
 - `youtube_insights.py` — **YouTube株動画の週次巡回（2026-07新設）**。CHANNELS（ハンドル定義）→
   channel_id解決(HTMLのexternalId・DBキャッシュ) → 公式RSS(キー不要)で直近8日の新着 →
   **GeminiのYouTube動画理解**(URL直接渡し・無料枠の動画処理8h/日内)で各動画を構造化
