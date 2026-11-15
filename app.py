@@ -2573,6 +2573,41 @@ _SCREEN_CSS = """
 }
 .sc-bar-clear-btn:hover { border-color:#e84040; color:#e84040; }
 
+/* ── AI等が出力した銘柄コードの一括入力 ── */
+.sc-code-picker {
+  background:linear-gradient(135deg,#161b22 0%,#101923 100%);
+  border:1px solid #2f4a6e; border-radius:10px; margin-bottom:12px;
+  padding:14px 16px; box-shadow:0 10px 28px rgba(0,0,0,.2);
+}
+.sc-code-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
+.sc-code-title { font-size:14px; color:#e6edf3; font-weight:700; }
+.sc-code-sub { font-size:11px; color:#8b949e; line-height:1.65; margin-top:3px; }
+.sc-code-close { background:transparent; border:0; color:#8b949e; font-size:20px; line-height:1; cursor:pointer; padding:0 2px; }
+.sc-code-close:hover { color:#f85149; }
+.sc-code-input {
+  display:block; width:100%; min-height:88px; resize:vertical; box-sizing:border-box;
+  background:#0d1117; border:1px solid #30363d; border-radius:8px;
+  color:#e6edf3; font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+  font-size:14px; line-height:1.6; padding:10px 12px; outline:none;
+}
+.sc-code-input:focus { border-color:#58a6ff; box-shadow:0 0 0 3px rgba(88,166,255,.12); }
+.sc-code-input::placeholder { color:#484f58; }
+.sc-code-meta { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:22px; margin-top:7px; }
+.sc-code-status { font-size:11px; color:#8b949e; line-height:1.5; }
+.sc-code-status.ok { color:#3fb950; }
+.sc-code-status.warn { color:#d29922; }
+.sc-code-status.err { color:#f85149; }
+.sc-code-limit { flex-shrink:0; font-size:10px; color:#484f58; }
+.sc-code-actions { display:flex; align-items:center; justify-content:flex-end; gap:7px; margin-top:10px; }
+.sc-code-action {
+  border:1px solid #30363d; border-radius:7px; background:#21262d; color:#c9d1d9;
+  font-size:12px; font-weight:600; padding:7px 14px; cursor:pointer; font-family:inherit;
+}
+.sc-code-action:hover { border-color:#58a6ff; color:#79c0ff; }
+.sc-code-action.primary { background:#1f6feb; border-color:#1f6feb; color:#fff; }
+.sc-code-action.primary:hover { background:#388bfd; border-color:#388bfd; }
+.sc-code-action:disabled { opacity:.45; cursor:default; }
+
 /* ── 条件ピッカーパネル ── */
 .sc-cond-picker {
   background:#161b22; border:1px solid #30363d; border-radius:10px;
@@ -2709,6 +2744,12 @@ input.sc-range-input::-moz-range-thumb {
   .sc-wrap { padding:8px; }
   .sc-preset-card { min-width:120px; max-width:160px; padding:10px 12px; }
   .sc-presets-row { margin-bottom:10px; }
+  .sc-active-bar { padding:8px; }
+  .sc-code-picker { padding:12px; }
+  .sc-code-input { min-height:104px; font-size:16px; }
+  .sc-code-meta { align-items:flex-start; }
+  .sc-code-actions { display:grid; grid-template-columns:1fr 1fr; }
+  .sc-code-action { min-height:42px; padding:8px; }
   .sc-result-header { flex-direction:column; align-items:flex-start; gap:6px; }
   .sc-sort { width:100%; }
   .sc-table { font-size:12px; }
@@ -5369,9 +5410,29 @@ def _build_screen_page() -> str:
 
   <div class="sc-active-bar" id="scActiveBar">
     <span class="sc-no-cond-label" id="scNoCondLabel">条件なし（全件表示）</span>
+    <button class="sc-add-cond-btn" id="scCodeBtn">📋 コードで絞る</button>
     <button class="sc-add-cond-btn" id="scAddCondBtn">＋ 条件を追加</button>
     <button class="sc-add-cond-btn" id="scGroupBtn">🏷 テーマ・業種で絞る</button>
     <button class="sc-bar-clear-btn" id="scBarClearBtn" style="display:none">✕ クリア</button>
+  </div>
+  <div class="sc-code-picker" id="scCodePicker" style="display:none">
+    <div class="sc-code-head">
+      <div>
+        <div class="sc-code-title">銘柄コードをまとめて指定</div>
+        <div class="sc-code-sub">AIの回答やメモをそのまま貼り付けられます。カンマ・空白・改行区切りと「6284.T」に対応します。</div>
+      </div>
+      <button class="sc-code-close" id="scCodeClose" type="button" aria-label="銘柄コード入力を閉じる">×</button>
+    </div>
+    <textarea class="sc-code-input" id="scCodeInput" spellcheck="false" autocapitalize="characters"
+              placeholder="例: 6284, 4463, 6914, 6272&#10;または 6814.T 7826.T 6363.T"></textarea>
+    <div class="sc-code-meta">
+      <span class="sc-code-status" id="scCodeStatus" aria-live="polite">銘柄コードを入力してください</span>
+      <span class="sc-code-limit">最大200銘柄・重複は自動除外</span>
+    </div>
+    <div class="sc-code-actions">
+      <button class="sc-code-action" id="scCodeApply" type="button">リストに反映</button>
+      <button class="sc-code-action primary" id="scCodeChart" type="button">⊞ チャートで見る</button>
+    </div>
   </div>
   <div id="scGroupPicker" style="display:none;margin:8px 0;padding:10px;background:#161b22;border:1px solid #30363d;border-radius:8px">
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
@@ -5468,6 +5529,7 @@ def _build_screen_page() -> str:
       <button class="cg-view-btn" id="sc-btn-perf">📊 業績</button>
     </div>
     <select class="sc-sort" id="sc-sort">
+      <option id="sc-sort-input-order" value="input_order-asc" disabled>貼り付け順（コード指定時）</option>
       <option value="market_cap-desc">時価総額 大きい順</option>
       <option value="market_cap-asc">時価総額 小さい順</option>
       <option value="chg25d-desc">25日騰落 高い順</option>
@@ -5518,6 +5580,7 @@ def _build_screen_page() -> str:
       <span id="sc-chart-note" style="font-size:12px;color:#484f58"></span>
       <div style="display:flex;gap:4px;align-items:center;margin-left:auto">
         <select id="sc-per-sel" class="cg-sort-select">
+          <option value="20">20件</option>
           <option value="50">50件</option>
           <option value="100">100件</option>
           <option value="200">200件</option>
@@ -5754,6 +5817,8 @@ def _build_screen_page() -> str:
   ];
   var _cmin={{}},_cmax={{}},_cflg={{}};
   var _cgroup=null;   /* テーマ・業種グループ条件 {{type,key,label,map:{{code:1}}}} */
+  /* コード指定もDOMではなくJSオブジェクトを正とする（bfcacheでのフォーム復元対策）。 */
+  var _codeMap=null,_codeOrder=[],_codeMissing=[];
   var _minIdMap={{}},_maxIdMap={{}},_chkIdMap={{}};
 
   /* ── 条件→入力欄マッピング（populateInputs/STRATS用）── */
@@ -5809,6 +5874,7 @@ def _build_screen_page() -> str:
 
   function clearInputs(){{
     _cmin={{}};_cmax={{}};_cflg={{}};_cgroup=null;
+    clearCodeFilter(false,true);
     var hw=document.getElementById('scHistWrap');if(hw)hw.style.display='none';
     scHistCond=null;
     if(typeof renderChips==='function')renderChips();
@@ -5851,12 +5917,115 @@ def _build_screen_page() -> str:
         else{{cid=_maxIdMap[iid];if(cid!==undefined){{if(_cmax[cid]===dv)delete _cmax[cid];else _cmax[cid]=dv;}}}}
       }}
     }});
-    renderChips();render();
+    renderChips();refreshResults();
   }}
 
   var stocks=[],sortCol='market_cap',sortDir=-1,curStrat=-1;
-  var scView='list',SC_PERIOD='6M',SC_MA=[25],SC_PAGE=0,SC_PER=50;
+  var scView='list',SC_PERIOD='6M',SC_MA=[25],SC_PAGE=0,
+      SC_PER=(window.matchMedia&&window.matchMedia('(max-width: 768px)').matches)?20:50;
   var allScData=null,lastScCodeOrder=[];
+
+  function refreshResults(){{
+    if(scView==='chart')loadScChart();
+    else if(scView==='perf')loadScPerf();
+    else render();
+  }}
+  function compareStocks(a,b){{
+    var av=a[sortCol],bv=b[sortCol];
+    if(av===null||av===undefined){{if(bv===null||bv===undefined)return 0;return 1;}}
+    if(bv===null||bv===undefined)return -1;
+    if(typeof av==='string'||typeof bv==='string')return String(av).localeCompare(String(bv),'ja')*sortDir;
+    return(av-bv)*sortDir;
+  }}
+  function getFilteredStocks(){{
+    var filtered=stocks.filter(passFilter);filtered.sort(compareStocks);return filtered;
+  }}
+  function parseStockCodes(raw){{
+    var text=String(raw||'');
+    if(text.normalize)text=text.normalize('NFKC');
+    text=text.toUpperCase();
+    var re=/(?:^|[^0-9A-Z])([0-9][0-9A-Z]{{3}})(?:\.T)?(?=$|[^0-9A-Z])/g;
+    var all=[],seen={{}},m;
+    while((m=re.exec(text))!==null){{
+      var code=m[1];
+      /* 「2020年」「3407円」等、文章中の4桁数値を銘柄コードと誤認しない。 */
+      if(/^\s*(?:年|円|株|倍|[%％])/.test(text.slice(re.lastIndex)))continue;
+      if(!seen[code]){{seen[code]=1;all.push(code);}}
+    }}
+    return{{codes:all.slice(0,200),total:all.length,truncated:all.length>200}};
+  }}
+  function setCodeStatus(message,kind){{
+    var el=document.getElementById('scCodeStatus');if(!el)return;
+    el.textContent=message;el.className='sc-code-status'+(kind?' '+kind:'');
+  }}
+  function setCodeSortEnabled(enabled){{
+    var opt=document.getElementById('sc-sort-input-order');if(opt)opt.disabled=!enabled;
+  }}
+  function syncCodeUrl(viewOverride){{
+    if(!window.history||!history.replaceState)return;
+    var url=new URL(window.location.href);
+    if(_codeOrder.length){{
+      url.searchParams.set('codes',_codeOrder.join(','));
+      var v=viewOverride||scView;
+      if(v&&v!=='list')url.searchParams.set('view',v);else url.searchParams.delete('view');
+      url.searchParams.set('sort',sortCol+(sortDir===-1?'-desc':'-asc'));
+    }}else{{
+      url.searchParams.delete('codes');url.searchParams.delete('view');url.searchParams.delete('sort');
+    }}
+    history.replaceState(null,'',url.pathname+(url.searchParams.toString()?'?'+url.searchParams.toString():'')+url.hash);
+  }}
+  function openCodePicker(){{
+    var picker=document.getElementById('scCodePicker'),input=document.getElementById('scCodeInput');
+    if(!picker||!input)return;
+    document.getElementById('scCondPicker').style.display='none';
+    document.getElementById('scGroupPicker').style.display='none';
+    picker.style.display='';
+    if(_codeOrder.length)input.value=_codeOrder.join(', ');
+    var parsed=parseStockCodes(input.value);
+    setCodeStatus(parsed.total?parsed.total+'銘柄のコードを検出':'銘柄コードを入力してください',parsed.truncated?'warn':'');
+    setTimeout(function(){{input.focus();}},0);
+  }}
+  function applyCodeFilter(targetView,keepSort,deferRender){{
+    var input=document.getElementById('scCodeInput'),parsed=parseStockCodes(input?input.value:'');
+    if(!parsed.codes.length){{setCodeStatus('4桁の銘柄コードが見つかりません','err');return false;}}
+    var available={{}};stocks.forEach(function(s){{available[s.code]=s;}});
+    var found=[],missing=[];
+    parsed.codes.forEach(function(code){{if(available[code])found.push(code);else missing.push(code);}});
+    if(!found.length){{setCodeStatus('スクリーニング対象データに一致するコードがありません','err');return false;}}
+    _codeOrder=found;_codeMissing=missing;_codeMap={{}};
+    found.forEach(function(code,idx){{_codeMap[code]=1;available[code].input_order=idx;}});
+    stocks.forEach(function(s){{if(!_codeMap[s.code])delete s.input_order;}});
+    setCodeSortEnabled(true);
+    if(!keepSort){{
+      sortCol='input_order';sortDir=1;
+      document.getElementById('sc-sort').value='input_order-asc';
+    }}
+    var notes=[];
+    if(missing.length)notes.push('対象データなし: '+missing.slice(0,8).join(', ')+(missing.length>8?' ほか':'') );
+    if(parsed.truncated)notes.push('先頭200銘柄まで反映');
+    setCodeStatus(found.length+'銘柄を反映'+(notes.length?'（'+notes.join('／')+'）':''),notes.length?'warn':'ok');
+    renderChips();
+    if(!notes.length)document.getElementById('scCodePicker').style.display='none';
+    if(!deferRender){{
+      if(targetView&&targetView!==scView)setScView(targetView);else refreshResults();
+      syncCodeUrl(targetView||scView);
+    }}
+    return true;
+  }}
+  function clearCodeFilter(doRefresh,silent){{
+    _codeMap=null;_codeOrder=[];_codeMissing=[];
+    stocks.forEach(function(s){{delete s.input_order;}});
+    setCodeSortEnabled(false);
+    if(sortCol==='input_order'){{
+      sortCol='market_cap';sortDir=-1;
+      var sel=document.getElementById('sc-sort');if(sel)sel.value='market_cap-desc';
+    }}
+    var input=document.getElementById('scCodeInput');if(input)input.value='';
+    setCodeStatus('銘柄コードを入力してください','');
+    syncCodeUrl();
+    if(!silent&&typeof renderChips==='function')renderChips();
+    if(doRefresh)refreshResults();
+  }}
 
   var dash='<span style="color:#484f58">—</span>';
   function escHtml(s){{return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}}
@@ -5921,6 +6090,7 @@ def _build_screen_page() -> str:
   }}
 
   function passFilter(s){{
+    if(_codeMap&&!_codeMap[s.code])return false;
     if(!passMarket(s))return false;
     if(_cgroup&&!_cgroup.map[s.code])return false;
     function mn(f,id,sc){{var v=_v(id);if(v===null)return true;var sv=s[f];if(sv===null||sv===undefined)return false;return sv>=(sc?v*sc:v);}}
@@ -6050,12 +6220,7 @@ def _build_screen_page() -> str:
     /* 期間騰落条件が有効なのに期間未選択なら、1ヶ月を自動選択してデータ取得後に再描画 */
     if(!_pFrom&&!_pLoading&&periodCondActive()){{var r=presetRange('30');applyPeriod(r[0],r[1]);return;}}
     var cols=getCols();
-    var filtered=stocks.filter(passFilter);
-    filtered.sort(function(a,b){{
-      var av=a[sortCol],bv=b[sortCol];
-      if(av===null&&bv===null)return 0;if(av===null)return 1;if(bv===null)return -1;
-      return(av-bv)*sortDir;
-    }});
+    var filtered=getFilteredStocks();
     document.getElementById('sc-count').textContent=filtered.length+'銘柄ヒット';
     document.getElementById('sc-thead').innerHTML='<tr>'+buildHeader(cols)+'</tr>';
     document.querySelectorAll('#sc-thead th[data-col]').forEach(function(th){{
@@ -6063,7 +6228,7 @@ def _build_screen_page() -> str:
         var col=th.dataset.col;
         if(sortCol===col)sortDir*=-1; else{{sortCol=col;sortDir=-1;}}
         document.getElementById('sc-sort').value=sortCol+(sortDir===-1?'-desc':'-asc');
-        render();
+        render();syncCodeUrl();
       }});
     }});
     var MAX=500,rows='';
@@ -6092,7 +6257,7 @@ def _build_screen_page() -> str:
       document.getElementById('sc-sort').value='market_cap-desc';
     }}
     populateInputs(idx);
-    if(scView==='chart'){{loadScChart();}}else if(scView==='perf'){{loadScPerf();}}else{{render();}}
+    refreshResults();syncCodeUrl();
   }}
 
   /* ── 条件定義 (カテゴリ別) ── */
@@ -6212,9 +6377,21 @@ def _build_screen_page() -> str:
     if(!bar)return;
     Array.from(bar.querySelectorAll('.sc-active-chip')).forEach(function(c){{c.remove();}});
     var activeConds=COND_DEFS.filter(isCondActive);
+    var hasCodeFilter=!!(_codeMap&&_codeOrder.length);
     var noLabel=document.getElementById('scNoCondLabel');
     var clearBtn=document.getElementById('scBarClearBtn');
     var addBtn=document.getElementById('scAddCondBtn');
+    var codeBtn=document.getElementById('scCodeBtn');
+    /* 貼り付けコード条件。チップ本体を押すと元の入力を再編集できる。 */
+    if(hasCodeFilter){{
+      var cchip=document.createElement('button');cchip.className='sc-active-chip';
+      cchip.title=_codeOrder.join(', ');
+      cchip.appendChild(document.createTextNode('📋 指定コード '+_codeOrder.length+'銘柄 '));
+      var cx=document.createElement('span');cx.className='sc-chip-x';cx.textContent='×';
+      cx.addEventListener('click',function(e){{e.stopPropagation();clearCodeFilter(true);}});
+      cchip.appendChild(cx);cchip.addEventListener('click',openCodePicker);
+      bar.insertBefore(cchip,codeBtn);
+    }}
     /* グループ条件チップ（テーマ・業種） */
     if(_cgroup){{
       var gchip=document.createElement('button');
@@ -6222,11 +6399,11 @@ def _build_screen_page() -> str:
       gchip.appendChild(document.createTextNode(
         '🏷 '+(_cgroup.type==='theme'?'テーマ':'業種')+': '+_cgroup.label+' '));
       var gx=document.createElement('span');gx.className='sc-chip-x';gx.textContent='×';
-      gx.addEventListener('click',function(e){{e.stopPropagation();_cgroup=null;renderChips();render();}});
+      gx.addEventListener('click',function(e){{e.stopPropagation();_cgroup=null;renderChips();refreshResults();}});
       gchip.appendChild(gx);
       bar.insertBefore(gchip,addBtn);
     }}
-    if(!activeConds.length&&!_cgroup){{
+    if(!activeConds.length&&!_cgroup&&!hasCodeFilter){{
       if(noLabel)noLabel.style.display='';
       if(clearBtn)clearBtn.style.display='none';
     }}else if(!activeConds.length){{
@@ -6497,24 +6674,44 @@ def _build_screen_page() -> str:
 
   document.getElementById('sc-sort').addEventListener('change',function(){{
     var dashIdx=this.value.lastIndexOf('-');
-    sortCol=this.value.slice(0,dashIdx);sortDir=this.value.slice(dashIdx+1)==='desc'?-1:1;render();
+    sortCol=this.value.slice(0,dashIdx);sortDir=this.value.slice(dashIdx+1)==='desc'?-1:1;
+    refreshResults();syncCodeUrl();
   }});
   var _ft=null;
-  function scheduleRender(){{if(_ft)clearTimeout(_ft);_ft=setTimeout(render,300);}}
+  function scheduleRender(){{if(_ft)clearTimeout(_ft);_ft=setTimeout(refreshResults,300);}}
   NUM_IDS.forEach(function(id){{
     var el=document.getElementById(id);
     if(!el)return;
     el.addEventListener('input',function(){{el.classList.toggle('active',el.value!=='');renderChips();scheduleRender();}});
-    el.addEventListener('change',function(){{el.classList.toggle('active',el.value!=='');renderChips();render();}});
+    el.addEventListener('change',function(){{el.classList.toggle('active',el.value!=='');renderChips();refreshResults();}});
   }});
   CHK_IDS.forEach(function(id){{
-    var el=document.getElementById(id);if(el)el.addEventListener('change',function(){{renderChips();render();}});
+    var el=document.getElementById(id);if(el)el.addEventListener('change',function(){{renderChips();refreshResults();}});
   }});
-  document.querySelectorAll('.sc-mkt-chk').forEach(function(el){{el.addEventListener('change',render);}});
+  document.querySelectorAll('.sc-mkt-chk').forEach(function(el){{el.addEventListener('change',refreshResults);}});
   document.getElementById('scAddCondBtn').addEventListener('click',showCondPicker);
   document.getElementById('scBarClearBtn').addEventListener('click',function(){{
     clearInputs();applyStrat(-1);
   }});
+
+  /* ── 銘柄コード一括入力 ── */
+  document.getElementById('scCodeBtn').addEventListener('click',function(){{
+    var picker=document.getElementById('scCodePicker');
+    if(picker.style.display==='none')openCodePicker();else picker.style.display='none';
+  }});
+  document.getElementById('scCodeClose').addEventListener('click',function(){{
+    document.getElementById('scCodePicker').style.display='none';
+  }});
+  document.getElementById('scCodeInput').addEventListener('input',function(){{
+    var parsed=parseStockCodes(this.value);
+    if(!parsed.total)setCodeStatus('銘柄コードを入力してください','');
+    else setCodeStatus(parsed.total+'銘柄のコードを検出'+(parsed.truncated?'（先頭200銘柄まで反映）':''),parsed.truncated?'warn':'');
+  }});
+  document.getElementById('scCodeInput').addEventListener('keydown',function(e){{
+    if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){{e.preventDefault();applyCodeFilter('chart',false,false);}}
+  }});
+  document.getElementById('scCodeApply').addEventListener('click',function(){{applyCodeFilter('list',false,false);}});
+  document.getElementById('scCodeChart').addEventListener('click',function(){{applyCodeFilter('chart',false,false);}});
 
   /* ── テーマ・業種グループ条件ピッカー ── */
   var _grpNames={{}};
@@ -6536,7 +6733,7 @@ def _build_screen_page() -> str:
         if(js.error||!js.codes||!js.codes.length){{alert('該当グループが見つかりません: '+gkey);return;}}
         var map={{}};js.codes.forEach(function(c){{map[c]=1;}});
         _cgroup={{type:js.type,key:js.key,label:js.label,map:map}};
-        renderChips();render();
+        renderChips();refreshResults();
         if(then)then();
       }});
   }}
@@ -6614,13 +6811,7 @@ def _build_screen_page() -> str:
     return prices.filter(function(p){{return p.date>=from;}});
   }}
   function scGetFilteredCodes(limit){{
-    var filtered=stocks.filter(passFilter);
-    filtered.sort(function(a,b){{
-      var av=a[sortCol],bv=b[sortCol];
-      if(av===null&&bv===null)return 0;if(av===null)return 1;if(bv===null)return -1;
-      return(av-bv)*sortDir;
-    }});
-    return filtered.slice(0,limit||200).map(function(s){{return s.code;}});
+    return getFilteredStocks().slice(0,limit||200).map(function(s){{return s.code;}});
   }}
   function scUpdatePagination(tp,total){{
     var info=document.getElementById('sc-pg-info'),prev=document.getElementById('sc-pg-prev'),next=document.getElementById('sc-pg-next'),note=document.getElementById('sc-chart-note');
@@ -6628,9 +6819,27 @@ def _build_screen_page() -> str:
     if(prev)prev.disabled=(SC_PAGE===0);if(next)next.disabled=(SC_PAGE>=tp-1);
     if(note)note.textContent='全'+total+'件';
   }}
+  var scPlotObserver=null;
+  function scResetPlotObserver(){{
+    if(scPlotObserver)scPlotObserver.disconnect();scPlotObserver=null;
+    if('IntersectionObserver' in window){{
+      scPlotObserver=new IntersectionObserver(function(entries){{
+        entries.forEach(function(entry){{
+          if(!entry.isIntersecting)return;
+          var el=entry.target,draw=el._scDraw;
+          el._scDraw=null;scPlotObserver.unobserve(el);if(draw)draw();
+        }});
+      }},{{rootMargin:'320px 0px'}});
+    }}
+  }}
+  function scQueuePlot(el,draw){{
+    if(!el)return;
+    if(scPlotObserver){{el._scDraw=draw;scPlotObserver.observe(el);}}else draw();
+  }}
   function scBuildGrid(data,codeOrder){{
     allScData=data;lastScCodeOrder=codeOrder;
     var grid=document.getElementById('sc-cg-grid');
+    scResetPlotObserver();
     if(!data||!data.length){{grid.innerHTML='<div style="color:#8b949e;padding:20px">データなし</div>';scUpdatePagination(1,0);return;}}
     var sorted=data.slice().sort(function(a,b){{return codeOrder.indexOf(a.code)-codeOrder.indexOf(b.code);}});
     var tp=Math.max(1,Math.ceil(sorted.length/SC_PER));SC_PAGE=Math.min(SC_PAGE,tp-1);
@@ -6654,7 +6863,8 @@ def _build_screen_page() -> str:
           '<div class="cg-metric"><span class="cg-metric-lbl">配当</span><span class="cg-metric-val">'+(item.div_yield?item.div_yield.toFixed(2)+'%':'—')+'</span></div>'+
         '</div>';
       card.querySelector('.cg-card-hd').addEventListener('click',function(){{window.location.href='/stock/'+item.code;}});
-      grid.appendChild(card);scDrawChart(cid,shown,prices);
+      grid.appendChild(card);
+      scQueuePlot(document.getElementById(cid),function(){{scDrawChart(cid,shown,prices);}});
     }});
   }}
   function refreshScGrid(){{
@@ -6674,7 +6884,9 @@ def _build_screen_page() -> str:
   }}
   function pfStat(lbl,v,unit){{return '<div class="cg-metric"><span class="cg-metric-lbl">'+lbl+'</span><span class="cg-metric-val">'+pfNum(v,unit)+'</span></div>';}}
   function loadScPerf(){{
-    var codes=scGetFilteredCodes(200),grid=document.getElementById('sc-cg-grid');
+    SC_PAGE=0;
+    var filtered=getFilteredStocks(),codes=filtered.slice(0,200).map(function(s){{return s.code;}}),grid=document.getElementById('sc-cg-grid');
+    document.getElementById('sc-count').textContent=filtered.length+'銘柄ヒット';
     if(!codes.length){{allScPerfData=[];lastScPerfOrder=[];grid.innerHTML='<div style="color:#8b949e;padding:20px">条件に一致する銘柄がありません</div>';scUpdatePagination(1,0);return;}}
     grid.innerHTML='<div style="color:#8b949e;padding:30px;text-align:center">業績を読み込み中...</div>';
     fetch('/api/perf_grid?codes='+codes.join(','))
@@ -6684,6 +6896,7 @@ def _build_screen_page() -> str:
   function scBuildPerfGrid(data,codeOrder){{
     allScPerfData=data;lastScPerfOrder=codeOrder;
     var grid=document.getElementById('sc-cg-grid');
+    scResetPlotObserver();
     if(!data||!data.length){{grid.innerHTML='<div style="color:#8b949e;padding:20px">データなし</div>';scUpdatePagination(1,0);return;}}
     var sorted=data.slice().sort(function(a,b){{return codeOrder.indexOf(a.code)-codeOrder.indexOf(b.code);}});
     var tp=Math.max(1,Math.ceil(sorted.length/SC_PER));SC_PAGE=Math.min(SC_PAGE,tp-1);
@@ -6705,7 +6918,7 @@ def _build_screen_page() -> str:
         '</div>';
       card.querySelector('.cg-card-hd').addEventListener('click',function(){{window.location.href='/stock/'+item.code;}});
       grid.appendChild(card);
-      if(ser&&ser.years&&ser.years.length)drawPerfChart(cid,ser);
+      if(ser&&ser.years&&ser.years.length)scQueuePlot(document.getElementById(cid),function(){{drawPerfChart(cid,ser);}});
     }});
   }}
   function drawPerfChart(id,ser){{
@@ -6756,12 +6969,13 @@ def _build_screen_page() -> str:
     var bl=document.getElementById('sc-btn-list'),bc=document.getElementById('sc-btn-chart'),bp=document.getElementById('sc-btn-perf');
     var cc=document.getElementById('sc-chart-controls'),pm=document.getElementById('sc-perf-metric');
     [bl,bc,bp].forEach(function(b){{if(b)b.classList.remove('active');}});
-    if(v==='list'){{tw.style.display='';cw.style.display='none';bl.classList.add('active');}}
+    if(v==='list'){{tw.style.display='';cw.style.display='none';bl.classList.add('active');render();}}
     else{{
       tw.style.display='none';cw.style.display='';
       if(v==='chart'){{bc.classList.add('active');if(cc)cc.style.display='';if(pm)pm.style.display='none';loadScChart();}}
       else{{bp.classList.add('active');if(cc)cc.style.display='none';if(pm)pm.style.display='';loadScPerf();}}
     }}
+    syncCodeUrl(v);
   }}
   document.getElementById('sc-btn-list').addEventListener('click',function(){{setScView('list');}});
   document.getElementById('sc-btn-chart').addEventListener('click',function(){{setScView('chart');}});
@@ -6788,6 +7002,7 @@ def _build_screen_page() -> str:
     }});
   }});
   var scPerSel=document.getElementById('sc-per-sel');
+  if(scPerSel)scPerSel.value=String(SC_PER);
   if(scPerSel)scPerSel.addEventListener('change',function(){{SC_PER=parseInt(this.value)||50;SC_PAGE=0;refreshScGrid();}});
   var scPgPrev=document.getElementById('sc-pg-prev');
   if(scPgPrev)scPgPrev.addEventListener('click',function(){{if(SC_PAGE>0){{SC_PAGE--;refreshScGrid();}}}});
@@ -6821,7 +7036,7 @@ def _build_screen_page() -> str:
       /* 期間条件が残っていると再フェッチループになるため一緒に外す */
       delete _cmin['pchg'];delete _cmax['pchg'];delete _cmin['prange'];delete _cmax['prange'];
       if(note)note.textContent='';
-      renderChips();render();return;
+      renderChips();refreshResults();return;
     }}
     _pFrom=from;_pTo=to||null;
     var f=document.getElementById('scPerFrom'),t=document.getElementById('scPerTo');
@@ -6838,7 +7053,7 @@ def _build_screen_page() -> str:
       }});
       if(note)note.textContent=(d.from||'')+' 〜 '+(d.to||'')+' の騰落';
       if(DEFAULT_COLS.indexOf('period_chg')<0)DEFAULT_COLS.splice(4,0,'period_chg','period_range');
-      render();
+      refreshResults();
       if(openSlider){{var cd=getCondDef('pchg');if(cd)showHistPanel(cd);}}
       if(cb)cb();
     }}).catch(function(){{
@@ -6865,8 +7080,28 @@ def _build_screen_page() -> str:
 
   fetch('/api/screen').then(function(r){{return r.json();}}).then(function(data){{
     stocks=data;
-    if(_pFrom){{applyPeriod(_pFrom,_pTo);return;}}
-    render();
+    var q=new URLSearchParams(location.search),rawCodes=q.get('codes'),initialView='list';
+    if(rawCodes){{
+      document.getElementById('scCodeInput').value=rawCodes;
+      var rawSort=q.get('sort');
+      if(applyCodeFilter(null,!!rawSort,true)){{
+        if(rawSort){{
+          var sortSel=document.getElementById('sc-sort'),matched=false;
+          Array.from(sortSel.options).forEach(function(opt){{if(opt.value===rawSort&&!opt.disabled)matched=true;}});
+          if(matched){{
+            sortSel.value=rawSort;
+            var dashIdx=rawSort.lastIndexOf('-');
+            sortCol=rawSort.slice(0,dashIdx);sortDir=rawSort.slice(dashIdx+1)==='desc'?-1:1;
+          }}
+        }}
+        var requestedView=q.get('view');
+        if(requestedView==='chart'||requestedView==='perf')initialView=requestedView;
+      }}
+    }}
+    if(_pFrom){{
+      applyPeriod(_pFrom,_pTo,false,function(){{setScView(initialView);}});return;
+    }}
+    setScView(initialView);
     STRATS.forEach(function(st,idx){{
       var card=document.querySelector('.sc-preset-card[data-strat="'+idx+'"]');
       if(!card)return;
@@ -6880,7 +7115,9 @@ def _build_screen_page() -> str:
   window.addEventListener('pageshow',function(e){{
     if(!e.persisted)return;
     _cmin={{}};_cmax={{}};_cflg={{}};
+    var codeInput=document.getElementById('scCodeInput');if(codeInput)codeInput.value=_codeOrder.join(', ');
     if(typeof renderChips==='function')renderChips();
+    refreshResults();
   }});
 
   /* ── バックテスト ── */
