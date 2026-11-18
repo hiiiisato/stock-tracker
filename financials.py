@@ -7,7 +7,8 @@ import time
 import requests
 from typing import List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from config import get_conn, bulk_upsert
+from config import get_conn
+from financials_store import ensure_source_tables, merge_canonical_rows, save_source_rows
 
 SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
 # Yahooの新しい fundamentals-timeseries エンドポイント。旧 quoteSummary/incomeStatementHistory は
@@ -153,18 +154,14 @@ def fetch_all_financials(max_workers: int = 5) -> int:
 
     conn = get_conn()
     cur = conn.cursor()
-    bulk_upsert(cur, "financials",
-        ["code", "period_end", "period_type",
-         "revenue", "gross_profit", "operating_income", "net_income",
-         "total_assets", "total_equity", "total_debt", "cf_operating"],
-        all_rows,
-        update_cols=["revenue", "gross_profit", "operating_income", "net_income",
-                     "total_assets", "total_equity", "total_debt", "cf_operating"],
-        # 損益(売上/粗利/営業益/純益)は timeseries が公式値と一致する信頼データなので
-        # 通常更新=上書きにする（旧quoteSummory由来の欠損Null・誤値を修正するため）。
-        # timeseries は値がある期のみ行を作るので、TDnet 等の既存値をNullで壊すことはない。
-        # BS/CF(総資産・自己資本・営業CF)は EDINET(financials_edinet)がより深いので穴埋め専用。
-        fill_only_cols=["total_assets", "total_equity", "cf_operating"])
+    columns = ["code", "period_end", "period_type",
+               "revenue", "gross_profit", "operating_income", "net_income",
+               "total_assets", "total_equity", "total_debt", "cf_operating"]
+    ensure_source_tables(cur)
+    save_source_rows(cur, "financials_yahoo_source", columns, all_rows)
+    # Yahooは補助ソース。部分レスポンスのNULLでTDnet/EDINET値を
+    # 消さないよう、canonicalでは未取得セルだけを埋める。
+    merge_canonical_rows(cur, columns, all_rows, prefer_incoming=False)
     conn.commit()
     cur.close()
     conn.close()

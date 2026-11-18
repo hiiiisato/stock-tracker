@@ -2,14 +2,14 @@
   (1) financials_edinet_annual に有報の年次業績(最大15年)をそのまま保存。これが全画面の
       業績時系列の「長期の正」。Yahoo timeseriesは日本株4年が上限のため、長期はEDINETのみ。
   (2) 同レスポンスの豊富な有報データ(損益内訳・CF・資本配分・従業員・ガバナンス等)も保存し、
-      financials の欠損(operating_income等)を穴埋め(fill-only・百万丸め)する副次効果も持つ。
+      同一年度の既存項目と整合する行に限り financials のNULLを穴埋めする。
 
 背景・設計方針:
 - **全銘柄に長期業績(有報15年)を行き渡らせる**のが主目的。edinet_code保有率99%なので、
   未取得銘柄を時価総額の大きい順に少しずつ取得し、業績データの分断(EDINET有=長期／無=Yahoo4年)を
   根本解消する。値はLLM非使用のXBRL抽出で信頼できる。
-- **穴埋め(fill-only)専用**。既存の値(TDnet短信=権威データ)は絶対に上書きしない。
-  config.bulk_upsert(fill_only_cols=...) の `COALESCE(col, VALUES(col))` を使い、NULLの列だけ埋める。
+- **検証付き穴埋め専用**。取得APIの概念選択による連結/単体の取り違えを
+  防ぐため、既存の重複項目と整合する年度だけを使う。非NULL値は上書きしない。
 - EDINETの生値は円単位。TDnet由来の既存データが百万円単位(端数ゼロ)で入っているため、
   取得値も百万円に丸めて格納し、表示上の齟齬(桁の見え方の違い)を出さない。
 - fiscal_year は「決算期末の年」。既存 financials 行(period_type='A')の YEAR(period_end) と突き合わせ、
@@ -40,6 +40,7 @@ import requests
 
 import config
 from config import bulk_upsert
+from financials_store import edinet_gap_count, reconcile_edinet_priority
 
 BASE = "https://edinetdb.jp/v1"
 KEY = config.EDINETDB_API_KEY
@@ -50,18 +51,6 @@ DAILY_LIMIT = 95     # 1回の実行で取得する最大銘柄数(edinet_texts/
 DAILY_FLOOR = 4      # 日次残数がこれ未満になったら停止
 MONTHLY_FLOOR = 10   # 月次残数がこれ未満になったら停止
 REFRESH_DAYS = 90    # 取得済み銘柄を再取得しない期間(有報は年1回)
-
-# EDINETレスポンス(snake_case) → financials 列。すべて穴埋め対象。
-FIELD_MAP = {
-    "revenue": "revenue",
-    "gross_profit": "gross_profit",
-    "operating_income": "operating_income",
-    "ordinary_income": "ordinary_income",
-    "net_income": "net_income",
-    "total_assets": "total_assets",
-    "cf_operating": "cf_operating",
-}
-_FIN_COLS = list(FIELD_MAP.values())
 
 # ── 付随データの保存用 ──────────────────────────────────────────────
 # 同じ1コールで返る有報の豊富なデータ(損益内訳・CF・資本配分・従業員・ガバナンス等)を
@@ -156,16 +145,6 @@ def _cast(kind: str, v):
 
 class QuotaExhausted(Exception):
     """日次/月次のAPI残枠が尽きたことを示す。"""
-
-
-def _to_million(v) -> int | None:
-    """円単位の生値を百万円単位に丸めた円値(百万の倍数)にする。既存TDnetデータと桁を揃える。"""
-    if v is None:
-        return None
-    try:
-        return int(round(float(v) / 1_000_000)) * 1_000_000
-    except (TypeError, ValueError):
-        return None
 
 
 def normalize_zero_artifacts(cur) -> int:
@@ -373,48 +352,12 @@ def _targets(cur, limit: int, only_codes: list[str] | None, force: bool) -> list
     return tasks
 
 
-def _null_periods(cur, code: str) -> dict[int, _dt.date]:
-    """code の op がNULLな年次(A)期末を {年: period_end} で返す。"""
-    cur.execute(
-        "SELECT period_end FROM financials "
-        "WHERE code=%s AND period_type='A' AND operating_income IS NULL",
-        (code,),
-    )
-    return {r[0].year: r[0] for r in cur.fetchall()}
-
-
-def _null_q_periods(cur, code: str) -> set[_dt.date]:
-    """code の op がNULLな四半期(Q)期末の集合を返す。"""
-    cur.execute(
-        "SELECT period_end FROM financials "
-        "WHERE code=%s AND period_type='Q' AND operating_income IS NULL",
-        (code,),
-    )
-    return {r[0] for r in cur.fetchall()}
-
-
 _EXTRA_NAMES = [c for c, _s, _t, _k in EXTRA_COLS]
 
 
 def _process_annual(cur, code: str, recs: list[dict], now) -> tuple[int, int]:
-    """年次: financials のop欠損を穴埋め + financials_edinet_annual に全保存。(穴埋めセル, 保存件数)。"""
+    """年次: EDINET原本を保存し、対応するcanonical実績をセル単位で更新。"""
     by_year = {r.get("fiscal_year"): r for r in recs if r.get("fiscal_year")}
-
-    null_map = _null_periods(cur, code)
-    rows: list[list] = []
-    for year, pend in null_map.items():
-        rec = by_year.get(year)
-        if not rec:
-            continue
-        vals = {col: _to_million(rec.get(src)) for src, col in FIELD_MAP.items()}
-        if all(v is None for v in vals.values()):
-            continue
-        rows.append([code, pend, "A"] + [vals[c] for c in _FIN_COLS])
-    filled = 0
-    if rows:
-        cols = ["code", "period_end", "period_type"] + _FIN_COLS
-        bulk_upsert(cur, "financials", cols, rows, update_cols=_FIN_COLS, fill_only_cols=_FIN_COLS)
-        filled = sum(1 for r in rows for v in r[3:] if v is not None)
 
     fye = _fye(cur, code)
     extra = [[code, y, _period_end(y, fye)]
@@ -424,38 +367,29 @@ def _process_annual(cur, code: str, recs: list[dict], now) -> tuple[int, int]:
         ecols = ["code", "fiscal_year", "period_end"] + _EXTRA_NAMES + ["updated_at"]
         bulk_upsert(cur, "financials_edinet_annual", ecols, extra,
                     update_cols=["period_end"] + _EXTRA_NAMES + ["updated_at"])
+    filled = reconcile_edinet_priority(cur, [code]) if extra else 0
     return filled, len(extra)
 
 
 def _process_quarterly(cur, code: str, recs: list[dict], now) -> tuple[int, int]:
-    """四半期: op欠損を穴埋め + financials_edinet_quarterly に全保存。(穴埋めセル, 保存件数)。"""
+    """四半期: EDINET原本を保存する（canonicalは未更新）。"""
     fye = _fye(cur, code)
     fye_m = fye[0] if fye else None
-    null_q = _null_q_periods(cur, code)
-
-    rows: list[list] = []
     extra: list[list] = []
     for rec in recs:
         fy, q = rec.get("fiscal_year"), rec.get("quarter")
         if not fy or not q:
             continue
         pe = _q_end(fy, q, fye_m)
-        if pe and pe in null_q:
-            vals = {col: _to_million(rec.get(src)) for src, col in FIELD_MAP.items()}
-            if not all(v is None for v in vals.values()):
-                rows.append([code, pe, "Q"] + [vals[c] for c in _FIN_COLS])
         extra.append([code, fy, q, pe]
                      + [_cast(k, rec.get(s)) for _c, s, _t, k in EXTRA_COLS] + [now])
-    filled = 0
-    if rows:
-        cols = ["code", "period_end", "period_type"] + _FIN_COLS
-        bulk_upsert(cur, "financials", cols, rows, update_cols=_FIN_COLS, fill_only_cols=_FIN_COLS)
-        filled = sum(1 for r in rows for v in r[3:] if v is not None)
     if extra:
         ecols = ["code", "fiscal_year", "quarter", "period_end"] + _EXTRA_NAMES + ["updated_at"]
         bulk_upsert(cur, "financials_edinet_quarterly", ecols, extra,
                     update_cols=["period_end"] + _EXTRA_NAMES + ["updated_at"])
-    return filled, len(extra)
+    # EDINET四半期は累計/単独3か月の概念対応を全銘柄で検証済みでない。
+    # 原本は保存するが、canonicalへの一括補完は行わない。
+    return 0, len(extra)
 
 
 def backfill(daily_limit: int = DAILY_LIMIT, only_codes: list[str] | None = None,
@@ -470,17 +404,20 @@ def backfill(daily_limit: int = DAILY_LIMIT, only_codes: list[str] | None = None
     _ensure_meta(cur)
     _ensure_extra_table(cur)
     normalized = normalize_zero_artifacts(cur)
+    reconciled = reconcile_edinet_priority(cur)
     conn.commit()
     if verbose and normalized:
         print(f"op=0 疑似欠損を {normalized} 行 NULL化(穴埋め対象に追加)")
+    if verbose and reconciled:
+        print(f"保存済みEDINET原本から canonical を {reconciled} セル再構築")
 
     targets = _targets(cur, daily_limit, only_codes, force)
     if verbose:
         na = sum(1 for _c, _e, k in targets if k == "A")
         print(f"対象 {len(targets)} タスク(年次{na}/四半期{len(targets)-na})"
-              f" 優先: ①年次op欠損 →②四半期op欠損 →③未取得の付随データ")
+              f" 優先: ①年次未取得 →②年次op欠損 →③四半期op欠損")
 
-    stats = {"fetched": 0, "filled_codes": 0, "filled_cells": 0,
+    stats = {"fetched": 0, "filled_codes": 0, "filled_cells": reconciled,
              "rich_codes": 0, "rich_rows": 0, "no_data": 0, "stopped": False}
     now = _dt.datetime.now()
 
@@ -536,6 +473,12 @@ def backfill(daily_limit: int = DAILY_LIMIT, only_codes: list[str] | None = None
             break
         time.sleep(DELAY)
 
+    gaps = edinet_gap_count(cur)
+    if gaps and verbose:
+        print(
+            f"注意: EDINET候補がある未補完NULL {gaps}セル"
+            "（整合性アンカー無し・連結/単体不一致は安全のため除外）"
+        )
     cur.close()
     conn.close()
     if verbose:

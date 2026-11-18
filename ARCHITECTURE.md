@@ -129,17 +129,19 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 - `splits.py` — 既存CLIの互換窓口。旧処理・旧バックフィルは `archive/splits_legacy_2026_07.py` / `archive/split_backfill_legacy_2026_07.py` に保管。
 - `ai_fund_adjustments.py` — 模擬運用の保有株数・取得単価・未約定注文を同じ公式イベントで補正。適用台帳で二重処理を防止し、約定原本・現金は変更しない。端株・ライツ・適用済み情報の訂正は要確認として評価を止める。
 - `dividends.py` — J-Quants 配当
+- `financials_store.py` — 財務実績の取得元保存とcanonical統合。`financials` は互換読取モデルとして維持し、
+  TDnetは非NULL値だけ更新、YahooはNULLだけ補完、EDINETは同一年度の既存項目と整合する行のNULLだけ補完する。
+  取得元の部分レスポンスで高優先値を消さない。初回DDLはバッチ実行時の `ensure_source_tables`。
 - `financials.py` — Yahoo Finance の損益/BS（crumb方式）。**穴埋め専用フォールバック**:
-  権威データは TDnet(financials_tdnet)。Yahooは日本株の売上/粗利/営業益を欠損時に "0" で返すため
-  （例: 9221は営業益・粗利が常時0）、`_zero_to_none` で 0→None にし、bulk_upsert の `fill_only_cols` で
-  損益・BS列は既存値を上書きしない（COALESCE。既にTDnet/公式値があればYahooの0/欠損で壊さない）。
-  total_debt だけは TDnet が持たないため Yahoo が通常更新する
+  レスポンスは `financials_yahoo_source` に保存し、canonicalは全項目で既存値を優先してNULLだけ埋める。
+  Yahooが項目の無い年度を部分行で返しても、TDnet/EDINET値をNULLで消さない。
 - `financials_tdnet.py` — TDnet決算短信XBRL(サマリー)から実績+会社予想を取得（financialsに未来日付期=予想として入る）。
+  実績原本は `financials_tdnet_source` に開示日付きで保存。canonicalは取得値が非NULLのセルだけ更新する。
   kabutanがデータセンターIP遮断のため公式一次データに置換(2026-07)。`import_recent(days)` で直近短信を取込。
   earnings_refresh から呼ばれ、detect_revisions が上方/下方修正を検知。旧 `financials_kabutan.py` は archive/ へ
 - `financials_edinet.py` — **EDINET公式有報XBRL（edinetdb.jp経由）を1コールで2役**:
-  **(1) 過去業績の欠損を穴埋め**: Yahoo/kabutanで埋まらなかった `operating_income` 等を公式有報の精密値で補完。
-  **fill-only**（`bulk_upsert` の `fill_only_cols` で全列COALESCE＝既存TDnet値は上書きせずNULLだけ埋める）。
+  **(1) 過去業績の欠損を穴埋め**: 既存の重複項目が整合する年度だけ、有報値でNULLを補完。
+  edinetdb.jpの概念選択に連結/単体の取り違えが実在するため、非NULL値の一律上書きは禁止。
   EDINETの円単位生値を百万円に丸めてTDnet由来データと桁を揃える。`fiscal_year` を既存NULL行の
   `YEAR(period_end)` に対応させ既存行のみ更新（新しい期は作らない）。`normalize_zero_artifacts` で
   Yahoo由来の `op=0` 疑似欠損(rev>0)をNULLに戻して補完対象化。
@@ -150,11 +152,9 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
   取得タスクの優先度（2026-07改）: **①年次未取得を時価総額大きい順（全銘柄の長期業績整備＝主目的）
   →②年次op欠損（穴埋め）→③四半期op欠損**。Yahooは日本株4年上限のため長期(15年)はEDINETのみ。
   edinetdb.jp無料枠100件/日の残数ヘッダで自動停止 → 期種別メタ（`financials_edinet_meta`/`_qmeta`）に取得済記録（90日周期で再取得）。
-- `financials_view.py` — **業績時系列の統一アクセス層（2026-07新設）**。`annual_performance(codes)` が
-  「EDINET(有報・最大15年)優先 → 未取得はYahoo財務(最大4年)で補完」を一手に引き受け、全画面
-  （業績カード=`/api/perf_grid`、CAGR等の指標算出=`fundamentals_ext`）がこれを通す。画面ごとにテーブルを
-  直読みしていた従来の分断（同じ業績が画面により見えたり「—」になったり）を構造的に解消。EDINETが
-  揃えば `source` が 'yahoo'→'edinet' に自動で切り替わる。
+- `financials_view.py` — **業績時系列の統一アクセス層**。`annual_performance(codes)` は
+  年度・項目単位でcanonicalと整合性検証済みEDINETを統合。業績カード、CAGR算出、銘柄詳細の年次財務がこれを通す。
+  EDINET取得済みでも、まだ有報の無い最新TDnet年度を落とさない。IFRS/USGAAPは「経常利益」ではなく「税引前利益」を表示する。
   **枠集中のため edinet_texts/segments は一時停止中**（misc_batch.yml の `if: false`。キャッチアップ後に再開）
 - `earnings_calendar_jpx.py` — JPX公式「決算発表予定日」Excelを取込 → `earnings_schedule`（決算跨ぎ管理）
 - `fundamentals.py` — PER/PBR/時価総額等 → `stock_fundamentals`
@@ -352,7 +352,8 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 | 価格 | `stock_splits` | 旧CLIとの互換投影。現役の価格判断・通知はcorporate_actionsを使用 |
 | AIファンド | `ai_fund_action_applications` | 保有・未約定注文への権利適用履歴（ai_fund_adjustments。模擬運用の単位を維持） |
 | 価格 | `market_index_prices` | market_indices.py |
-| 財務 | `financials` | financials.py + financials_tdnet.py（TDnet短信XBRL・**未来日付の期=会社予想**）+ financials_edinet.py（有報で欠損穴埋め） |
+| 財務 | `financials` | canonical互換読取モデル。TDnet非NULL更新→整合性検証済みEDINETの欠損補完→Yahoo欠損補完。未来日付の期は会社予想 |
+| 財務原本 | `financials_yahoo_source` `financials_tdnet_source` | Yahoo取得値とTDnet開示別実績。低優先ソースによるcanonicalのNULL上書きを防ぎ、追跡可能にする |
 | 財務 | `financials_edinet_annual` `financials_edinet_quarterly` | financials_edinet.py（有報の豊富な年次/四半期データ約60項目・生値精密） |
 | 財務 | `financials_edinet_meta` `financials_edinet_qmeta` | financials_edinet.py（年次/四半期の取得済メタ・90日周期で再取得） |
 | 財務 | `financials_forecast` `dividends` `stock_fundamentals` | 各取得モジュール |
@@ -398,6 +399,8 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 - **無料枠より古い分割で基準確認ができない系列**は、取得できる公式当時値の期間＋全権利実施後の直近価格から再構築する。確認できない古い区間は原本に保持し、正常なチャートへ混ぜない。新方式の公開ビューでは未確認行を除外する。
 - **価格公開後の指標・キャッシュ**: 指標にsource_price_versionを保持し、価格と異なる版はprice_stats_currentで除外。キャッシュは価格と派生値の保存完了ごとにDBの公開状態世代を進め、5秒以内に失効する。ブラウザー復帰時もチャートを再取得する。
 - **financialsに未来日付の期が入っている**（会社予想）。実績として使う時は `period_end <= CURDATE()` で除外
+- **財務の部分行を通常UPSERTしない**。Yahooは同一年度の一部項目だけを返すため、NULLまで上書きするとTDnet/EDINET値が消える。
+  取得元原本を保存し、`financials_store` のセル単位統合を使う。EDINETも連結/単体の概念取り違えがあるため、整合性未検証の値で既存値を上書きしない
 - **バックテストの先読み防止**: ファンダは期末+45日を公開日とみなす（PIT補正）。price_stats_history生成時に適用済み
 - **業績修正・増配のバックテストは必ず `forecast_revisions.reaction_date` を基準にする**。
   発表時刻(disclosed_at)から場中/引け後(session)を判定済みで、reaction_date=「実際に売買できる最初の営業日」。

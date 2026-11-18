@@ -7515,16 +7515,23 @@ def _build_stock_page(code: str) -> str:
     # ─ 業績実績（通期 + 四半期、最新12件ずつ） ─
     fin_annual_rows: list = []
     fin_quarterly_rows: list = []
+    fin_secondary_profit_label = "経常利益"
     try:
-        cur.execute("""
-            SELECT period_end, period_type,
-                   revenue, operating_income, ordinary_income, net_income,
-                   total_assets, total_equity, cf_operating
-            FROM financials
-            WHERE code = %s AND period_type = 'A'
-            ORDER BY period_end DESC LIMIT 10
-        """, (code,))
-        fin_annual_rows = list(reversed(cur.fetchall()))
+        from financials_view import annual_performance
+        _annual_records = annual_performance([code], cur=cur).get(code, [])[-10:]
+        if _annual_records:
+            fin_secondary_profit_label = _annual_records[-1].get(
+                "secondary_profit_label", "経常利益"
+            )
+        fin_annual_rows = [
+            (
+                row.get("period_end"), "A", row.get("revenue"),
+                row.get("operating_income"), row.get("secondary_profit"),
+                row.get("net_income"), row.get("total_assets"),
+                row.get("net_assets"), row.get("cf_operating"),
+            )
+            for row in _annual_records if row.get("period_end") is not None
+        ]
 
         cur.execute("""
             SELECT period_end, period_type,
@@ -8209,6 +8216,9 @@ def _build_stock_page(code: str) -> str:
     fin_annual_json    = _json.dumps(fin_annual_data,    ensure_ascii=False)
     fin_quarterly_json = _json.dumps(fin_quarterly_data, ensure_ascii=False)
     fin_progress_json  = _json.dumps(fin_progress,       ensure_ascii=False)
+    fin_secondary_profit_label_json = _json.dumps(
+        fin_secondary_profit_label, ensure_ascii=False
+    )
 
     # ─ 表示ヘルパー ─
     def _fmtv(v, fmt="{:.1f}", sfx=""):
@@ -8753,6 +8763,7 @@ def _build_stock_page(code: str) -> str:
 var FIN_ANNUAL    = {fin_annual_json};
 var FIN_QUARTERLY = {fin_quarterly_json};
 var FIN_PROGRESS  = {fin_progress_json};
+var FIN_SECONDARY_PROFIT_LABEL = {fin_secondary_profit_label_json};
 </script>"""
 
     _fin_logic_script = """<script>
@@ -8790,7 +8801,7 @@ function renderFinAll(){
   var isQ=currentFinType==='Q';
   document.querySelectorAll('[data-fin-scope="annual"]').forEach(function(el){el.hidden=isQ;});
   document.getElementById('fin-rev-title').textContent=isQ?'売上高（単独3か月）& 前年同期比':'売上高 & 前年比';
-  document.getElementById('fin-op-title').textContent=isQ?'営業利益・経常利益（単独3か月）& 利益率':'営業利益・経常利益 & 各利益率';
+  document.getElementById('fin-op-title').textContent=isQ?'営業利益・経常利益（単独3か月）& 利益率':'営業利益・'+FIN_SECONDARY_PROFIT_LABEL+' & 各利益率';
   document.getElementById('fin-net-title').textContent=isQ?'純利益（単独3か月）& 純利益率':'純利益 & 純利益率';
   document.getElementById('fin-table-title').textContent=isQ?'四半期推移':'財務データ';
   document.getElementById('fin-table-hint').hidden=!isQ;
@@ -9097,16 +9108,18 @@ function renderRevChart(d){
 function renderOpChart(d){
   var acts=d.filter(function(x){return!x.is_forecast;});
   var fcs =d.filter(function(x){return x.is_forecast;});
+  var secondaryLabel=currentFinType==='A'?FIN_SECONDARY_PROFIT_LABEL:'経常利益';
   var t=[
     {type:'bar',name:'営業利益',x:finX(acts),y:acts.map(function(x){return x.op;}),
      marker:{color:'#ffa657',opacity:0.85},showlegend:true,hovertemplate:'営業利益 %{y:.1f}億<extra></extra>'},
-    {type:'bar',name:'経常利益',x:finX(acts),y:acts.map(function(x){return x.ord;}),
-     marker:{color:'#58a6ff',opacity:0.65},showlegend:true,hovertemplate:'経常利益 %{y:.1f}億<extra></extra>'},
+    {type:'bar',name:secondaryLabel,x:finX(acts),y:acts.map(function(x){return x.ord;}),
+     marker:{color:'#58a6ff',opacity:0.65},showlegend:true,
+     hovertemplate:secondaryLabel+' %{y:.1f}億<extra></extra>'},
   ];
   if(fcs.length){
     t.push({type:'bar',name:'営業利益(P)',x:finX(fcs),y:fcs.map(function(x){return x.op;}),
       marker:{color:'#ffa657',opacity:0.35},showlegend:false});
-    t.push({type:'bar',name:'経常利益(P)',x:finX(fcs),y:fcs.map(function(x){return x.ord;}),
+    t.push({type:'bar',name:secondaryLabel+'(P)',x:finX(fcs),y:fcs.map(function(x){return x.ord;}),
       marker:{color:'#58a6ff',opacity:0.25},showlegend:false});
   }
   t.push(mkLine(d,'op_mgn','#E84040','%'));
@@ -9173,7 +9186,7 @@ function renderFinTable(d){
     {k:'revenue',  l:'売上高',    s:'億'},
     {k:'op',       l:'営業利益',  s:'億'},
     {k:'op_mgn',   l:'営業利益率',s:'%'},
-    {k:'ord',      l:'経常利益',  s:'億'},
+    {k:'ord',      l:FIN_SECONDARY_PROFIT_LABEL,s:'億'},
     {k:'net',      l:'純利益',    s:'億'},
     {k:'net_mgn',  l:'純利益率',  s:'%'},
     {k:'eps',      l:'EPS',       s:'円'},

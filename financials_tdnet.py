@@ -29,6 +29,12 @@ import requests
 from bs4 import BeautifulSoup
 
 from config import get_conn, bulk_upsert
+from financials_store import (
+    ensure_source_tables,
+    merge_canonical_rows,
+    reconcile_edinet_priority,
+    save_source_rows,
+)
 
 TDNET_BASE = "https://www.release.tdnet.info/inbs/"
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
@@ -345,7 +351,7 @@ def import_recent(days: int = 4, only_codes: set | None = None, force: bool = Fa
     only_codes を渡すとその銘柄のみ（earnings_refreshの自己修復用）。冪等。
     force=True で「取込済みスキップ」を無効化（過去データの再取得・修復用）。"""
     conn = get_conn(); cur = conn.cursor()
-    fin_rows, fc_rows = [], []
+    fin_rows, fin_source_rows, fc_rows = [], [], []
     n_disc = 0
     seen_zip = set()
     for i in range(days):
@@ -378,12 +384,22 @@ def import_recent(days: int = 4, only_codes: set | None = None, force: bool = Fa
                 continue
             fins, fcs = _build_records(s, item["disclosed"], cur)
             fin_rows.extend(fins)
+            fin_source_rows.extend([(*row, item["disclosed"]) for row in fins])
             fc_rows.extend(fcs)
             n_disc += 1
 
     if fin_rows:
-        bulk_upsert(cur, "financials", _FIN_COLS, fin_rows,
-                    update_cols=[c for c in _FIN_COLS if c not in ("code", "period_end", "period_type")])
+        ensure_source_tables(cur)
+        save_source_rows(
+            cur,
+            "financials_tdnet_source",
+            [*_FIN_COLS, "announced_at"],
+            fin_source_rows,
+        )
+        # TDnetの非NULL値はYahooより優先するが、部分開示のNULLで
+        # 既存値を消さない。その後、整合性を確認できるEDINETの欠損項目だけを補完する。
+        merge_canonical_rows(cur, _FIN_COLS, fin_rows, prefer_incoming=True)
+        reconcile_edinet_priority(cur, {row[0] for row in fin_rows})
     if fc_rows:
         bulk_upsert(cur, "financials_forecast", _FC_COLS, fc_rows,
                     update_cols=[c for c in _FC_COLS if c not in ("code", "fiscal_year_end", "period_type", "announced_at")])
