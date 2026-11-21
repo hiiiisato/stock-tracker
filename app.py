@@ -2737,6 +2737,20 @@ input.sc-range-input::-moz-range-thumb {
 .sc-empty   { text-align:center; padding:48px; color:#484f58; }
 .sc-loading { text-align:center; padding:48px; color:#8b949e; }
 
+.sc-chart-metrics {
+  display:grid; grid-template-columns:repeat(3, minmax(0, 1fr));
+  margin:0; padding:8px 0; border-top:1px solid #30363d; background:#0d1117;
+}
+.sc-chart-metrics > div { padding:0 4px; text-align:center; }
+.sc-chart-metrics > div + div { border-left:1px solid #30363d; }
+.sc-chart-metrics dt { color:#a7b1bc; font-size:11px; font-weight:600; }
+.sc-chart-metrics dd {
+  margin:2px 0 0; color:#e6edf3; font-size:16px; font-weight:700;
+  line-height:1.25; font-variant-numeric:tabular-nums; overflow-wrap:anywhere;
+}
+.sc-chart-metrics dd span { margin-left:2px; color:#a7b1bc; font-size:11px; }
+.sc-chart-metrics .sc-metric-missing { color:#8b949e; }
+
 /* 非表示フィルター入力 */
 #scHiddenInputs { display:none!important; }
 
@@ -6836,6 +6850,12 @@ def _build_screen_page() -> str:
     if(!el)return;
     if(scPlotObserver){{el._scDraw=draw;scPlotObserver.observe(el);}}else draw();
   }}
+  function scChartMetric(label,value,precision,unit){{
+    var formatted=value==null
+      ?'<dd class="sc-metric-missing">—</dd>'
+      :'<dd>'+value.toFixed(precision)+'<span>'+unit+'</span></dd>';
+    return '<div><dt>'+label+'</dt>'+formatted+'</div>';
+  }}
   function scBuildGrid(data,codeOrder){{
     allScData=data;lastScCodeOrder=codeOrder;
     var grid=document.getElementById('sc-cg-grid');
@@ -6856,12 +6876,12 @@ def _build_screen_page() -> str:
         '<div><div class="cg-name">'+escHtml(item.name)+'</div><div class="cg-code-label">'+item.code+'</div></div>'+
         '<div><div class="cg-price">'+(cl?cl.toLocaleString('ja-JP',{{maximumFractionDigits:0}}):'—')+'</div>'+
         '<div class="cg-chg" style="color:'+(chg>0?'#E84040':chg<0?'#3A9FE0':'#8b949e')+'">'+chgStr+'</div></div></div>'+
-        '<div id="'+cid+'" class="cg-plot"><div class="cg-loading">読み込み中...</div></div>'+
-        '<div class="cg-metrics">'+
-          '<div class="cg-metric"><span class="cg-metric-lbl">PER</span><span class="cg-metric-val">'+(item.per?item.per.toFixed(1)+'x':'—')+'</span></div>'+
-          '<div class="cg-metric"><span class="cg-metric-lbl">PBR</span><span class="cg-metric-val">'+(item.pbr?item.pbr.toFixed(2)+'x':'—')+'</span></div>'+
-          '<div class="cg-metric"><span class="cg-metric-lbl">配当</span><span class="cg-metric-val">'+(item.div_yield?item.div_yield.toFixed(2)+'%':'—')+'</span></div>'+
-        '</div>';
+        '<div id="'+cid+'" class="cg-plot"></div>'+
+        '<dl class="sc-chart-metrics">'+
+          scChartMetric('PER',item.per,1,'倍')+
+          scChartMetric('PBR',item.pbr,2,'倍')+
+          scChartMetric('配当利回り',item.div_yield,2,'%')+
+        '</dl>';
       card.querySelector('.cg-card-hd').addEventListener('click',function(){{window.location.href='/stock/'+item.code;}});
       grid.appendChild(card);
       scQueuePlot(document.getElementById(cid),function(){{scDrawChart(cid,shown,prices);}});
