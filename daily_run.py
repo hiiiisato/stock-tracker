@@ -343,6 +343,18 @@ def run(
             print(f"  エラー: {e}")
             _log("master", "failed", error=str(e))
 
+        # 1.2 東証上場日の差分更新。初回全件はJPXデータポータルCSVで投入し、
+        #     以後の新規上場はJPX公式一覧から日次追記する。
+        print("\n[1.2/4] 東証上場履歴の新規銘柄を確認...")
+        try:
+            from stock_listings import refresh_new_listings
+            n = refresh_new_listings()
+            print(f"  完了: {n:,} 件を確認・更新")
+            _log("stock_listings", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("stock_listings", "failed", error=str(e))
+
         # 1.5 銘柄名の名寄せインデックス（読み・別名 → コード）
         #     マスタ更新の直後に張り直す。AI要約・検索の社名解決がこれに依存する
         print("\n[1.5/4] 銘柄名の名寄せインデックス更新...")
