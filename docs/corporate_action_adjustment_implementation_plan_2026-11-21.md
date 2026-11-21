@@ -83,6 +83,30 @@ per_share_factor = 1 / share_factor
 `announced_at`、`ex_date`、`record_date`、`effective_date`、旧株数・新株数、種類、価格係数、状態を含める。
 提供元が予定表から月報へ変わっただけで経済条件が同じ場合は値を変えず、経済条件・境界日・発表日の訂正時に変える。
 
+### 複数回分割の適用契約
+
+同じ銘柄で何回分割が起きても、最新値へ上書きしながら補正しない。対象基準に含まれる公式イベント集合から、
+原本値へすでに反映済みと確認できたイベント集合を引き、残ったイベントの係数を一度だけ掛ける。
+
+```text
+target_actions  = target_basis_date までに有効な action_id の集合
+source_actions  = 原本値へ反映済みと検証できた action_id の集合
+applied_actions = target_actions - source_actions
+per_share_factor = Π(1 / share_factor(action)) for action in applied_actions
+```
+
+イベントは `ex_date, action_id` 順の正規形で保存・計算し、`Decimal` で積を求める。同じ年に2回実施されても
+年単位でまとめず、権利落ち日ごとの別イベントとして扱う。乗算結果だけでは監査できないため、原本事実には
+`source_basis_action_ids`、派生値には `applied_action_ids` を安定した `action_id` のJSON配列で保存する。
+配列は補助的な第二の台帳ではなく、正本の `corporate_actions` のどの行を使用したかを示す計算証跡であり、
+比率・状態・日付は保持しない。係数は必ず正本を再読込して計算する。
+
+例えば1:2分割後に公表されたEPSへ、その後1:3分割が起きた場合は、1:2と1:3の累積1/6を掛けず、
+未反映の1:3だけを掛ける。さらに1:5分割が起きた場合は、新しい原本へ上書きせず同じ原本から
+1/15を再生成する。いずれかのイベントが訂正・取消になれば `action_digest` が変わり、そのイベント以後の
+価格・一株指標・配当・valuationをすべて無効化して原本から再生成する。同じdigestの再実行では
+`applied_action_ids`、係数、値が完全に同じになることを必須とする。
+
 ## 権利の検知と反映時点
 
 ### 検知経路
@@ -147,7 +171,7 @@ DPSは分割前基準という実例があるため、wideな年度行へ共通�
 - `consolidation_scope`, `accounting_standard`
 - `raw_value`, `net_income_raw`, `equity_raw`
 - `reported_average_shares`, `reported_end_shares`, `xbrl_concept`
-- `source_basis_date`, `source_basis_status`
+- `source_basis_date`, `source_basis_status`, `source_basis_action_ids`
 - `quality_status`, `quality_reason`, `ingested_at`
 
 `source_basis_status` は `explicit_pre_action / explicit_post_action / derived_pre_action /
@@ -168,11 +192,13 @@ derived_post_action / ambiguous` とする。
 主な列:
 
 - `fact_id`, `action_digest`, `target_basis_date`, `calculation_version`
-- `share_adjustment_factor`, `normalized_value`
+- `applied_action_ids`, `share_adjustment_factor`, `normalized_value`
 - `quality_status`, `quality_reason`, `computed_at`
 
 同じdigestのまま日付だけ進むたびに履歴行を増やさない。現在用は `(fact_id, action_digest,
 calculation_version)` で再利用し、バックテストは当時判明済みの原本・権利から都度PIT計算する。
+`source_basis_action_ids` または `applied_action_ids` が正本にない、重複する、対象基準日より未来、
+または集合差から再計算した係数と一致しない場合は `needs_review` とし、正式値へ公開しない。
 
 ### 配当
 
@@ -345,6 +371,10 @@ SBIの現在保有明細は証券会社側で分割反映済みなので追加�
 ### DB・再実行
 
 - 同じイベント・同じジョブを複数回実行して値が変わらないこと
+- 1回目の分割反映後に2回目・3回目を追加しても、補正済み値ではなく原本から累積係数で再生成されること
+- 同一年の複数イベントを別々に適用し、`applied_action_ids` に欠落・重複がないこと
+- 1回目または途中のイベントを訂正・取消した場合、後続を含むdigestと全派生値が再生成されること
+- 同じdigestで再実行した場合、`applied_action_ids`、係数、補正値、公開版が変わらないこと
 - 台帳訂正で全consumerがpendingになり、旧digestの値が公開されないこと
 - 途中失敗後の再実行で原本が増殖せず、派生値だけ復旧すること
 - 価格版と一株指標版が異なる間、PER/PBR等が表示されないこと
@@ -379,6 +409,21 @@ SBIの現在保有明細は証券会社側で分割反映済みなので追加�
 - 2801の旧価格期間は安全な再構築または理由付き期間制限を行い、3年指定でNULL系列・無言の短縮を返さない。
 - 分割なしの対照銘柄として3003を使い、予想EPS 165.85617577円、予想ROE 13.78963183%が
   不要に変化しないことを確認する。
+- 保存期間内の複数回イベントについて、2026-11-21時点の実DBで次を回帰対象にする。
+  - 8136（サンリオ）: 2024年1:3、2026年1:5。累積株数係数15、過去一株値・株価係数1/15。
+  - 4062（イビデン）: 2025年1:2、2026年1:2。累積株数係数4、過去一株値・株価係数1/4。
+  - 5535（ミガロHD）: 2024年1:2、2025年2月1:2、同年5月1:2。累積株数係数8、
+    過去一株値・株価係数1/8。同一年の2回をまとめたり片方を落としたりしない。
+  - 2814（佐藤食品工業）: 2025年1:1.1無償割当て、2026年1:2分割。累積株数係数2.2、
+    過去一株値・株価係数1/2.2。整数丸めをしない。
+- 上記4銘柄の公開可能なraw日足全行を、各日より後の確定イベント積から再計算した結果、現状は
+  価格係数、OHLC、出来高とも不一致0件である。この状態を実装後も全行監査する。
+- 4062の2026年3月期原本は最初の1:2後、2回目の1:2前に公表されているため、現在基準への追加係数は
+  2回目だけの1/2とする。2814も2026年3月期原本に2025年の無償割当てが反映済みなら、2026年分割の
+  1/2だけを適用する。8136・5535を含め、単に全イベント積を各年度へ再適用しないことを確認する。
+- 現行 `forecast_metrics` で4062と2814は `corporate_action_since_basis` により `needs_review` となる。
+  実装後は、上記イベント集合差でEPS/BPSを現在基準へ正規化してから予想EPS/ROEを再生成し、
+  8136・5535の現在 `verified` の値も二重補正がないことを計算証跡で再検証する。
 - 実DBの確定済みイベントから、分割、併合、複数回分割、訂正ありを各1銘柄以上自動抽出して監査する。
 
 ## 本番切替条件
