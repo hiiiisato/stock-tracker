@@ -144,6 +144,14 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
   実績原本は `financials_tdnet_source` に開示日付きで保存。canonicalは取得値が非NULLのセルだけ更新する。
   kabutanがデータセンターIP遮断のため公式一次データに置換(2026-07)。`import_recent(days)` で直近短信を取込。
   earnings_refresh から呼ばれ、detect_revisions が上方/下方修正を検知。旧 `financials_kabutan.py` は archive/ へ
+- `forecast_metrics.py` — `financials_forecast` の会社予想純利益から予想EPS・予想ROEを
+  固定式で再生成する。予想EPS=`予想純利益÷(直近EDINET実績純利益÷同じ行の実績EPS)`、
+  予想ROE=`予想EPS÷同じEDINET実績行のBPS`。canonical自己資本は通貨・連結範囲の異常検知に
+  だけ使い、計算分母にはしない。取得元による式の切替やYahoo予想EPSの混用はせず、入力不足は
+  NULLと理由を保存する。採点対象はJPX公式履歴に載る上場中の国内普通株だけ。
+  `quality_status/quality_flags` に会社予想なし、債務超過、実績値不整合、株数基準5%超乖離、
+  実績期後の分割等を保存し、`verified` 以外を採点へ渡さない。TDnet予想更新直後は該当銘柄だけ、
+  00:30のEDINET保守後は全件を再計算する。
 - `financials_edinet.py` — **EDINET公式有報XBRL（edinetdb.jp経由）を1コールで2役**:
   **(1) 過去業績の欠損を穴埋め**: 既存の重複項目が整合する年度だけ、有報値でNULLを補完。
   edinetdb.jpの概念選択に連結/単体の取り違えが実在するため、非NULL値の一律上書きは禁止。
@@ -363,6 +371,7 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 | 財務 | `financials_edinet_annual` `financials_edinet_quarterly` | financials_edinet.py（有報の豊富な年次/四半期データ約60項目・生値精密） |
 | 財務 | `financials_edinet_meta` `financials_edinet_qmeta` | financials_edinet.py（年次/四半期の取得済メタ・90日周期で再取得） |
 | 財務 | `financials_forecast` `dividends` `stock_fundamentals` | 各取得モジュール |
+| 財務派生 | `forecast_metrics` | forecast_metrics.py（会社予想純利益＋同じEDINET実績行の純利益/EPS/BPSから、単一の固定式で予想EPS・予想ROEを再生成。国内普通株の対象判定、入力値、基準期、分割・株数基準・出典整合性の品質状態を併記） |
 | 指標 | `price_stats` / `price_stats_current` | compute_price_stats（最新値と元の価格版。参照ビューは公開価格と版が一致する指標だけを返す） |
 | 指標 | `price_stats_history` | compute_stats_history.py（週次・バックテスト用） |
 | 指標 | `stock_metrics_history` | 旧方式（archive/compute_metrics_history.py）。現役コードから参照なし・更新停止 |

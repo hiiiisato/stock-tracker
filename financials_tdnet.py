@@ -28,7 +28,7 @@ from datetime import date, datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
 
-from config import get_conn, bulk_upsert
+from config import get_conn
 from financials_store import (
     ensure_source_tables,
     merge_canonical_rows,
@@ -346,11 +346,38 @@ _FC_COLS = ["code", "fiscal_year_end", "period_type", "revenue", "operating_inco
             "ordinary_income", "net_income", "div_per_share", "announced_at"]
 
 
+def _upsert_forecasts(cur, rows: list[tuple]) -> None:
+    """会社予想を、部分開示のNULLで既存の非NULL値を消さずに更新する。"""
+    if not rows:
+        return
+    columns = ",".join(f"`{column}`" for column in _FC_COLS)
+    row_placeholder = "(" + ",".join(["%s"] * len(_FC_COLS)) + ")"
+    value_columns = [
+        column for column in _FC_COLS
+        if column not in ("code", "fiscal_year_end", "period_type", "announced_at")
+    ]
+    updates = ",".join(
+        f"`{column}`=COALESCE(VALUES(`{column}`),`{column}`)"
+        for column in value_columns
+    )
+    for start in range(0, len(rows), 500):
+        batch = rows[start:start + 500]
+        values_sql = ",".join([row_placeholder] * len(batch))
+        cur.execute(
+            f"INSERT INTO financials_forecast ({columns}) VALUES {values_sql} "
+            f"ON DUPLICATE KEY UPDATE {updates}",
+            [value for row in batch for value in row],
+        )
+
+
 def import_recent(days: int = 4, only_codes: set | None = None, force: bool = False) -> dict:
     """直近days日のTDnet決算短信を取り込み、financials / financials_forecast を更新する。
     only_codes を渡すとその銘柄のみ（earnings_refreshの自己修復用）。冪等。
     force=True で「取込済みスキップ」を無効化（過去データの再取得・修復用）。"""
     conn = get_conn(); cur = conn.cursor()
+    # DDLは財務・予想のDMLより前に済ませ、途中の暗黙commitを避ける。
+    from forecast_metrics import ensure_schema as ensure_forecast_metrics_schema
+    ensure_forecast_metrics_schema(cur)
     fin_rows, fin_source_rows, fc_rows = [], [], []
     n_disc = 0
     seen_zip = set()
@@ -401,8 +428,11 @@ def import_recent(days: int = 4, only_codes: set | None = None, force: bool = Fa
         merge_canonical_rows(cur, _FIN_COLS, fin_rows, prefer_incoming=True)
         reconcile_edinet_priority(cur, {row[0] for row in fin_rows})
     if fc_rows:
-        bulk_upsert(cur, "financials_forecast", _FC_COLS, fc_rows,
-                    update_cols=[c for c in _FC_COLS if c not in ("code", "fiscal_year_end", "period_type", "announced_at")])
+        _upsert_forecasts(cur, fc_rows)
+        # 同じトランザクション内で、更新された会社予想だけを固定式で再計算する。
+        # 入力不足は別ソースで埋めず forecast_metrics.missing_reason に残す。
+        from forecast_metrics import rebuild_forecast_metrics
+        rebuild_forecast_metrics({row[0] for row in fc_rows}, cur=cur)
     conn.commit(); cur.close(); conn.close()
     print(f"  [TDnet財務] 決算短信 {n_disc}件 → 実績{len(fin_rows)}行 / 予想{len(fc_rows)}行 を更新")
     return {"disclosures": n_disc, "financials": len(fin_rows), "forecasts": len(fc_rows)}

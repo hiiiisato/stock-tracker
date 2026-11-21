@@ -93,6 +93,12 @@ jobs:
         if: ${{ inputs.job == 'edinet_texts' }}
         run: python financials_edinet.py
 
+      # EDINET年次値（実績EPS・自己資本）が新しく入った銘柄も含め、会社予想純利益から
+      # 予想EPS/ROEを固定式で再生成する。入力不足はNULLのまま理由を保存する。
+      - name: 予想EPS・予想ROEの再計算
+        if: ${{ inputs.job == 'edinet_texts' }}
+        run: python forecast_metrics.py
+
       # 統一テーママスタ同期（みんかぶの関連度付きテーマを正とする。120テーマ/日≒週1周）。
       # みんかぶがGHAのIPを遮断した場合は既存データ維持でログに残る（壊れない設計）。
       - name: テーママスタ同期（みんかぶ）
