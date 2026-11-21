@@ -394,7 +394,7 @@ def rebuild_forecast_metrics(
             cur,
             "SELECT DISTINCT code FROM stock_listing_history "
             "WHERE exchange='TSE' AND product_type='株式' "
-            "AND COALESCE(market_segment,'') NOT LIKE '%PRO%' "
+            "AND COALESCE(market_segment,'') NOT LIKE '%%PRO%%' "
             "AND listing_date<=%s AND (delisting_date IS NULL OR delisting_date>=%s)",
             target_codes,
             params=(basis_date, basis_date),
