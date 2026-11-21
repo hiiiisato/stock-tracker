@@ -16,6 +16,10 @@
    `needs_review` とし、画面の正式値、理論株価、採点へ渡さない。
 6. 売上高、純利益、自己資本、総資産、ROEなど株数単位ではない値は分割補正しない。
 7. ライツイシュー、株式交換、合併、持株会社移行は単純な分割係数で自動処理しない。
+8. 一株指標の株数基準は年度行全体ではなく、EPS・BPS・DPSの事実ごとに判定する。同じ開示・年度でも
+   指標ごとに遡及修正の有無が異なり得るため、一つの `source_basis_status` を共有しない。
+9. 権利台帳の履歴範囲は価格の公開期間だけで決めない。EPS/BPS/DPSを表示する最古年度まで公式権利を
+   遡って整備し、価格が2024年以降しかなくても2015年等の分割を一株指標の正規化に使用する。
 
 ## 現状監査
 
@@ -75,6 +79,10 @@ per_share_factor = 1 / share_factor
 価格は `ex_date`、財務は確認済みの `source_basis_date`、配当は通知の基準日と公式仕様を境界にする。
 異なる境界規則を呼出側で再実装せず、共通関数へ用途を渡して判定する。
 
+`action_digest` は価格だけでなく一株指標・配当・バックテストの無効化にも使うため、`action_id`、
+`announced_at`、`ex_date`、`record_date`、`effective_date`、旧株数・新株数、種類、価格係数、状態を含める。
+提供元が予定表から月報へ変わっただけで経済条件が同じ場合は値を変えず、経済条件・境界日・発表日の訂正時に変える。
+
 ## 権利の検知と反映時点
 
 ### 検知経路
@@ -122,22 +130,25 @@ Yahooの分割イベントや価格段差は候補検知にだけ使い、正本
 - `daily_prices`: 当時値と補正値
 - `price_adjustment_state`: 価格の公開状態
 
+`corporate_actions` には安定した `action_id` を追加し、`(code, ex_date)` だけをイベント識別子にしない。
+同じ日に複数種類の権利がある場合を扱えるようにする。`corporate_action_history` は訂正だけでなく、TDnet、
+JPX予定表、JPX月報、J-Quants監査の全公式観測を追記保存する。現在行は採用結果、historyは判断根拠とする。
+
 ### `per_share_fact_versions`
 
-EPS/BPSの公表版を開示単位で保存する。原本列は後続開示で上書きしない。現在画面向けの補正列だけを
-再生成可能な派生キャッシュとして更新する。
+EPS/BPS/DPSの公表版を開示・指標単位で保存する。同じ年度行でも、EPS/BPSだけが遡及修正済みで
+DPSは分割前基準という実例があるため、wideな年度行へ共通の基準状態を置かない。原本は後続開示で上書きしない。
 
 主な列:
 
-- `id`, `code`, `source`, `source_ref`, `payload_hash`
-- `period_start`, `period_end`, `announced_at`
+- `fact_id`, `code`, `metric` (`eps` / `bps` / `dps`)、`source`, `source_ref`, `payload_hash`
+- `period_type` (`annual` / `quarterly_cumulative` / `quarterly_standalone` / `ttm`)
+- `period_start`, `period_end`, `announced_at`, `is_comparative`
 - `consolidation_scope`, `accounting_standard`
-- `net_income_raw`, `equity_raw`, `eps_raw`, `bps_raw`
-- `reported_average_shares`, `reported_end_shares`
+- `raw_value`, `net_income_raw`, `equity_raw`
+- `reported_average_shares`, `reported_end_shares`, `xbrl_concept`
 - `source_basis_date`, `source_basis_status`
-- `eps_normalized`, `bps_normalized`, `share_adjustment_factor`
-- `target_basis_date`, `action_digest`, `calculation_version`
-- `quality_status`, `quality_reason`, `computed_at`
+- `quality_status`, `quality_reason`, `ingested_at`
 
 `source_basis_status` は `explicit_pre_action / explicit_post_action / derived_pre_action /
 derived_post_action / ambiguous` とする。
@@ -149,9 +160,24 @@ derived_post_action / ambiguous` とする。
 3. 純利益÷EPS、自己資本÷BPSからの逆算株式数と公式分割比率の整合
 4. どちらにも一意に合わない場合は `ambiguous/needs_review`
 
+### `per_share_fact_projections`
+
+`per_share_fact_versions` の原本へ公式台帳の係数を一度だけ適用した、再生成可能な派生表とする。
+原本表の列を更新せず、補正済み値から再補正しない。
+
+主な列:
+
+- `fact_id`, `action_digest`, `target_basis_date`, `calculation_version`
+- `share_adjustment_factor`, `normalized_value`
+- `quality_status`, `quality_reason`, `computed_at`
+
+同じdigestのまま日付だけ進むたびに履歴行を増やさない。現在用は `(fact_id, action_digest,
+calculation_version)` で再利用し、バックテストは当時判明済みの原本・権利から都度PIT計算する。
+
 ### 配当
 
 - `dividend_notices`: 配当通知・訂正・削除の原本
+- `dividend_events`: 訂正を解決した現在有効な中間・期末・特別・記念配当イベント
 - `dividend_annual_normalized`: 通知ごとに正規化してから会計年度合計した現在基準DPS
 
 年度DPSへ一括で係数を掛けない。中間・期末・特別・記念配当をイベント単位で補正する。
@@ -164,11 +190,11 @@ derived_post_action / ambiguous` とする。
 主な列:
 
 - `code`, `price_date`, `target_basis_date`, `price_version`, `action_digest`
-- `actual_eps`, `forecast_eps`, `bps`
-- `actual_dps`, `forecast_dps`, `shares_outstanding`
+- `eps_latest_annual`, `eps_ttm`, `eps_company_forecast`, `bps_latest`
+- `dps_last_fiscal_year`, `dps_company_forecast`, `shares_outstanding`
 - `shares_basis_date`, `shares_source_observed_at`, `shares_basis_status`
-- `per_actual`, `per_forecast`, `pbr`, `div_yield`, `market_cap`
-- 各値の `source_ref`
+- `per_latest_annual`, `per_ttm`, `per_forecast`, `pbr`, `div_yield`, `market_cap`
+- 各値の `fact_id` / `forecast_metric_id` / `source_ref`
 - `quality_status`, `quality_reason`, `calculation_version`, `calculated_at`
 
 公開条件は次のすべてを満たすこととする。
@@ -200,6 +226,32 @@ updated_at
 `put_action` と同じトランザクションで影響consumerを更新する。長時間の全体トランザクションは作らず、
 各consumerが自分の出力へ同じdigestを保存してから `complete` にする。
 
+### `data_coverage_state`
+
+データが存在しない状態と取得未実行・取得失敗を区別し、新規上場銘柄を自動追跡する。
+
+```text
+PRIMARY KEY (code, dataset)
+dataset: corporate_action / per_share / company_forecast / dividend
+status: pending / available / no_data / not_applicable / error
+last_checked_at
+last_success_at
+source_as_of
+row_count
+last_error
+```
+
+マスタへ新規上場銘柄が入った時点で各datasetを `pending` とし、取得後に必ず状態を更新する。
+`forecast_metrics` に行がないだけで「会社予想なし」と判断しない。
+
+### 過去権利の初回バックフィル
+
+- 対象開始日は銘柄ごとに `MIN(価格日, 一株指標の最古period_end, 配当イベントの最古日)` とする。
+- JPX月報の現行取得範囲外は、EDINET有報の株式数推移・分割注記、保存済みTDnet、会社公式IRを公式根拠にする。
+- `financials_edinet_annual.split_adjustment_factor` やYahooイベントは候補・整合性確認にだけ使い、
+  それ単独で公式イベントを創作しない。
+- 公式根拠を特定できない候補は `needs_review` とし、一株値を正式値へ混ぜない。
+
 ## 画面とチャートの統一
 
 ### 株価チャート
@@ -209,6 +261,12 @@ updated_at
 - 銘柄詳細、ウォッチリスト、チャートグリッド、ポートフォリオの価格系列を共通ローダーへ寄せる。
 - `held/pending` の銘柄は古い系列を表示せず、確認中メッセージを出す。
 - 公開版変更時はサーバーキャッシュとブラウザー側チャートキャッシュを失効する。
+- 旧行に `adj_close` しかなく `price_basis` / raw OHLCV がない場合、`price_history.close=NULL` のまま
+  正常データとして返さない。原本から再構築するか、検証済み期間だけを返して `available_from` と理由を画面に出す。
+- 公式台帳でイベントを確定済みの場合、Yahoo等のイベントメタデータは「提供系列が既に分割調整済みか」の
+  基準判定にだけ使用できる。イベントの存在・比率・日付を値動きやYahooだけから決めない。公式当時値がない期間は
+  提供元メタデータ、公式イベントとの完全一致、全期間を一括取得した同一スナップショット、連続性監査の全条件を
+  満たす場合だけ `split_adjusted` とし、根拠をスナップショットへ保存する。
 
 ### 業績チャート
 
@@ -252,8 +310,8 @@ SBIの現在保有明細は証券会社側で分割反映済みなので追加�
 
 ### 2. 公表版一株指標
 
-- TDnet/EDINETの開示単位で `per_share_fact_versions` を保存
-- 株数基準判定と補正列を実装
+- TDnet/EDINETの開示・指標単位で `per_share_fact_versions` を保存
+- `per_share_fact_projections` へ株数基準判定と補正結果を保存
 - `forecast_metrics` を同じ基準へ接続
 - 現行v2との並行比較レポートを出す
 
@@ -314,6 +372,11 @@ SBIの現在保有明細は証券会社側で分割反映済みなので追加�
 ### 実データ
 
 - 既存テストの285A（複数倍分割）、2814（無償割当て）を回帰対象にする。
+- 3064（MonotaRO）を2015年分割の回帰対象にする。2015年開示のEPS/BPS/DPSは2015年分割を
+  遡及反映済みだが、2018年・2021年の各1:2分割は未反映なので、現在基準へは追加で1/4を適用する。
+- 2801（キッコーマン）を2024年1:5分割の回帰対象にする。2024年3月期開示はEPS/BPSが分割後基準、
+  年間DPSが分割前基準という混在を扱い、EPS/BPSへ再度1/5を掛けず、DPSはイベント単位で正規化する。
+- 2801の旧価格期間は安全な再構築または理由付き期間制限を行い、3年指定でNULL系列・無言の短縮を返さない。
 - 分割なしの対照銘柄として3003を使い、予想EPS 165.85617577円、予想ROE 13.78963183%が
   不要に変化しないことを確認する。
 - 実DBの確定済みイベントから、分割、併合、複数回分割、訂正ありを各1銘柄以上自動抽出して監査する。
