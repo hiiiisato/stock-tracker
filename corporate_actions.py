@@ -272,7 +272,7 @@ def resolve_disclosures(*, limit: int = 30) -> dict:
     changed, errors = 0, []
     for action in pending[:limit]:
         with db() as cur:
-            cur.execute("""SELECT title,pdf_url FROM disclosures WHERE code=%s
+            cur.execute("""SELECT title,pdf_url,disclosed_at FROM disclosures WHERE code=%s
                            AND disclosed_at BETWEEN %s AND %s
                            AND (title LIKE %s OR title LIKE %s OR title LIKE %s)
                            ORDER BY disclosed_at DESC LIMIT 8""",
@@ -283,7 +283,10 @@ def resolve_disclosures(*, limit: int = 30) -> dict:
         last_error = "公式の分割比率を含む開示がまだありません"
         resolved = None
         corrected_effective = None
-        for title, url in documents:
+        for document in documents:
+            title, url = document[:2]
+            disclosed_at = (document[2] if len(document) > 2 else
+                            datetime.combine(action.announced_at or jst_today(), datetime.min.time()))
             text = ""
             if not url or not url.startswith("https://"):
                 continue
@@ -304,7 +307,12 @@ def resolve_disclosures(*, limit: int = 30) -> dict:
                     corrected_effective = effective
                     _remember_document(url, content, 1)
                     continue
-                resolved = parse_disclosure_ratio(text, replace(action, source_url=url), title)
+                resolved = parse_disclosure_ratio(
+                    text,
+                    replace(action, source_url=url,
+                            announced_at=action.announced_at or disclosed_at.date()),
+                    title,
+                )
                 if corrected_effective:
                     resolved = replace(resolved,effective_date=corrected_effective)
                 changed += int(put_action(resolved, correction=bool(corrected_effective) or "訂正" in title))
@@ -340,14 +348,19 @@ def confirm_disclosed_candidate(code: str, ex_date: date | None) -> bool:
     """予定表の掲載期間を過ぎた候補も、公式開示の基準日＋公式カレンダーで検証する。"""
     import pdfplumber
     with db() as cur:
-        cur.execute("""SELECT title,pdf_url FROM disclosures WHERE code=%s
+        cur.execute("""SELECT title,pdf_url,disclosed_at FROM disclosures WHERE code=%s
                        AND disclosed_at BETWEEN %s AND %s
                        AND (title LIKE %s OR title LIKE %s OR title LIKE %s)
                        ORDER BY disclosed_at DESC LIMIT 8""",
                     (code,(ex_date or jst_today())-timedelta(days=730),jst_today()+timedelta(days=1),
                      "%分割%","%併合%","%無償割当%"))
         documents=cur.fetchall()
-    for title,url in documents:
+    for document in documents:
+        title, url = document[:2]
+        disclosed_at = (document[2] if len(document) > 2 else
+                        datetime.combine(jst_today(), datetime.min.time()))
+        announced_on = (disclosed_at.date() if hasattr(disclosed_at, "date") else
+                        date.fromisoformat(str(disclosed_at)[:10]))
         if not url or not re.fullmatch(r"https://(?:www\.release\.tdnet\.info/inbs/|www2\.jpx\.co\.jp/disc/[0-9A-Z]+/)[0-9]+\.pdf",url):
             continue
         try:
@@ -387,7 +400,9 @@ def confirm_disclosed_candidate(code: str, ex_date: date | None) -> bool:
                 if len(calendar)!=(record-start).days+1 or len(business)<2:continue
                 verified_ex=business[-2]
                 if ex_date and verified_ex!=ex_date:continue
-                action=Action(code,verified_ex,Decimal(1),Decimal(1),kind,"needs_ratio",source="tdnet",source_url=url,record_date=record)
+                action=Action(code,verified_ex,Decimal(1),Decimal(1),kind,"needs_ratio",
+                              source="tdnet",source_url=url,record_date=record,
+                              announced_at=announced_on)
                 confirmed.append(parse_disclosure_ratio(text,action,title))
             if len(confirmed)==1:
                 put_action(confirmed[0],correction="訂正" in title)

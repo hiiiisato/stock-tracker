@@ -32,7 +32,8 @@
    直近は会社ガイダンスを重視し、遠い将来は長期平均に回帰させる（永久高成長を仮定しない）。
 
  入力データ（すべて既存テーブルから取得。新規取得は不要）:
-   stock_fundamentals : eps_forward, eps_ttm, bps, shares_outstanding, market_cap
+   valuation_metrics_current : 公開株価と同じdigestの予想/実績EPS, BPS, 時価総額
+   stock_fundamentals : valuation移行前の互換入力のみ
    price_stats        : close(最新終値), equity_ratio(%)
    financials         : ordinary_income 年次系列（過去3年CAGR用）
    financials_forecast: ordinary_income 会社予想（1年目成長率用）
@@ -368,20 +369,26 @@ def _fetch_inputs(code: str):
               AND total_assets IS NOT NULL AND total_assets > 0
         )
         SELECT ps.close,
-               sf.eps_forward,
-               sf.eps_ttm,
-               COALESCE(sf.bps,
+               CASE WHEN v.code IS NOT NULL THEN v.eps_company_forecast ELSE sf.eps_forward END,
+               CASE WHEN v.code IS NOT NULL THEN v.eps_latest_annual ELSE sf.eps_ttm END,
+               CASE WHEN v.code IS NOT NULL THEN v.bps_latest ELSE COALESCE(sf.bps,
                         CASE WHEN fe.total_equity IS NOT NULL AND sf.shares_outstanding > 0
-                             THEN fe.total_equity / sf.shares_outstanding END) AS bps,
+                             THEN fe.total_equity / sf.shares_outstanding END) END AS bps,
                COALESCE(sf.roa,
                         CASE WHEN fe.net_income IS NOT NULL
                              THEN fe.net_income / fe.total_assets END) AS roa,
                COALESCE(ps.equity_ratio, fe.total_equity / fe.total_assets * 100) AS equity_ratio,
                ps.ord_growth,
-               sf.market_cap,
+               CASE WHEN v.code IS NOT NULL THEN v.market_cap ELSE sf.market_cap END,
                s.name
         FROM stock_fundamentals sf
         JOIN price_stats_current ps ON sf.code = ps.code
+        LEFT JOIN price_adjustment_state vs ON vs.code=sf.code
+        LEFT JOIN valuation_metrics_current v ON v.code=sf.code
+          AND vs.status IN ('published','audit_due')
+          AND vs.published_version=v.price_version
+          AND vs.action_digest=v.action_digest
+          AND vs.target_basis_date=v.target_basis_date
         LEFT JOIN fin_eq fe ON sf.code = fe.code AND fe.rn = 1
         LEFT JOIN stocks s ON sf.code = s.code
         WHERE sf.code = %s
@@ -548,16 +555,22 @@ def run() -> int:
         )
         SELECT sf.code,
                ps.close,
-               sf.eps_forward,
-               sf.eps_ttm,
-               COALESCE(sf.bps,
+               CASE WHEN v.code IS NOT NULL THEN v.eps_company_forecast ELSE sf.eps_forward END,
+               CASE WHEN v.code IS NOT NULL THEN v.eps_latest_annual ELSE sf.eps_ttm END,
+               CASE WHEN v.code IS NOT NULL THEN v.bps_latest ELSE COALESCE(sf.bps,
                         CASE WHEN fe.total_equity IS NOT NULL AND sf.shares_outstanding > 0
-                             THEN fe.total_equity / sf.shares_outstanding END) AS bps,
+                             THEN fe.total_equity / sf.shares_outstanding END) END AS bps,
                COALESCE(ps.equity_ratio, fe.total_equity / fe.total_assets * 100) AS equity_ratio,
                ps.ord_growth,
-               sf.market_cap
+               CASE WHEN v.code IS NOT NULL THEN v.market_cap ELSE sf.market_cap END
         FROM stock_fundamentals sf
         JOIN price_stats_current ps ON sf.code = ps.code
+        LEFT JOIN price_adjustment_state vs ON vs.code=sf.code
+        LEFT JOIN valuation_metrics_current v ON v.code=sf.code
+          AND vs.status IN ('published','audit_due')
+          AND vs.published_version=v.price_version
+          AND vs.action_digest=v.action_digest
+          AND vs.target_basis_date=v.target_basis_date
         LEFT JOIN fin_eq fe ON sf.code = fe.code AND fe.rn = 1
     """)
     src = cur.fetchall()

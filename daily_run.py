@@ -206,6 +206,21 @@ def run_evening(target_date_override: date | None = None) -> bool:
         report_ready = False
         _log("disclosures_evening", "failed", error=str(e))
 
+    # 夜間開示の分割・併合・訂正も同日中に唯一の公式台帳へ反映する。
+    print("\n[権利台帳] 夜間開示を再解決...")
+    try:
+        from price_store import ensure_schema as ensure_price_schema
+        from corporate_actions import sync_official_actions
+        ensure_price_schema()
+        result = sync_official_actions()
+        if not result.get("coverage_ok"):
+            raise RuntimeError(" / ".join(result.get("errors") or ["公式権利情報の範囲が不完全です"]))
+        _log("corporate_actions_evening", "done", result.get("changed", 0))
+    except Exception as e:
+        print(f"  エラー: {e}")
+        report_ready = False
+        _log("corporate_actions_evening", "failed", error=str(e))
+
     # 夕方〜夜に出た決算・業績修正も当日中に反映（15時以降の開示が大半のためここが本命）
     print("\n[業績反映] 当日開示銘柄の業績・予想を更新...")
     try:

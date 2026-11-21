@@ -169,10 +169,34 @@ def run(codes: list[str] | None = None, verbose: bool = True) -> int:
         target = [r[0] for r in cur.fetchall()]
     by_code = annual_performance(target, cur=cur)
 
+    # 連続増配は年度原本DPSではなく、公開価格と同じdigestの
+    # 中間・期末正規化後合計だけを使う。未検証年度はNULLのまま。
+    normalized_dps: dict[tuple[str, str], float] = {}
+    normalized_ready = False
+    try:
+        if not target:
+            raise LookupError("no target codes")
+        placeholders = ",".join(["%s"] * len(target))
+        cur.execute(f"""SELECT d.code,d.fiscal_year_end,d.normalized_dps
+                        FROM dividend_annual_normalized d
+                        JOIN price_adjustment_state s ON s.code=d.code
+                          AND s.action_digest=d.action_digest
+                          AND s.target_basis_date=d.target_basis_date
+                        WHERE d.quality_status='verified'
+                          AND d.code IN ({placeholders})""", target)
+        normalized_dps = {(code, str(fye)): float(dps)
+                          for code, fye, dps in cur.fetchall() if dps is not None}
+        normalized_ready = True
+    except Exception:
+        normalized_ready = False
+
     now = datetime.now()
     data = []
     for code, rows in by_code.items():
         rows = rows[-RECENT_YEARS:]
+        if normalized_ready:
+            for row in rows:
+                row["dividend_per_share"] = normalized_dps.get((code, str(row.get("period_end"))))
         m = _compute(rows)
         if m is None:
             continue

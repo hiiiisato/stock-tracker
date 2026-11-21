@@ -22,10 +22,11 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Iterable, Sequence
 
+from batch_dates import jst_today
 from config import bulk_upsert, get_conn
 
 
-CALCULATION_VERSION = "2"
+CALCULATION_VERSION = "3"
 _METRIC_COLUMNS = [
     "forecast_id",
     "code",
@@ -36,6 +37,9 @@ _METRIC_COLUMNS = [
     "actual_net_income",
     "actual_eps",
     "actual_bps",
+    "actual_eps_fact_id",
+    "actual_bps_fact_id",
+    "action_digest",
     "implied_average_shares",
     "canonical_actual_net_income",
     "actual_total_equity",
@@ -69,6 +73,9 @@ def ensure_schema(cur) -> None:
             actual_net_income       BIGINT,
             actual_eps              DECIMAL(20,8),
             actual_bps              DECIMAL(20,8),
+            actual_eps_fact_id      CHAR(64),
+            actual_bps_fact_id      CHAR(64),
+            action_digest           CHAR(64),
             implied_average_shares  DECIMAL(28,6),
             canonical_actual_net_income BIGINT,
             actual_total_equity     BIGINT,
@@ -97,6 +104,9 @@ def ensure_schema(cur) -> None:
     existing = {row[0] for row in cur.fetchall()}
     additions = {
         "actual_bps": "DECIMAL(20,8) NULL",
+        "actual_eps_fact_id": "CHAR(64) NULL",
+        "actual_bps_fact_id": "CHAR(64) NULL",
+        "action_digest": "CHAR(64) NULL",
         "canonical_actual_net_income": "BIGINT NULL",
         "actual_net_income_gap_ratio": "DECIMAL(28,10) NULL",
         "current_shares_outstanding": "BIGINT NULL",
@@ -302,6 +312,7 @@ def rebuild_forecast_metrics(
     *,
     cur=None,
     as_of: date | None = None,
+    rebuild_actuals: bool = True,
 ) -> int:
     """年次会社予想の派生指標を冪等に再生成する。
 
@@ -310,10 +321,14 @@ def rebuild_forecast_metrics(
     """
     own_connection = cur is None
     conn = None
+    if own_connection and rebuild_actuals:
+        # 予想EPS/ROEは必ず正規化した実績EPS/BPSのみから計算する。
+        from per_share_metrics import rebuild_per_share_metrics
+        rebuild_per_share_metrics(codes, basis_date=as_of)
     if own_connection:
         conn = get_conn()
         cur = conn.cursor()
-    basis_date = as_of or date.today()
+    basis_date = as_of or jst_today()
 
     try:
         # 外部トランザクション内でDDLを実行すると暗黙commitになり得るため、
@@ -337,9 +352,25 @@ def rebuild_forecast_metrics(
 
         target_codes = sorted({row[1] for row in forecasts})
         actual_sql = (
-            "SELECT period_end, code, net_income, eps, bps "
-            "FROM financials_edinet_annual "
-            "WHERE period_end IS NOT NULL"
+            "WITH ranked AS ("
+            " SELECT f.period_end,f.code,f.metric,f.numerator_raw,p.normalized_value,"
+            " f.fact_id,p.action_digest,"
+            " ROW_NUMBER() OVER (PARTITION BY f.code,f.period_end,f.metric "
+            " ORDER BY f.announced_at DESC,f.ingested_at DESC,f.fact_id DESC) rn"
+            " FROM per_share_fact_versions f"
+            " JOIN per_share_fact_projections p ON p.fact_id=f.fact_id"
+            " JOIN price_adjustment_state s ON s.code=f.code"
+            "  AND s.action_digest=p.action_digest"
+            "  AND s.target_basis_date=p.target_basis_date"
+            " WHERE f.period_type='annual' AND p.quality_status='verified'"
+            ") SELECT period_end,code,"
+            " MAX(CASE WHEN metric='eps' THEN numerator_raw END) AS net_income,"
+            " MAX(CASE WHEN metric='eps' THEN normalized_value END) AS eps,"
+            " MAX(CASE WHEN metric='bps' THEN normalized_value END) AS bps,"
+            " MAX(CASE WHEN metric='eps' THEN fact_id END) AS eps_fact_id,"
+            " MAX(CASE WHEN metric='bps' THEN fact_id END) AS bps_fact_id,"
+            " MAX(action_digest) AS action_digest"
+            " FROM ranked WHERE rn=1 GROUP BY period_end,code HAVING 1=1"
         )
         financial_sql = (
             "SELECT period_end, code, net_income, total_equity "
@@ -363,23 +394,14 @@ def rebuild_forecast_metrics(
             cur,
             "SELECT DISTINCT code FROM stock_listing_history "
             "WHERE exchange='TSE' AND product_type='株式' "
+            "AND COALESCE(market_segment,'') NOT LIKE '%PRO%' "
             "AND listing_date<=%s AND (delisting_date IS NULL OR delisting_date>=%s)",
             target_codes,
             params=(basis_date, basis_date),
         )
-        action_rows = _fetch_for_codes(
-            cur,
-            "SELECT code, COALESCE(effective_date,ex_date) "
-            "FROM corporate_actions WHERE status='confirmed' "
-            "AND kind IN ('split','consolidation','bonus','rights') "
-            "AND COALESCE(effective_date,ex_date)<=%s",
-            target_codes,
-            params=(basis_date,),
-        )
-
         actual_by_code: dict[str, list[tuple]] = defaultdict(list)
-        for period_end, code, net_income, eps, bps in actual_rows:
-            actual_by_code[code].append((period_end, net_income, eps, bps))
+        for period_end, code, net_income, eps, bps, eps_fact_id, bps_fact_id, digest in actual_rows:
+            actual_by_code[code].append((period_end, net_income, eps, bps, eps_fact_id, bps_fact_id, digest))
         for rows in actual_by_code.values():
             rows.sort(key=lambda row: row[0])
 
@@ -390,11 +412,6 @@ def rebuild_forecast_metrics(
         current_shares = {code: shares for code, shares in fundamental_rows}
         active_codes = {row[0] for row in active_rows}
         listed_common_codes = {row[0] for row in listing_rows}
-        actions_by_code: dict[str, list[date]] = defaultdict(list)
-        for code, action_date in action_rows:
-            if action_date is not None:
-                actions_by_code[code].append(action_date)
-
         output = []
         for forecast_id, code, fye, announced_at, forecast_net in forecasts:
             actual = _latest_before(actual_by_code.get(code, ()), fye, announced_at)
@@ -402,6 +419,9 @@ def rebuild_forecast_metrics(
             actual_net = actual[1] if actual else None
             actual_eps = actual[2] if actual else None
             actual_bps = actual[3] if actual else None
+            actual_eps_fact_id = actual[4] if actual else None
+            actual_bps_fact_id = actual[5] if actual else None
+            action_digest = actual[6] if actual else None
             canonical_actual = financial_by_key.get((code, actual_period_end), (None, None))
             canonical_actual_net = canonical_actual[0]
             actual_equity = canonical_actual[1]
@@ -420,10 +440,8 @@ def rebuild_forecast_metrics(
                 else None
             )
             equity_gap = _relative_gap(actual_equity, equity_implied)
-            has_action = bool(
-                actual_period_end
-                and any(action_date > actual_period_end for action_date in actions_by_code.get(code, ()))
-            )
+            # 権利後でも同一digestへ検証済み投影できていれば正常。
+            has_action = False
             eligible = code in active_codes and code in listed_common_codes
             eligibility_reason = None
             if code not in active_codes:
@@ -455,6 +473,9 @@ def rebuild_forecast_metrics(
                     actual_net,
                     actual_eps,
                     actual_bps,
+                    actual_eps_fact_id,
+                    actual_bps_fact_id,
+                    action_digest,
                     shares,
                     canonical_actual_net,
                     actual_equity,
@@ -496,13 +517,15 @@ def rebuild_forecast_metrics(
 
 def current_metric(cur, code: str, as_of: date | None = None) -> tuple | None:
     """指定日時点の最新通期予想を返す。採点画面はこの1行だけを参照する。"""
-    basis = as_of or date.today()
+    basis = as_of or jst_today()
     cur.execute(
         """
         SELECT fm.forecast_eps, fm.forecast_roe, fm.quality_status,
                fm.quality_flags, fm.missing_reason, fm.is_scoring_eligible,
                fm.fiscal_year_end, fm.announced_at
         FROM forecast_metrics fm
+        JOIN price_adjustment_state s ON s.code=fm.code
+          AND s.action_digest=fm.action_digest
         WHERE fm.code=%s AND fm.announced_at<=%s
           AND fm.fiscal_year_end>=%s
         ORDER BY fm.announced_at DESC, fm.fiscal_year_end ASC
@@ -515,21 +538,24 @@ def current_metric(cur, code: str, as_of: date | None = None) -> tuple | None:
 
 def current_quality_summary(as_of: date | None = None) -> dict[str, int]:
     """国内普通株の最新予想について品質状態別件数を返す（夜間監視用）。"""
-    basis = as_of or date.today()
+    basis = as_of or jst_today()
     conn = get_conn()
     cur = conn.cursor()
     try:
         cur.execute(
             """
             WITH ranked AS (
-                SELECT quality_status,
+                SELECT fm.quality_status,
                        ROW_NUMBER() OVER (
-                           PARTITION BY code
-                           ORDER BY announced_at DESC, fiscal_year_end ASC, forecast_id DESC
+                           PARTITION BY fm.code
+                           ORDER BY fm.announced_at DESC, fm.fiscal_year_end ASC,
+                                    fm.forecast_id DESC
                        ) AS rn
-                FROM forecast_metrics
-                WHERE is_scoring_eligible=TRUE
-                  AND announced_at<=%s AND fiscal_year_end>=%s
+                FROM forecast_metrics fm
+                JOIN price_adjustment_state s ON s.code=fm.code
+                  AND s.action_digest=fm.action_digest
+                WHERE fm.is_scoring_eligible=TRUE
+                  AND fm.announced_at<=%s AND fm.fiscal_year_end>=%s
             )
             SELECT quality_status, COUNT(*)
             FROM ranked WHERE rn=1 GROUP BY quality_status

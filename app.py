@@ -7510,6 +7510,33 @@ def _build_stock_page(code: str) -> str:
                  "per","pbr","div_yield","updated_at"]
     fund = dict(zip(fund_cols, fund_raw)) if fund_raw else {}
 
+    # 公開株価と同じ権利digestへ正規化済みの正式指標。
+    # 一致しない古い版は表示せず、Yahoo値と混ぜない。
+    valuation = {}
+    try:
+        cur.execute("""
+            SELECT v.shares_outstanding,v.eps_latest_annual,v.eps_company_forecast,
+                   v.bps_latest,v.dps_company_forecast,v.market_cap,
+                   v.per_latest_annual,v.per_forecast,v.pbr,v.div_yield,
+                   v.quality_status,v.calculated_at
+            FROM valuation_metrics_current v
+            JOIN price_adjustment_state p ON p.code=v.code
+              AND p.status IN ('published','audit_due')
+              AND p.published_version=v.price_version
+              AND p.action_digest=v.action_digest
+              AND p.target_basis_date=v.target_basis_date
+            WHERE v.code=%s
+        """, (code,))
+        _valuation_row = cur.fetchone()
+        if _valuation_row:
+            _valuation_cols = ["shares_outstanding","eps_latest_annual","eps_company_forecast",
+                               "bps_latest","dps_company_forecast","market_cap",
+                               "per_latest_annual","per_forecast","pbr","div_yield",
+                               "quality_status","calculated_at"]
+            valuation = dict(zip(_valuation_cols, _valuation_row))
+    except Exception:
+        valuation = {}
+
     # 直近1年の配当金合計（dividendsテーブルから）
     from_div = date.today() - timedelta(days=366)
     cur.execute("""
@@ -7666,6 +7693,68 @@ def _build_stock_page(code: str) -> str:
     except Exception as e:
         print(f"[app] dividends全件取得失敗: {code} / {e}")
 
+    # 業績チャートも現在価格と同じ権利digestのEPS/BPS/DPSを読む。
+    normalized_annual: dict[str, dict] = {}
+    normalized_dividends: dict[str, float] = {}
+    normalized_forecasts: dict[str, dict] = {}
+    normalized_tables_ready = False
+    try:
+        cur.execute("""
+            WITH ranked AS (
+                SELECT f.period_end,f.metric,p.normalized_value,
+                       ROW_NUMBER() OVER (
+                         PARTITION BY f.period_end,f.metric
+                         ORDER BY f.announced_at DESC,f.ingested_at DESC,f.fact_id DESC
+                       ) AS rn
+                FROM per_share_fact_versions f
+                JOIN per_share_fact_projections p ON p.fact_id=f.fact_id
+                JOIN price_adjustment_state s ON s.code=f.code
+                  AND s.action_digest=p.action_digest
+                  AND s.target_basis_date=p.target_basis_date
+                WHERE f.code=%s AND f.period_type='annual'
+                  AND p.quality_status='verified'
+            )
+            SELECT period_end,
+                   MAX(CASE WHEN metric='eps' THEN normalized_value END),
+                   MAX(CASE WHEN metric='bps' THEN normalized_value END)
+            FROM ranked WHERE rn=1 GROUP BY period_end
+        """, (code,))
+        normalized_annual = {
+            str(period): {"eps": float(eps) if eps is not None else None,
+                          "bps": float(bps) if bps is not None else None}
+            for period, eps, bps in cur.fetchall()
+        }
+        cur.execute("""
+            SELECT d.fiscal_year_end,d.normalized_dps
+            FROM dividend_annual_normalized d
+            JOIN price_adjustment_state s ON s.code=d.code
+              AND s.action_digest=d.action_digest
+              AND s.target_basis_date=d.target_basis_date
+            WHERE d.code=%s AND d.quality_status='verified'
+        """, (code,))
+        normalized_dividends = {str(fye): float(dps) for fye, dps in cur.fetchall() if dps is not None}
+        cur.execute("""
+            SELECT fm.fiscal_year_end,fm.forecast_eps,fm.forecast_roe
+            FROM forecast_metrics fm
+            JOIN price_adjustment_state s ON s.code=fm.code
+              AND s.action_digest=fm.action_digest
+            WHERE fm.code=%s AND fm.quality_status='verified'
+              AND fm.announced_at=(SELECT MAX(fm2.announced_at)
+                                   FROM forecast_metrics fm2
+                                   WHERE fm2.code=%s
+                                     AND fm2.quality_status='verified'
+                                     AND fm2.action_digest=s.action_digest)
+        """, (code, code))
+        normalized_forecasts = {
+            str(fye): {"eps": float(eps) if eps is not None else None,
+                       "roe": float(roe) * 100 if roe is not None else None}
+            for fye, eps, roe in cur.fetchall()
+        }
+        normalized_tables_ready = True
+    except Exception:
+        # 初回マイグレーション前のみ旧表示を維持。
+        normalized_tables_ready = False
+
     cur.close()
     conn.close()
 
@@ -7715,10 +7804,14 @@ def _build_stock_page(code: str) -> str:
         v = fund.get(key)
         return float(v) if v is not None else None
 
-    shares   = _fv("shares_outstanding")
-    eps_ttm  = _fv("eps_ttm")
-    eps_fwd  = _fv("eps_forward")
-    bps_val  = _fv("bps")
+    def _vv(key):
+        v = valuation.get(key)
+        return float(v) if v is not None else None
+
+    shares   = _vv("shares_outstanding") if valuation else _fv("shares_outstanding")
+    eps_ttm  = _vv("eps_latest_annual") if valuation else _fv("eps_ttm")
+    eps_fwd  = _vv("eps_company_forecast") if valuation else _fv("eps_forward")
+    bps_val  = _vv("bps_latest") if valuation else _fv("bps")
     ann_dps  = _fv("annual_dps")
     payout   = _fv("payout_ratio")
     roe      = _fv("roe")
@@ -7729,11 +7822,11 @@ def _build_stock_page(code: str) -> str:
     beta     = _fv("beta")
 
     # 最新株価で再計算（PER/PBR/時価総額は毎日変わる）
-    mktcap  = cur_price * shares if cur_price and shares else _fv("market_cap")
-    per_ttm = cur_price / eps_ttm if cur_price and eps_ttm and eps_ttm > 0 else _fv("per")
-    pbr     = cur_price / bps_val if cur_price and bps_val and bps_val > 0 else _fv("pbr")
+    mktcap  = _vv("market_cap") if valuation else (cur_price * shares if cur_price and shares else _fv("market_cap"))
+    per_ttm = _vv("per_latest_annual") if valuation else (cur_price / eps_ttm if cur_price and eps_ttm and eps_ttm > 0 else _fv("per"))
+    pbr     = _vv("pbr") if valuation else (cur_price / bps_val if cur_price and bps_val and bps_val > 0 else _fv("pbr"))
     dps_use = div_ttm if div_ttm else ann_dps
-    div_yld = (dps_use / cur_price * 100) if dps_use and cur_price else _fv("div_yield")
+    div_yld = _vv("div_yield") if valuation else ((dps_use / cur_price * 100) if dps_use and cur_price else _fv("div_yield"))
 
     # 会社予想（financials_forecast）ベースで PER・配当利回りを上書き
     # forecast_rows: [0]fiscal_year_end [1]revenue [2]op [3]ord [4]net_income [5]div_per_share
@@ -7746,9 +7839,9 @@ def _build_stock_page(code: str) -> str:
     if _fc_near is None and forecast_rows:
         _fc_near = forecast_rows[-1]
 
-    fc_eps = None
-    fc_dps = None
-    if _fc_near is not None:
+    fc_eps = _vv("eps_company_forecast") if valuation else None
+    fc_dps = _vv("dps_company_forecast") if valuation else None
+    if not valuation and _fc_near is not None:
         if _fc_near[4] is not None and shares:
             try:
                 fc_eps = round(float(_fc_near[4]) / float(shares), 1)
@@ -7760,7 +7853,7 @@ def _build_stock_page(code: str) -> str:
             except Exception:
                 pass
 
-    per_fwd = round(cur_price / fc_eps, 1) if cur_price and fc_eps and fc_eps > 0 else None
+    per_fwd = _vv("per_forecast") if valuation else (round(cur_price / fc_eps, 1) if cur_price and fc_eps and fc_eps > 0 else None)
 
     # 配当利回りは今期予想を最優先: kabutan会社予想(fc_dps) → Yahoo予想(dividend_rate) → 実績
     _yahoo_fwd_dps = _fv("dividend_rate")
@@ -7769,12 +7862,12 @@ def _build_stock_page(code: str) -> str:
         dps_use = fc_dps
         div_yld = round(fc_dps / cur_price * 100, 2)
         _div_is_forecast = True
-    elif _yahoo_fwd_dps and cur_price:
+    elif not valuation and _yahoo_fwd_dps and cur_price:
         dps_use = _yahoo_fwd_dps
         div_yld = round(_yahoo_fwd_dps / cur_price * 100, 2)
         _div_is_forecast = True
 
-    fund_updated = str(fund.get("updated_at", ""))[:10] or "—"
+    fund_updated = str(valuation.get("calculated_at") or fund.get("updated_at", ""))[:10] or "—"
 
     # ─ 業績データ JSON 生成 ─
     import collections as _col
@@ -7860,7 +7953,9 @@ def _build_stock_page(code: str) -> str:
             yr   = period_end[:4]
             _actual_dps = _dps_for_fiscal(period_end)
             _plan_dps   = _fc_dps_by_year.get(yr)
-            if is_future:
+            if normalized_tables_ready and not is_quarterly:
+                dps = normalized_dividends.get(period_end)
+            elif is_future:
                 # 未来期は実績配当が存在しない → 会社予想DPS、無ければYahoo予想DPSで補完
                 if _plan_dps is not None:
                     dps = round(_plan_dps, 1)
@@ -7884,14 +7979,18 @@ def _build_stock_page(code: str) -> str:
             roa_val = _safe_pct(r[5], avg_ta)
             # EPS = 当期純利益(円) / 発行済株式数
             eps_val = None
-            if shares_cnt and r[5] is not None:
+            if normalized_tables_ready and not is_quarterly:
+                eps_val = normalized_annual.get(period_end, {}).get("eps")
+            elif shares_cnt and r[5] is not None:
                 try:
                     eps_val = round(float(r[5]) / float(shares_cnt), 1)
                 except Exception:
                     pass
             # BPS = 自己資本 / 発行済株式数
             bps_val_row = None
-            if shares_cnt and r[7] is not None:
+            if normalized_tables_ready and not is_quarterly:
+                bps_val_row = normalized_annual.get(period_end, {}).get("bps")
+            elif shares_cnt and r[7] is not None:
                 try:
                     bps_val_row = round(float(r[7]) / float(shares_cnt), 1)
                 except Exception:
@@ -7925,11 +8024,14 @@ def _build_stock_page(code: str) -> str:
                 op   = _to_oku(r[2])
                 ord_ = _to_oku(r[3])
                 net  = _to_oku(r[4])
-                dps  = float(r[5]) if r[5] is not None else None
-                if dps is None and j == 0 and _yahoo_fwd_dps:
+                dps  = (normalized_dividends.get(fend) if normalized_tables_ready
+                        else (float(r[5]) if r[5] is not None else None))
+                if not normalized_tables_ready and dps is None and j == 0 and _yahoo_fwd_dps:
                     dps = round(float(_yahoo_fwd_dps), 1)  # 直近予想期はYahoo予想DPSで補完
                 fc_eps = None
-                if shares_cnt and r[4] is not None:
+                if normalized_tables_ready:
+                    fc_eps = normalized_forecasts.get(fend, {}).get("eps")
+                elif shares_cnt and r[4] is not None:
                     try:
                         fc_eps = round(float(r[4]) / float(shares_cnt), 1)
                     except Exception:
@@ -7939,7 +8041,9 @@ def _build_stock_page(code: str) -> str:
                     fc_payout = round(dps / fc_eps * 100, 1)
                 # 予想ROE = 予想純利益(円) ÷ 最新実績自己資本(円) × 100
                 fc_roe = None
-                if r[4] is not None and latest_te:
+                if normalized_tables_ready:
+                    fc_roe = normalized_forecasts.get(fend, {}).get("roe")
+                elif r[4] is not None and latest_te:
                     try:
                         fc_roe = round(float(r[4]) / float(latest_te) * 100, 1)
                     except Exception:
@@ -8092,20 +8196,20 @@ def _build_stock_page(code: str) -> str:
         if _r.get('payout') is not None:
             payout = round(_r['payout'] / 100, 4)
         # BPS/PBR
-        if _r.get('bps') is not None:
+        if not valuation and _r.get('bps') is not None:
             bps_val = _r['bps']
             if cur_price and bps_val > 0:
                 pbr = round(float(cur_price) / bps_val, 2)
 
     # 予想PERのフォールバック: kabutan通期予想が無い銘柄は
     # financialsの未来期(会社予想) → Yahooのeps_forward の順で予想EPSを補完
-    if per_fwd is None and cur_price:
+    if not valuation and per_fwd is None and cur_price:
         _fc_row = next((r for r in fin_annual_data
                         if r.get("is_forecast") and r.get("eps") and r["eps"] > 0), None)
         if _fc_row:
             fc_eps  = _fc_row["eps"]
             per_fwd = round(cur_price / fc_eps, 1)
-    if per_fwd is None and cur_price:
+    if not valuation and per_fwd is None and cur_price:
         _yef = _fv("eps_forward")
         if _yef and _yef > 0:
             _cand = round(cur_price / _yef, 1)
@@ -9467,7 +9571,11 @@ def api_screen():
     cur  = conn.cursor()
     cur.execute("""
         SELECT s.code, s.name, m.name AS market,
-               f.per, f.pbr, f.roe, f.div_yield, f.market_cap,
+               CASE WHEN v.code IS NOT NULL THEN v.per_latest_annual ELSE f.per END,
+               CASE WHEN v.code IS NOT NULL THEN v.pbr ELSE f.pbr END,
+               f.roe,
+               CASE WHEN v.code IS NOT NULL THEN v.div_yield ELSE f.div_yield END,
+               CASE WHEN v.code IS NOT NULL THEN v.market_cap ELSE f.market_cap END,
                f.operating_margin, f.payout_ratio,
                f.roa, f.debt_to_equity, f.beta,
                lp.close, lp.change_pct,
@@ -9498,11 +9606,20 @@ def api_screen():
                fm.consec_rev_growth, fm.consec_profit_growth, fm.consec_div_growth,
                fm.roe_5y_avg, fm.roa_5y_avg, fm.opm_5y_avg,
                fm.is_record_profit, fm.roe_delta_3y, fm.roe_driver_3y,
-               f.profit_margin, f.eps_ttm, f.bps, f.annual_dps
+               f.profit_margin,
+               CASE WHEN v.code IS NOT NULL THEN v.eps_latest_annual ELSE f.eps_ttm END,
+               CASE WHEN v.code IS NOT NULL THEN v.bps_latest ELSE f.bps END,
+               CASE WHEN v.code IS NOT NULL THEN v.dps_company_forecast ELSE f.annual_dps END
         FROM stocks s
         LEFT JOIN markets m ON s.market_id = m.id
         LEFT JOIN fundamental_metrics fm ON s.code = fm.code
         LEFT JOIN stock_fundamentals f ON s.code = f.code
+        LEFT JOIN price_adjustment_state vas ON vas.code=s.code
+        LEFT JOIN valuation_metrics_current v ON v.code=s.code
+          AND vas.status IN ('published','audit_due')
+          AND vas.published_version=v.price_version
+          AND vas.action_digest=v.action_digest
+          AND vas.target_basis_date=v.target_basis_date
         LEFT JOIN (
             SELECT dp.code, dp.close, dp.change_pct
             FROM price_history dp
@@ -9519,9 +9636,14 @@ def api_screen():
               AND disclosed_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
         ) bb ON bb.code = s.code
         WHERE s.is_active = TRUE
-          AND (f.per IS NOT NULL OR f.pbr IS NOT NULL OR f.roe IS NOT NULL
-               OR f.div_yield IS NOT NULL OR ps.chg25d IS NOT NULL)
-        ORDER BY COALESCE(f.market_cap, 0) DESC
+          AND (CASE WHEN v.code IS NOT NULL THEN v.per_latest_annual ELSE f.per END IS NOT NULL
+               OR CASE WHEN v.code IS NOT NULL THEN v.pbr ELSE f.pbr END IS NOT NULL
+               OR f.roe IS NOT NULL
+               OR CASE WHEN v.code IS NOT NULL THEN v.div_yield ELSE f.div_yield END IS NOT NULL
+               OR ps.chg25d IS NOT NULL)
+        ORDER BY COALESCE(
+          CASE WHEN v.code IS NOT NULL THEN v.market_cap ELSE f.market_cap END, 0
+        ) DESC
         LIMIT 4000
     """)
     rows = cur.fetchall()

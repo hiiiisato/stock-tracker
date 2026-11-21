@@ -163,64 +163,20 @@ def fetch_fundamentals(codes: list, max_workers: int = 4) -> int:
 
 def recompute_price_metrics(latest_date=None) -> int:
     """
-    最新株価から PER・PBR・時価総額・配当利回りを再計算して stock_fundamentals に保存。
-    EPS/BPS は週次更新、PER/PBR は日次更新（株価が変わるから）。
-    daily_run.py の価格更新後に毎日呼ぶ。
+    公式権利台帳の同じdigestで EPS/BPS、予想EPS/ROE、DPS、価値指標を
+    この順に再生成する唯一の日次経路。``latest_date`` は後方互換用。
     """
-    conn = get_conn()
-    cur  = conn.cursor()
+    from per_share_metrics import rebuild_per_share_metrics
+    from forecast_metrics import rebuild_forecast_metrics
+    from dividend_metrics import rebuild_dividend_metrics
+    from valuation_metrics import rebuild_valuation_metrics
 
-    if not latest_date:
-        cur.execute("SELECT MAX(date) FROM price_history WHERE close IS NOT NULL")
-        latest_date = cur.fetchone()[0]
-
-    if not latest_date:
-        cur.close(); conn.close()
-        return 0
-
-    # 配当利回りは「今期の会社予想配当」を最優先で使う:
-    #   kabutan通期予想(financials_forecast.div_per_share)
-    #   → Yahoo予想(dividend_rate) → 実績(annual_dps)
-    cur.execute("""
-        UPDATE stock_fundamentals sf
-        JOIN price_history dp ON dp.code = sf.code AND dp.date = %s
-        LEFT JOIN (
-            SELECT code, div_per_share FROM (
-                SELECT code, div_per_share,
-                       ROW_NUMBER() OVER (PARTITION BY code ORDER BY fiscal_year_end) AS rn
-                FROM financials_forecast
-                WHERE period_type = 'A' AND div_per_share IS NOT NULL
-                  AND fiscal_year_end >= CURDATE()
-            ) t WHERE rn = 1
-        ) fc ON fc.code = sf.code
-        SET
-          sf.market_cap = CASE
-            WHEN sf.shares_outstanding IS NOT NULL AND sf.shares_outstanding > 0
-            THEN ROUND(dp.close * sf.shares_outstanding)
-            ELSE NULL
-          END,
-          sf.per = CASE
-            WHEN sf.eps_ttm IS NOT NULL AND sf.eps_ttm > 0
-            THEN ROUND(dp.close / sf.eps_ttm, 2)
-            ELSE NULL
-          END,
-          sf.pbr = CASE
-            WHEN sf.bps IS NOT NULL AND sf.bps > 0
-            THEN ROUND(dp.close / sf.bps, 2)
-            ELSE NULL
-          END,
-          sf.div_yield = CASE
-            WHEN COALESCE(fc.div_per_share, sf.dividend_rate, sf.annual_dps) > 0 AND dp.close > 0
-            THEN ROUND(COALESCE(fc.div_per_share, sf.dividend_rate, sf.annual_dps) / dp.close * 100, 4)
-            ELSE NULL
-          END
-        WHERE dp.close IS NOT NULL AND dp.close > 0
-    """, (latest_date,))
-    updated = cur.rowcount
-    conn.commit()
-    cur.close()
-    conn.close()
-    print(f"  PER/PBR/時価総額/配当利回り 再計算: {updated:,} 件（{latest_date}）")
+    per_share_count = rebuild_per_share_metrics()
+    forecast_count = rebuild_forecast_metrics(rebuild_actuals=False)
+    dividend_count = rebuild_dividend_metrics()
+    updated = rebuild_valuation_metrics()
+    print(f"  正規化: 1株指標{per_share_count:,} / 予想{forecast_count:,} / "
+          f"配当{dividend_count:,} / 価値指標{updated:,} 件")
     return updated
 
 

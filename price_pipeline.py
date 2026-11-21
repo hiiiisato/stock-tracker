@@ -1,6 +1,7 @@
 """公式台帳と取得原本から価格を公開する唯一の書込経路。
 
-初回: --migrate → --sync-actions --history → --repair（対象は--codesで指定可）。
+初回: --migrate → --sync-actions --history → --check。
+価格不整合が確認された銘柄だけ --repair --codes で再公開する。
 夜間: --audit が12週間を過ぎた日付を公式照合し、不一致を保留・修復する。
 """
 from __future__ import annotations
@@ -463,6 +464,11 @@ def repair_codes(codes: list[str] | None = None, *, max_workers: int = 4) -> dic
             cur.execute("""SELECT DISTINCT s.code FROM stocks s LEFT JOIN corporate_actions a ON a.code=s.code
                            LEFT JOIN price_adjustment_state p ON p.code=s.code
                            WHERE s.is_active=TRUE AND (a.ex_date <= %s OR p.status=%s)
+                             AND NOT EXISTS (
+                               SELECT 1 FROM data_coverage_state d
+                               WHERE d.code=s.code AND d.dataset='jquants_price'
+                                 AND d.coverage_status='not_applicable'
+                             )
                              AND (p.status IS NULL OR p.status<>%s OR p.price_date < %s) ORDER BY s.code""",
                         (jst_today(), "held", "published", price_fetch_end_date()))
             codes = [r[0] for r in cur.fetchall()]
@@ -562,7 +568,11 @@ def main() -> int:
         if pending:
             with db() as cur:
                 cur.execute("""SELECT s.code FROM price_adjustment_state s LEFT JOIN watchlist w ON w.code=s.code
-                               WHERE s.status=%s ORDER BY (w.code IS NOT NULL) DESC,
+                               WHERE s.status=%s AND NOT EXISTS (
+                                 SELECT 1 FROM data_coverage_state d
+                                 WHERE d.code=s.code AND d.dataset='jquants_price'
+                                   AND d.coverage_status='not_applicable'
+                               ) ORDER BY (w.code IS NOT NULL) DESC,
                                COALESCE(s.last_attempt_at,'1900-01-01'),s.code LIMIT %s""", ("held", PRICE_NIGHTLY_REPAIR_CODES))
                 queued = [r[0] for r in cur.fetchall()]
             repaired = repair_codes(queued)

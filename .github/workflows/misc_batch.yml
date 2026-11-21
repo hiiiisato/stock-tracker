@@ -62,6 +62,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # 権利台帳と公開価格を先に確定し、後続の1株指標が同じdigestを読む。
+      - name: 分割台帳と12週後の公式価格照合（時間上限付き）
+        if: ${{ inputs.job == 'edinet_texts' }}
+        continue-on-error: true
+        timeout-minutes: 15
+        run: python price_pipeline.py --sync-actions --audit
+
       # 週報で使うSDK/API契約だけを本処理前に検証する。依存更新で互換性が壊れた場合、
       # 動画分析やDB更新を始める前に止め、無料枠と実行時間を浪費しない。
       - name: YouTube週報のGemini互換性テスト
@@ -93,11 +100,17 @@ jobs:
         if: ${{ inputs.job == 'edinet_texts' }}
         run: python financials_edinet.py
 
-      # EDINET年次値（実績EPS・自己資本）が新しく入った銘柄も含め、会社予想純利益から
+      # EDINET年次値を現在の株数基準へ投影し、その検証済みEPS/BPSだけから
       # 予想EPS/ROEを固定式で再生成する。入力不足はNULLのまま理由を保存する。
-      - name: 予想EPS・予想ROEの再計算
+      - name: 1株指標・予想EPS・予想ROEの再計算
         if: ${{ inputs.job == 'edinet_texts' }}
         run: python forecast_metrics.py
+
+      - name: 配当とバリュエーションの同一基準再計算
+        if: ${{ inputs.job == 'edinet_texts' }}
+        run: |
+          python dividend_metrics.py
+          python valuation_metrics.py
 
       # 統一テーママスタ同期（みんかぶの関連度付きテーマを正とする。120テーマ/日≒週1周）。
       # みんかぶがGHAのIPを遮断した場合は既存データ維持でログに残る（壊れない設計）。
@@ -154,11 +167,3 @@ jobs:
       - name: YouTube週報 生成・送信漏れ救済
         if: ${{ inputs.job == 'youtube_recovery' }}
         run: python youtube_insights.py --weekly-recovery
-
-      # 当日データとは分離し、EDINET等を完了させた後に最大15分だけ過去データを補修する。
-      # 40銘柄/便の上限があり、失敗しても翌日に再開する。全銘柄の --check は本線で行わない。
-      - name: 分割台帳と12週後の公式価格照合（時間上限付き）
-        if: ${{ inputs.job == 'edinet_texts' }}
-        continue-on-error: true
-        timeout-minutes: 15
-        run: python price_pipeline.py --sync-actions --audit

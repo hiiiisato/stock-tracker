@@ -51,6 +51,9 @@ class Action:
     effective_date: date | None = None
     # ライツは株価係数と株数係数が別。分割の逆数式を流用しない。
     price_ratio: Decimal | None = None
+    # 取得元の行IDではなく、同じ経済事象を複数取得元間で束ねるID。
+    action_id: str | None = None
+    announced_at: date | None = None
 
     @property
     def price_factor(self) -> Decimal:
@@ -65,9 +68,44 @@ class Action:
         return Decimal(1) if self.kind == "rights" else self.after / self.before
 
 
+def economic_kind(kind: str) -> str:
+    """経済的に同じ無償交付は取得元の呼称差で二重計上しない。"""
+    return "split" if kind in {"split", "bonus"} else kind
+
+
+def stable_action_id(action: Action) -> str:
+    """取得元に依存しない経済事象ID。
+
+    同日の別事象を比率で区別し、split/bonus という表記差は同一視する。
+    比率未確定行が後日確定した場合は、保存層が日付と基準日で旧IDを引き継ぐ。
+    """
+    ratio = action.price_factor if action.status == "confirmed" else None
+    values = (
+        action.code,
+        action.ex_date.isoformat(),
+        economic_kind(action.kind),
+        str(ratio) if ratio is not None else "pending",
+        action.record_date.isoformat() if action.record_date else "",
+    )
+    return hashlib.sha256("|".join(values).encode()).hexdigest()
+
+
 def actions_digest(actions: Iterable[Action], basis_date: date) -> str:
-    values = sorted((a.code, a.ex_date.isoformat(), str(a.before), str(a.after), a.kind,
-                     str(a.price_ratio), a.status) for a in actions if a.ex_date <= basis_date)
+    # 価格だけでなく1株指標・配当も同じdigestを読む。
+    # 取得元の名前/URLは経済条件ではないため含めない。
+    values = sorted((
+        a.action_id or stable_action_id(a),
+        a.code,
+        a.announced_at.isoformat() if a.announced_at else "",
+        a.ex_date.isoformat(),
+        a.record_date.isoformat() if a.record_date else "",
+        a.effective_date.isoformat() if a.effective_date else "",
+        str(a.before),
+        str(a.after),
+        economic_kind(a.kind),
+        str(a.price_ratio) if a.price_ratio is not None else "",
+        a.status,
+    ) for a in actions if a.ex_date <= basis_date)
     return hashlib.sha256(json.dumps(values, ensure_ascii=False).encode()).hexdigest()
 
 

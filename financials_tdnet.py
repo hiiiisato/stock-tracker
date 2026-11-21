@@ -377,8 +377,13 @@ def import_recent(days: int = 4, only_codes: set | None = None, force: bool = Fa
     conn = get_conn(); cur = conn.cursor()
     # DDLは財務・予想のDMLより前に済ませ、途中の暗黙commitを避ける。
     from forecast_metrics import ensure_schema as ensure_forecast_metrics_schema
+    from per_share_metrics import ensure_schema as ensure_per_share_schema
+    from dividend_metrics import ensure_schema as ensure_dividend_schema
     ensure_forecast_metrics_schema(cur)
+    ensure_per_share_schema(cur)
+    ensure_dividend_schema(cur)
     fin_rows, fin_source_rows, fc_rows = [], [], []
+    dividend_notice_rows = []
     n_disc = 0
     seen_zip = set()
     for i in range(days):
@@ -392,8 +397,13 @@ def import_recent(days: int = 4, only_codes: set | None = None, force: bool = Fa
                 continue
             # 取込済み（同一銘柄・同一発表日の予想が既にDBにある）ならXBRLダウンロードを省く（冪等・高速化）
             if code and only_codes is None and not force:
-                cur.execute("""SELECT 1 FROM financials_forecast
-                               WHERE code=%s AND announced_at=%s LIMIT 1""",
+                cur.execute("""SELECT 1 FROM financials_forecast f
+                               WHERE f.code=%s AND f.announced_at=%s
+                                 AND EXISTS (
+                                   SELECT 1 FROM dividend_notices d
+                                   WHERE d.code=f.code AND DATE(d.announced_at)=f.announced_at
+                                 )
+                               LIMIT 1""",
                             (code, item["disclosed"].date()))
                 if cur.fetchone():
                     continue
@@ -410,6 +420,10 @@ def import_recent(days: int = 4, only_codes: set | None = None, force: bool = Fa
             if only_codes is not None and code5[:4] not in only_codes:
                 continue
             fins, fcs = _build_records(s, item["disclosed"], cur)
+            from dividend_metrics import extract_tdnet_notices
+            dividend_notice_rows.extend(
+                extract_tdnet_notices(s, item["disclosed"], item["xbrl_url"])
+            )
             fin_rows.extend(fins)
             fin_source_rows.extend([(*row, item["disclosed"]) for row in fins])
             fc_rows.extend(fcs)
@@ -433,9 +447,27 @@ def import_recent(days: int = 4, only_codes: set | None = None, force: bool = Fa
         # 入力不足は別ソースで埋めず forecast_metrics.missing_reason に残す。
         from forecast_metrics import rebuild_forecast_metrics
         rebuild_forecast_metrics({row[0] for row in fc_rows}, cur=cur)
+    if dividend_notice_rows:
+        from dividend_metrics import save_tdnet_notices
+        save_tdnet_notices(cur, dividend_notice_rows, ensure=False)
     conn.commit(); cur.close(); conn.close()
+    changed_codes = {row[0] for row in fc_rows} | {row[1] for row in dividend_notice_rows}
+    if changed_codes:
+        # 夜間開示で権利台帳も変わり得る。commit後に同じdigestの
+        # EPS/BPS→予想EPS/ROEを作り直し、古い投影を次便まで残さない。
+        from per_share_metrics import rebuild_per_share_metrics
+        from forecast_metrics import rebuild_forecast_metrics
+        rebuild_per_share_metrics(changed_codes)
+        rebuild_forecast_metrics(changed_codes, rebuild_actuals=False)
+    if dividend_notice_rows:
+        from dividend_metrics import rebuild_dividend_metrics
+        rebuild_dividend_metrics({row[1] for row in dividend_notice_rows})
+    if changed_codes:
+        from valuation_metrics import rebuild_valuation_metrics
+        rebuild_valuation_metrics(changed_codes)
     print(f"  [TDnet財務] 決算短信 {n_disc}件 → 実績{len(fin_rows)}行 / 予想{len(fc_rows)}行 を更新")
-    return {"disclosures": n_disc, "financials": len(fin_rows), "forecasts": len(fc_rows)}
+    return {"disclosures": n_disc, "financials": len(fin_rows), "forecasts": len(fc_rows),
+            "dividend_notices": len(dividend_notice_rows)}
 
 
 if __name__ == "__main__":
