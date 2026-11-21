@@ -250,7 +250,51 @@ def _migrate_action_schema(cur) -> None:
     cur.execute("SHOW INDEX FROM corporate_actions WHERE Key_name='PRIMARY'")
     primary_columns = [r[4] for r in cur.fetchall()]
     if primary_columns != ["action_id"]:
-        cur.execute("ALTER TABLE corporate_actions DROP PRIMARY KEY, ADD PRIMARY KEY (action_id)")
+        # TiDBのクラスタ化主キーはDROPできない。旧表を直接作り替えず、
+        # action_id主キーの新表へ全件コピー→件数検証→原子的RENAMEし、
+        # 旧表は復旧用バックアップとして残す。
+        migration_table = "corporate_actions_action_id_migration"
+        backup_table = "corporate_actions_legacy_pk"
+        cur.execute(f"""CREATE TABLE IF NOT EXISTS `{migration_table}` (
+            action_id CHAR(64) NOT NULL,
+            code VARCHAR(10) NOT NULL, ex_date DATE NOT NULL,
+            kind VARCHAR(20) NOT NULL DEFAULT 'split',
+            old_shares DECIMAL(28,12) NULL, new_shares DECIMAL(28,12) NULL,
+            price_ratio DECIMAL(28,18) NULL, record_date DATE NULL,
+            effective_date DATE NULL, announced_at DATE NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'needs_ratio',
+            source VARCHAR(30) NOT NULL, source_url VARCHAR(2048) NOT NULL DEFAULT '',
+            revision CHAR(64) NOT NULL, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (action_id), KEY idx_action_code_date (code,ex_date),
+            KEY idx_action_due (status,ex_date)
+        )""")
+        cur.execute(f"""INSERT INTO `{migration_table}`
+            (action_id,code,ex_date,kind,old_shares,new_shares,price_ratio,record_date,
+             effective_date,announced_at,status,source,source_url,revision,updated_at)
+            SELECT action_id,code,ex_date,kind,old_shares,new_shares,price_ratio,record_date,
+                   effective_date,announced_at,status,source,source_url,revision,updated_at
+            FROM corporate_actions
+            ON DUPLICATE KEY UPDATE code=VALUES(code),ex_date=VALUES(ex_date),
+              kind=VALUES(kind),old_shares=VALUES(old_shares),new_shares=VALUES(new_shares),
+              price_ratio=VALUES(price_ratio),record_date=VALUES(record_date),
+              effective_date=VALUES(effective_date),announced_at=VALUES(announced_at),
+              status=VALUES(status),source=VALUES(source),source_url=VALUES(source_url),
+              revision=VALUES(revision),updated_at=VALUES(updated_at)""")
+        cur.execute("SELECT COUNT(*) FROM corporate_actions")
+        source_count = cur.fetchone()[0]
+        cur.execute(f"SELECT COUNT(*) FROM `{migration_table}`")
+        migrated_count = cur.fetchone()[0]
+        if source_count != migrated_count:
+            raise RuntimeError(
+                f"権利台帳の主キー移行件数が不一致です: {source_count} != {migrated_count}"
+            )
+        cur.execute("SHOW TABLES LIKE %s", (backup_table,))
+        if cur.fetchone():
+            raise RuntimeError(f"復旧用旧表 `{backup_table}` がすでに存在します")
+        cur.execute(
+            f"RENAME TABLE corporate_actions TO `{backup_table}`, "
+            f"`{migration_table}` TO corporate_actions"
+        )
     cur.execute("SHOW INDEX FROM corporate_actions")
     indexes = {r[2] for r in cur.fetchall()}
     if "idx_action_code_date" not in indexes:
