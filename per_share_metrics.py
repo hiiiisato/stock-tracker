@@ -19,6 +19,7 @@ from price_store import load_actions
 
 CALCULATION_VERSION = "1"
 SIMPLE_KINDS = {"split", "consolidation", "bonus"}
+BATCH_CODES = 250
 
 
 def _decimal(value) -> Decimal | None:
@@ -151,9 +152,41 @@ def _announced(value, fallback) -> date | None:
     return fallback
 
 
-def rebuild_per_share_metrics(codes: Iterable[str] | None = None, *, basis_date: date | None = None) -> int:
+def _mark_pending_coverage(cur) -> None:
+    """新規上場等で有報がまだ無い銘柄を、欠落ではなく待ち状態にする。"""
+    cur.execute("""INSERT INTO data_coverage_state
+        (code,dataset,coverage_status,reason,checked_at)
+        SELECT s.code,'per_share_metrics','pending','awaiting_official_annual_filing',UTC_TIMESTAMP()
+        FROM stocks s
+        WHERE s.is_active=TRUE AND NOT EXISTS (
+            SELECT 1 FROM financials_edinet_annual e WHERE e.code=s.code
+        )
+        ON DUPLICATE KEY UPDATE coverage_status=VALUES(coverage_status),
+                                reason=VALUES(reason),checked_at=VALUES(checked_at)""")
+
+
+def rebuild_per_share_metrics(codes: Iterable[str] | None = None, *,
+                              basis_date: date | None = None,
+                              _update_pending_coverage: bool = True) -> int:
     """EDINET年次原本からEPS/BPSの版と現在投影を冪等再生成する。"""
     target = basis_date or jst_today()
+    if codes is None:
+        # TiDBのサーバーメモリ上限を越えず、失敗時も済みバッチから
+        # 再開できるよう、銘柄単位の小さなトランザクションで確定する。
+        with db() as cur:
+            ensure_schema(cur)
+            cur.execute("SELECT DISTINCT code FROM financials_edinet_annual ORDER BY code")
+            all_codes = [row[0] for row in cur.fetchall()]
+        total = 0
+        for start in range(0, len(all_codes), BATCH_CODES):
+            total += rebuild_per_share_metrics(
+                all_codes[start:start + BATCH_CODES], basis_date=target,
+                _update_pending_coverage=False,
+            )
+        with db() as cur:
+            ensure_schema(cur)
+            _mark_pending_coverage(cur)
+        return total
     requested = sorted({str(c).strip().upper() for c in (codes or []) if str(c).strip()})
     with db() as cur:
         ensure_schema(cur)
@@ -256,16 +289,8 @@ def rebuild_per_share_metrics(codes: Iterable[str] | None = None, *, basis_date:
             bulk_upsert(cur, "data_coverage_state",
                         ["code","dataset","coverage_status","reason","source_observed_at","checked_at"],
                         coverage_rows)
-        # 新規上場等で有報がまだ無い場合も、欠落ではなく待ち状態として可視化。
-        cur.execute("""INSERT INTO data_coverage_state
-            (code,dataset,coverage_status,reason,checked_at)
-            SELECT s.code,'per_share_metrics','pending','awaiting_official_annual_filing',UTC_TIMESTAMP()
-            FROM stocks s
-            WHERE s.is_active=TRUE AND NOT EXISTS (
-                SELECT 1 FROM financials_edinet_annual e WHERE e.code=s.code
-            )
-            ON DUPLICATE KEY UPDATE coverage_status=VALUES(coverage_status),
-                                    reason=VALUES(reason),checked_at=VALUES(checked_at)""")
+        if _update_pending_coverage:
+            _mark_pending_coverage(cur)
         return len(output_projections)
 
 
