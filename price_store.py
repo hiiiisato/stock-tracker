@@ -80,6 +80,7 @@ def ensure_schema() -> None:
             KEY idx_action_observation_action (action_id, observed_at)
         )""")
         _migrate_action_schema(cur)
+        _resolve_duplicate_pending_actions(cur)
         cur.execute("""CREATE TABLE IF NOT EXISTS price_adjustment_state (
             code VARCHAR(10) PRIMARY KEY, status VARCHAR(24) NOT NULL DEFAULT 'pending',
             action_digest CHAR(64) NULL, published_version CHAR(64) NULL,
@@ -308,6 +309,37 @@ def _migrate_action_schema(cur) -> None:
         cur.execute("ALTER TABLE corporate_action_history ADD COLUMN source_observation_key VARCHAR(255) NULL AFTER action_id")
 
 
+def _resolve_duplicate_pending_actions(cur) -> None:
+    """確定済み正本の後に再取得した「比率未確定の予定表」だけを統合する。
+
+    同日でも別種・別基準日の事象は残す。取得原本と改訂履歴は消さず、
+    observationsの参照先を確定済みaction_idへ付け替える。
+    """
+    cur.execute("""SELECT action_id,code,ex_date,kind,old_shares,new_shares,record_date,status
+                   FROM corporate_actions
+                   WHERE status IN ('confirmed','needs_ratio')
+                   ORDER BY code,ex_date,action_id""")
+    rows = list(cur.fetchall())
+    confirmed = defaultdict(list)
+    for row in rows:
+        if row[7] == "confirmed":
+            confirmed[(row[1], row[2], economic_kind(row[3]))].append(row)
+    for pending in rows:
+        if (pending[7] != "needs_ratio" or pending[4] != pending[5]
+                or pending[4] not in (None, Decimal(1))):
+            continue
+        matches = [row for row in confirmed.get(
+            (pending[1], pending[2], economic_kind(pending[3])), []
+        ) if pending[6] is None or row[6] is None or pending[6] == row[6]]
+        if len(matches) != 1:
+            continue
+        canonical_id = matches[0][0]
+        cur.execute("UPDATE corporate_action_observations SET action_id=%s WHERE action_id=%s",
+                    (canonical_id, pending[0]))
+        cur.execute("DELETE FROM corporate_actions WHERE action_id=%s AND status='needs_ratio'",
+                    (pending[0],))
+
+
 def snapshot(cur, code: str, source: str, basis: str, rows: list[dict], **metadata) -> str:
     content = json.dumps({"rows": rows, **metadata}, ensure_ascii=False, sort_keys=True,
                          separators=(",", ":"), default=str).encode()
@@ -372,6 +404,11 @@ def put_action(action: Action, *, correction: bool = False) -> bool:
                        WHERE code=%s AND ex_date=%s FOR UPDATE""", (action.code, action.ex_date))
         candidates = cur.fetchall()
         old = None
+        placeholder_matches = [candidate for candidate in candidates
+            if action.status == "needs_ratio" and candidate[3] == "confirmed"
+            and economic_kind(candidate[6]) == economic_kind(action.kind)
+            and (candidate[8] is None or action.record_date is None
+                 or candidate[8] == action.record_date)]
         for candidate in candidates:
             old_ratio = (candidate[7] if candidate[7] is not None else
                          candidate[1] / candidate[2] if candidate[1] and candidate[2] else None)
@@ -381,6 +418,8 @@ def put_action(action: Action, *, correction: bool = False) -> bool:
             )
             if candidate[0] == identifier or (
                 economic_kind(candidate[6]) == economic_kind(action.kind) and (same_ratio or same_pending)
+            ) or (
+                len(placeholder_matches) == 1 and candidate[0] == placeholder_matches[0][0]
             ) or (
                 correction and len(candidates) == 1
                 and economic_kind(candidate[6]) == economic_kind(action.kind)
@@ -392,6 +431,13 @@ def put_action(action: Action, *, correction: bool = False) -> bool:
         if old and old[4] == revision:
             return False
         if old and old[3] == "confirmed" and action.status == "needs_ratio":
+            observation_key = f"{revision}|{action.source_url}" if action.source_url else revision
+            observation_id = hashlib.sha256(f"{action.source}|{observation_key}".encode()).hexdigest()
+            cur.execute("""INSERT IGNORE INTO corporate_action_observations
+                (observation_id,action_id,code,ex_date,source,source_observation_key,payload)
+                VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                (observation_id, identifier, action.code, action.ex_date, action.source,
+                 observation_key[:255], json.dumps(details, ensure_ascii=False)))
             return False
         if old and old[3] == "cancelled" and not correction:
             return False

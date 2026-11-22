@@ -1,11 +1,13 @@
 from datetime import date, datetime
 from decimal import Decimal as D
+import sqlite3
 import unittest
 
 from dividend_metrics import _normalize_notice, extract_tdnet_notices
 from financials_tdnet import _Summary
 from per_share_metrics import resolve_applied_actions
 from price_adjustments import Action, actions_digest, stable_action_id
+from price_store import _resolve_duplicate_pending_actions
 
 
 def action(code, ex_date, after, *, kind="split", status="confirmed"):
@@ -82,6 +84,45 @@ class CorporateActionIdentityTest(unittest.TestCase):
         cancelled = Action(**{**vars(confirmed), "status": "cancelled"})
         self.assertNotEqual(actions_digest([confirmed], date(2026, 10, 1)),
                             actions_digest([cancelled], date(2026, 10, 1)))
+
+    def test_resolved_schedule_placeholder_is_removed_but_distinct_events_remain(self):
+        connection = sqlite3.connect(":memory:")
+        connection.executescript("""
+            CREATE TABLE corporate_actions (
+              action_id TEXT PRIMARY KEY,code TEXT,ex_date TEXT,kind TEXT,
+              old_shares NUMERIC,new_shares NUMERIC,record_date TEXT,status TEXT
+            );
+            CREATE TABLE corporate_action_observations (
+              observation_id TEXT PRIMARY KEY,action_id TEXT
+            );
+            INSERT INTO corporate_actions VALUES
+              ('confirmed','6861','2026-11-19','split',1,5,'2026-11-20','confirmed'),
+              ('placeholder','6861','2026-11-19','split',1,1,'2026-11-20','needs_ratio'),
+              ('other-kind','6861','2026-11-19','rights',1,1,'2026-11-20','needs_ratio'),
+              ('other-record','6861','2026-11-19','split',1,1,'2026-11-21','needs_ratio');
+            INSERT INTO corporate_action_observations VALUES ('obs','placeholder');
+        """)
+
+        class Cursor:
+            def __init__(self, conn):
+                self.cursor = conn.cursor()
+
+            def execute(self, sql, params=()):
+                self.cursor.execute(sql.replace("%s", "?"), params)
+
+            def fetchall(self):
+                return self.cursor.fetchall()
+
+        cur = Cursor(connection)
+        _resolve_duplicate_pending_actions(cur)
+        rows = connection.execute(
+            "SELECT action_id FROM corporate_actions ORDER BY action_id"
+        ).fetchall()
+        self.assertEqual(rows, [("confirmed",), ("other-kind",), ("other-record",)])
+        self.assertEqual(connection.execute(
+            "SELECT action_id FROM corporate_action_observations WHERE observation_id='obs'"
+        ).fetchone()[0], "confirmed")
+        connection.close()
 
 
 class DividendNoticeTest(unittest.TestCase):
