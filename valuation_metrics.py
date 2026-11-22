@@ -10,6 +10,7 @@ from config import bulk_upsert, db
 
 
 CALCULATION_VERSION = "1"
+BATCH_CODES = 250
 
 
 def _decimal(value) -> Decimal | None:
@@ -56,7 +57,23 @@ def _where_codes(requested: list[str], prefix: str = "") -> tuple[str, list[str]
 
 def rebuild_valuation_metrics(codes: Iterable[str] | None = None, *, basis_date: date | None = None) -> int:
     target = basis_date or jst_today()
+    if codes is None:
+        with db() as cur:
+            ensure_schema(cur)
+            cur.execute("""SELECT code FROM price_adjustment_state
+                           WHERE status IN ('published','audit_due')
+                             AND action_digest IS NOT NULL
+                             AND target_basis_date IS NOT NULL
+                           ORDER BY code""")
+            all_codes = [row[0] for row in cur.fetchall()]
+        return sum(rebuild_valuation_metrics(
+            all_codes[start:start + BATCH_CODES], basis_date=target
+        ) for start in range(0, len(all_codes), BATCH_CODES))
     requested = sorted({str(c).strip().upper() for c in (codes or []) if str(c).strip()})
+    if len(requested) > BATCH_CODES:
+        return sum(rebuild_valuation_metrics(
+            requested[start:start + BATCH_CODES], basis_date=target
+        ) for start in range(0, len(requested), BATCH_CODES))
     with db() as cur:
         ensure_schema(cur)
         condition, params = _where_codes(requested, "s.")

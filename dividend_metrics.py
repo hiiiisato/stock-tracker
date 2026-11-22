@@ -15,6 +15,7 @@ from price_store import load_actions
 
 
 CALCULATION_VERSION = "1"
+BATCH_CODES = 250
 COMPONENTS = {
     "FirstQuarterMember": "q1",
     "SecondQuarterMember": "interim",
@@ -204,7 +205,21 @@ def _normalize_notice(raw: Decimal, announced: date, status: str, actions: list[
 
 def rebuild_dividend_metrics(codes: Iterable[str] | None = None, *, basis_date: date | None = None) -> int:
     target = basis_date or jst_today()
+    if codes is None:
+        with db() as cur:
+            ensure_schema(cur)
+            cur.execute("""SELECT code FROM dividend_notices
+                           UNION SELECT code FROM financials_forecast
+                           ORDER BY code""")
+            all_codes = [row[0] for row in cur.fetchall()]
+        return sum(rebuild_dividend_metrics(
+            all_codes[start:start + BATCH_CODES], basis_date=target
+        ) for start in range(0, len(all_codes), BATCH_CODES))
     requested = sorted({str(c).strip().upper() for c in (codes or []) if str(c).strip()})
+    if len(requested) > BATCH_CODES:
+        return sum(rebuild_dividend_metrics(
+            requested[start:start + BATCH_CODES], basis_date=target
+        ) for start in range(0, len(requested), BATCH_CODES))
     with db() as cur:
         ensure_schema(cur)
         _backfill_legacy_forecasts(cur, requested)
