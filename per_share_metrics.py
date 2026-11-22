@@ -188,6 +188,18 @@ def rebuild_per_share_metrics(codes: Iterable[str] | None = None, *,
             _mark_pending_coverage(cur)
         return total
     requested = sorted({str(c).strip().upper() for c in (codes or []) if str(c).strip()})
+    if len(requested) > BATCH_CODES:
+        total = 0
+        for start in range(0, len(requested), BATCH_CODES):
+            total += rebuild_per_share_metrics(
+                requested[start:start + BATCH_CODES], basis_date=target,
+                _update_pending_coverage=False,
+            )
+        if _update_pending_coverage:
+            with db() as cur:
+                ensure_schema(cur)
+                _mark_pending_coverage(cur)
+        return total
     with db() as cur:
         ensure_schema(cur)
         sql = """SELECT e.code,e.period_end,e.eps,e.bps,e.net_income,
