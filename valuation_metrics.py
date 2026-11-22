@@ -156,7 +156,7 @@ def rebuild_valuation_metrics(codes: Iterable[str] | None = None, *, basis_date:
                 _decimal(eps),None,_decimal(forecast_eps),_decimal(bps),
                 _decimal(dps_actual),_decimal(dps_forecast),shares_d,
                 target_basis if shares_verified else None,shares_observed,
-                "verified_by_implied_shares" if shares_verified else "needs_review",
+                "verified_implied_shares" if shares_verified else "needs_review",
                 per_actual,None,per_forecast,pbr,div_yield,market_cap,
                 eps_fact,bps_fact,forecast_id,str(forecast_refs)[:255] if forecast_refs else None,
                 quality,",".join(reasons) or None,CALCULATION_VERSION,now,
