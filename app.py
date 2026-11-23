@@ -5681,9 +5681,9 @@ def _build_screen_page() -> str:
 <script>
 (function(){{
   var STRATS=[
-    {{name:'① 高配当バリュー',desc:'高配当×割安×ROE。流動性とMA75上（下落トレンドの罠回避）を追加（バックテストで対TOPIXほぼ互角の最上位クラス）。',
-      conds:[{{f:'div_yield',op:'>=',val:3,lbl:'配当3%+'}},{{f:'pbr',op:'<=',val:1.5,lbl:'PBR≤1.5倍'}},
-             {{f:'roe',op:'>=',val:10,lbl:'ROE≥10%'}},{{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}},
+    {{name:'① 高配当バリュー',desc:'直近12か月配当×最新年次実績の割安性・ROE。流動性とMA75上で下落トレンドも除外。',
+      conds:[{{f:'div_yield',op:'>=',val:3,lbl:'直近12か月配当3%+'}},{{f:'pbr',op:'<=',val:1.5,lbl:'実績PBR≤1.5倍'}},
+             {{f:'roe',op:'>=',val:10,lbl:'実績ROE≥10%'}},{{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}},
              {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}},{{f:'dev_ma75',op:'>=',val:0,lbl:'株価>MA75'}}],
       cols:['name','close','change_pct','div_yield','pbr','per','roe','roic','cf_positive'],sort:'div_yield-desc'}},
     {{name:'② 高ROEグロース',desc:'ROE20%以上・ROIC10%以上・CF黒字・営業利益率15%以上の高資本効率優良成長株。',
@@ -9567,193 +9567,20 @@ def api_screen():
     cached = _get(key)
     if cached:
         return cached, 200, {"Content-Type": "application/json"}
-    conn = get_conn()
-    cur  = conn.cursor()
-    cur.execute("""
-        SELECT s.code, s.name, m.name AS market,
-               CASE WHEN v.code IS NOT NULL THEN v.per_latest_annual ELSE f.per END,
-               CASE WHEN v.code IS NOT NULL THEN v.pbr ELSE f.pbr END,
-               f.roe,
-               CASE WHEN v.code IS NOT NULL THEN v.div_yield ELSE f.div_yield END,
-               CASE WHEN v.code IS NOT NULL THEN v.market_cap ELSE f.market_cap END,
-               f.operating_margin, f.payout_ratio,
-               f.roa, f.debt_to_equity, f.beta,
-               lp.close, lp.change_pct,
-               ps.chg5d, ps.chg25d, ps.chg75d,
-               ps.ma25, ps.ma75, ps.ma200,
-               ps.dev_ma25, ps.dev_ma75, ps.dev_high52w,
-               ps.vol20_ratio, ps.rsi14,
-               ps.macd, ps.macd_signal, ps.macd_gc,
-               ps.turnover_day, ps.turnover_20d,
-               ps.break_20d, ps.break_65d,
-               ps.rev_growth, ps.op_growth, ps.eps_growth,
-               ps.roic, ps.cf_positive,
-               ps.dev_ma200, ps.dev_low52w,
-               ps.vol_ratio_6_25, ps.volatility_60d,
-               ps.gc_5_25, ps.gc_75_200,
-               ps.bb_upper, ps.bb_lower,
-               ps.stoch_k, ps.stoch_d,
-               ps.ytd_high, ps.ytd_low,
-               ps.break_ytd_high, ps.dev_ytd_high, ps.dev_ytd_low,
-               ps.nikkei_rel_1m,
-               ps.equity_ratio, ps.ord_margin, ps.ord_growth,
-               ps.psr, ps.pcfr,
-               tv.theo_ratio, tv.upside_3y_pct, tv.pass_all,
-               ps.fscore,
-               (bb.code IS NOT NULL) AS buyback_recent,
-               ps.ma50,
-               fm.rev_cagr_5y, fm.profit_cagr_5y,
-               fm.consec_rev_growth, fm.consec_profit_growth, fm.consec_div_growth,
-               fm.roe_5y_avg, fm.roa_5y_avg, fm.opm_5y_avg,
-               fm.is_record_profit, fm.roe_delta_3y, fm.roe_driver_3y,
-               f.profit_margin,
-               CASE WHEN v.code IS NOT NULL THEN v.eps_latest_annual ELSE f.eps_ttm END,
-               CASE WHEN v.code IS NOT NULL THEN v.bps_latest ELSE f.bps END,
-               CASE WHEN v.code IS NOT NULL THEN v.dps_company_forecast ELSE f.annual_dps END
-        FROM stocks s
-        LEFT JOIN markets m ON s.market_id = m.id
-        LEFT JOIN fundamental_metrics fm ON s.code = fm.code
-        LEFT JOIN stock_fundamentals f ON s.code = f.code
-        LEFT JOIN price_adjustment_state vas ON vas.code=s.code
-        LEFT JOIN valuation_metrics_current v ON v.code=s.code
-          AND vas.status IN ('published','audit_due')
-          AND vas.published_version=v.price_version
-          AND vas.action_digest=v.action_digest
-          AND vas.target_basis_date=v.target_basis_date
-        LEFT JOIN (
-            SELECT dp.code, dp.close, dp.change_pct
-            FROM price_history dp
-            JOIN (SELECT code, MAX(date) AS max_date FROM price_history GROUP BY code) mx
-              ON dp.code = mx.code AND dp.date = mx.max_date
-        ) lp ON s.code = lp.code
-        LEFT JOIN price_stats_current ps ON s.code = ps.code
-        LEFT JOIN theoretical_values tv ON s.code = tv.code
-        LEFT JOIN (
-            SELECT DISTINCT code FROM disclosures
-            WHERE category = 'buyback'
-              AND (title LIKE '%取得に係る事項の決定%' OR title LIKE '%買付%')
-              AND title NOT LIKE '%状況%' AND title NOT LIKE '%終了%'
-              AND disclosed_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-        ) bb ON bb.code = s.code
-        WHERE s.is_active = TRUE
-          AND (CASE WHEN v.code IS NOT NULL THEN v.per_latest_annual ELSE f.per END IS NOT NULL
-               OR CASE WHEN v.code IS NOT NULL THEN v.pbr ELSE f.pbr END IS NOT NULL
-               OR f.roe IS NOT NULL
-               OR CASE WHEN v.code IS NOT NULL THEN v.div_yield ELSE f.div_yield END IS NOT NULL
-               OR ps.chg25d IS NOT NULL)
-        ORDER BY COALESCE(
-          CASE WHEN v.code IS NOT NULL THEN v.market_cap ELSE f.market_cap END, 0
-        ) DESC
-        LIMIT 4000
-    """)
-    rows = cur.fetchall()
-    cur.close(); conn.close()
-
-    def _f(v): return float(v) if v is not None else None
-    def _i(v): return int(v)   if v is not None else 0
-
-    results = []
-    for r in rows:
-        close = _f(r[13])
-        ma25  = _f(r[18])
-        ma75  = _f(r[19])
-        ma200 = _f(r[20])
-        per   = _f(r[3])
-        results.append({
-            "code":           r[0],
-            "name":           r[1] or "",
-            "market":         r[2] or "",
-            "per":            per,
-            "pbr":            _f(r[4]),
-            "roe":            float(r[5]) * 100 if r[5] is not None else None,
-            "div_yield":      _f(r[6]),
-            "market_cap":     int(r[7]) if r[7] else None,
-            "op_margin":      float(r[8]) * 100 if r[8] is not None else None,
-            "payout_ratio":   float(r[9]) * 100 if r[9] is not None else None,
-            "roa":            float(r[10]) * 100 if r[10] is not None else None,
-            "debt_to_equity": _f(r[11]),
-            "beta":           _f(r[12]),
-            "close":          close,
-            "change_pct":     _f(r[14]),
-            "chg5d":          _f(r[15]),
-            "chg25d":         _f(r[16]),
-            "chg75d":         _f(r[17]),
-            "ma25":           ma25,
-            "ma75":           ma75,
-            "ma200":          ma200,
-            "dev_ma25":       _f(r[21]),
-            "dev_ma75":       _f(r[22]),
-            "dev_high52w":    _f(r[23]),
-            "vol20_ratio":    _f(r[24]),
-            "rsi14":          _f(r[25]),
-            "macd":           _f(r[26]),
-            "macd_signal":    _f(r[27]),
-            "macd_gc":        _i(r[28]),
-            "turnover_day":   _f(r[29]),
-            "turnover_20d":   _f(r[30]),
-            "break_20d":      _i(r[31]),
-            "break_65d":      _i(r[32]),
-            "rev_growth":     _f(r[33]),
-            "op_growth":      _f(r[34]),
-            "eps_growth":     _f(r[35]),
-            "roic":           _f(r[36]),
-            "cf_positive":    _i(r[37]),
-            "dev_ma200":      _f(r[38]),
-            "dev_low52w":     _f(r[39]),
-            "vol_ratio_6_25": _f(r[40]),
-            "volatility_60d": _f(r[41]),
-            "gc_5_25":        _i(r[42]),
-            "gc_75_200":      _i(r[43]),
-            "bb_upper":       _i(r[44]),
-            "bb_lower":       _i(r[45]),
-            "stoch_k":        _f(r[46]),
-            "stoch_d":        _f(r[47]),
-            "ytd_high":       _f(r[48]),
-            "ytd_low":        _f(r[49]),
-            "break_ytd_high": _i(r[50]),
-            "dev_ytd_high":   _f(r[51]),
-            "dev_ytd_low":    _f(r[52]),
-            "nikkei_rel_1m":  _f(r[53]),
-            "equity_ratio":   _f(r[54]),
-            "ord_margin":     _f(r[55]),
-            "ord_growth":     _f(r[56]),
-            "psr":            _f(r[57]),
-            "pcfr":           _f(r[58]),
-            "theo_ratio":     _f(r[59]),
-            "upside_3y_pct":  _f(r[60]),
-            "theo_pass_all":  _i(r[61]),
-            "fscore":         _i(r[62]) if r[62] is not None else None,
-            "buyback_recent": _i(r[63]),
-            # 複数年ファンダ（fundamental_metrics・日次更新）
-            "rev_cagr_5y":       _f(r[65]),
-            "profit_cagr_5y":    _f(r[66]),
-            "consec_rev_growth":    _i(r[67]) if r[67] is not None else None,
-            "consec_profit_growth": _i(r[68]) if r[68] is not None else None,
-            "consec_div_growth":    _i(r[69]) if r[69] is not None else None,
-            "roe_5y_avg":        _f(r[70]),
-            "roa_5y_avg":        _f(r[71]),
-            "opm_5y_avg":        _f(r[72]),
-            "is_record_profit":  _i(r[73]) if r[73] is not None else None,
-            "roe_delta_3y":      _f(r[74]),
-            "roe_driver_3y":     _i(r[75]) if r[75] is not None else None,
-            "net_margin":        float(r[76]) * 100 if r[76] is not None else None,
-            "eps":               _f(r[77]),
-            "bps":               _f(r[78]),
-            "dps":               _f(r[79]),
-            # クライアント側計算
-            "vs_ma25":        (close - ma25)  if (close is not None and ma25  is not None) else None,
-            "vs_ma75":        (close - ma75)  if (close is not None and ma75  is not None) else None,
-            "ma25_vs_ma75":   (ma25  - ma75)  if (ma25  is not None and ma75  is not None) else None,
-            "earnings_yield": round(100.0 / per, 2) if (per and per > 0) else None,
-            # 派生: PEG(PER/EPS成長)・財務レバレッジ(100/自己資本比率)・50日線乖離
-            "peg":            round(per / _f(r[35]), 2) if (per and per > 0 and _f(r[35]) and _f(r[35]) > 0) else None,
-            "fin_leverage":   round(100.0 / _f(r[54]), 2) if (_f(r[54]) and _f(r[54]) > 0) else None,
-            "dev_ma50":       round((close - _f(r[64])) / _f(r[64]) * 100, 2) if (close and _f(r[64])) else None,
-        })
-    import json as _json
+    from screening_snapshot import load_snapshot
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        snapshot_date, results, snapshot_id = load_snapshot(cur, current=True)
+    finally:
+        cur.close(); conn.close()
     payload = _json.dumps(results, ensure_ascii=False)
     _set(key, payload)
-    return payload, 200, {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json"}
+    if snapshot_date:
+        headers["X-Screen-Snapshot-Date"] = str(snapshot_date)
+    if snapshot_id:
+        headers["X-Screen-Snapshot-Id"] = snapshot_id
+    return payload, 200, headers
 
 
 @app.route("/api/period_stats")
@@ -9852,10 +9679,12 @@ def screen():
 @app.route("/api/backtest_dates")
 def api_backtest_dates():
     """バックテストで選択可能な週次スナップショット日の一覧。"""
+    from screening_snapshot import available_snapshot_dates
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history_current ORDER BY snapshot_date")
-    dates = [str(r[0]) for r in cur.fetchall()]
-    cur.close(); conn.close()
+    try:
+        dates = [str(d) for d in available_snapshot_dates(cur)]
+    finally:
+        cur.close(); conn.close()
     return _json.dumps(dates), 200, {"Content-Type": "application/json"}
 
 
@@ -9863,82 +9692,30 @@ def api_backtest_dates():
 def api_screen_asof():
     """指定日に最も近い週次スナップショットを /api/screen と同一スキーマで返す。
     クライアント側で既存 passFilter() をそのまま実行して合致銘柄を判定する。"""
-    from compute_stats_history import HISTORY_COLS
     req_date = request.args.get("date", "").strip()
     key = f"screen_asof_{req_date}"
     cached = _get(key)
     if cached:
         return cached, 200, {"Content-Type": "application/json"}
 
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT DISTINCT snapshot_date FROM price_stats_history_current ORDER BY snapshot_date")
-    dates = [r[0] for r in cur.fetchall()]
-    if not dates:
-        cur.close(); conn.close()
-        return _json.dumps({"snapshot_date": None, "stocks": []}), 200, {"Content-Type": "application/json"}
+    from screening_snapshot import load_snapshot
     try:
-        target = date.fromisoformat(req_date) if req_date else dates[-1]
+        target = date.fromisoformat(req_date) if req_date else None
     except ValueError:
-        target = dates[-1]
-    snap = min(dates, key=lambda d: abs((d - target).days))
-
-    cols = HISTORY_COLS
-    col_list = ", ".join("h.`" + c + "`" for c in cols)
-    cur.execute(f"""
-        SELECT {col_list}, s.name
-        FROM price_stats_history_current h JOIN stocks s ON h.code = s.code
-        WHERE h.snapshot_date = %s
-    """, (snap,))
-    rows = cur.fetchall()
-    cur.close(); conn.close()
-
-    idx = {c: i for i, c in enumerate(cols)}
-    name_i = len(cols)
-
-    def _f(v): return float(v) if v is not None else None
-    def _i(v): return int(v) if v is not None else 0
-
-    results = []
-    for r in rows:
-        def gv(c): return r[idx[c]]
-        close = _f(gv("close")); ma25 = _f(gv("ma25")); ma75 = _f(gv("ma75")); per = _f(gv("per"))
-        results.append({
-            "code": gv("code"), "name": r[name_i] or "", "market": gv("market") or "",
-            "per": per, "pbr": _f(gv("pbr")), "roe": _f(gv("roe")), "div_yield": _f(gv("div_yield")),
-            "market_cap": int(gv("market_cap")) if gv("market_cap") else None,
-            "op_margin": _f(gv("op_margin")), "payout_ratio": _f(gv("payout_ratio")),
-            "roa": _f(gv("roa")), "debt_to_equity": _f(gv("debt_to_equity")), "beta": _f(gv("beta")),
-            "close": close, "change_pct": None,
-            "chg5d": _f(gv("chg5d")), "chg25d": _f(gv("chg25d")), "chg75d": _f(gv("chg75d")),
-            "ma25": ma25, "ma75": ma75, "ma200": _f(gv("ma200")),
-            "dev_ma25": _f(gv("dev_ma25")), "dev_ma75": _f(gv("dev_ma75")), "dev_high52w": _f(gv("dev_high52w")),
-            "vol20_ratio": _f(gv("vol20_ratio")), "rsi14": _f(gv("rsi14")),
-            "macd": _f(gv("macd")), "macd_signal": _f(gv("macd_signal")), "macd_gc": _i(gv("macd_gc")),
-            "turnover_day": _f(gv("turnover_day")), "turnover_20d": _f(gv("turnover_20d")),
-            "break_20d": _i(gv("break_20d")), "break_65d": _i(gv("break_65d")),
-            "rev_growth": _f(gv("rev_growth")), "op_growth": _f(gv("op_growth")), "eps_growth": _f(gv("eps_growth")),
-            "roic": _f(gv("roic")), "cf_positive": _i(gv("cf_positive")),
-            "dev_ma200": _f(gv("dev_ma200")), "dev_low52w": _f(gv("dev_low52w")),
-            "vol_ratio_6_25": _f(gv("vol_ratio_6_25")), "volatility_60d": _f(gv("volatility_60d")),
-            "gc_5_25": _i(gv("gc_5_25")), "gc_75_200": _i(gv("gc_75_200")),
-            "bb_upper": _i(gv("bb_upper")), "bb_lower": _i(gv("bb_lower")),
-            "stoch_k": _f(gv("stoch_k")), "stoch_d": _f(gv("stoch_d")),
-            "ytd_high": _f(gv("ytd_high")), "ytd_low": _f(gv("ytd_low")),
-            "break_ytd_high": _i(gv("break_ytd_high")), "dev_ytd_high": _f(gv("dev_ytd_high")), "dev_ytd_low": _f(gv("dev_ytd_low")),
-            "nikkei_rel_1m": _f(gv("nikkei_rel_1m")),
-            "equity_ratio": _f(gv("equity_ratio")), "ord_margin": _f(gv("ord_margin")), "ord_growth": _f(gv("ord_growth")),
-            "psr": _f(gv("psr")), "pcfr": _f(gv("pcfr")),
-            "vs_ma25": (close - ma25) if (close is not None and ma25 is not None) else None,
-            "vs_ma75": (close - ma75) if (close is not None and ma75 is not None) else None,
-            "ma25_vs_ma75": (ma25 - ma75) if (ma25 is not None and ma75 is not None) else None,
-            "earnings_yield": round(100.0 / per, 2) if (per and per > 0) else None,
-            # 理論株価系は過去復元不可のため無効化（バックテスト対象外）
-            "theo_ratio": None, "upside_3y_pct": None, "theo_pass_all": 0,
-        })
-
-    payload = _json.dumps({"snapshot_date": str(snap), "stocks": results}, ensure_ascii=False)
+        target = None
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        snapshot_date, results, snapshot_id = load_snapshot(cur, target)
+    finally:
+        cur.close(); conn.close()
+    payload = _json.dumps({
+        "snapshot_date": str(snapshot_date) if snapshot_date else None,
+        "snapshot_id": snapshot_id,
+        "stocks": results,
+    }, ensure_ascii=False)
     _set(key, payload)
     return payload, 200, {"Content-Type": "application/json"}
+
 
 
 def _prices_asof(cur, dt, lookback_days=40):

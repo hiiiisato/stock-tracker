@@ -2,6 +2,8 @@ import re
 import unittest
 from pathlib import Path
 
+from screening_snapshot import HIGH_DIVIDEND_VALUE_CONDITIONS, SCREENING_CORE_FIELDS
+
 
 APP_SOURCE = Path(__file__).resolve().parents[1].joinpath("app.py").read_text()
 
@@ -18,6 +20,17 @@ class ScreenPresetDefinitionTest(unittest.TestCase):
         mapped_fields = set(re.findall(r"^\s*'([^']+)':", mapping, re.MULTILINE))
 
         self.assertEqual(set(), condition_fields - mapped_fields)
+
+    def test_every_preset_uses_the_common_snapshot(self):
+        presets = self._block("var STRATS=[", "var COL={{")
+        condition_fields = set(re.findall(r"\{\{f:'([^']+)'", presets))
+
+        self.assertEqual(set(), condition_fields - SCREENING_CORE_FIELDS)
+
+    def test_high_dividend_value_rule_matches_server_verification(self):
+        first = self._block("{{name:'① 高配当バリュー'", "{{name:'② 高ROEグロース'")
+        for field, operator, value in HIGH_DIVIDEND_VALUE_CONDITIONS:
+            self.assertIn(f"f:'{field}',op:'{operator}',val:{value}", first)
 
     def test_last_preset_is_not_excluded_by_a_hard_coded_index(self):
         self.assertIn(

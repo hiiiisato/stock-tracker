@@ -66,6 +66,8 @@ def _ensure_table():
            OR (s.status IN ('published','audit_due') AND h.source_series_revision=s.series_revision)
     """)
     conn.commit(); cur.close(); conn.close()
+    from screening_snapshot import ensure_schema as ensure_screening_snapshot_schema
+    ensure_screening_snapshot_schema()
 
 
 # ─── データ一括ロード ─────────────────────────────────────────────────────────
@@ -203,7 +205,8 @@ def _pit_fm(known_annuals, shares):
         "ord_growth": _round(yoy(ord_l, ord_p)),
         "eps_growth": _round(yoy(eps_l, eps_p)),
         "roic": _round(roic),
-        "cf_positive": 1 if (cfo_l is not None and cfo_l > 0) else 0,
+        # 未取得を「営業CFマイナス」と誤判定しない。
+        "cf_positive": None if cfo_l is None else (1 if cfo_l > 0 else 0),
         "equity_ratio": _round(equity_ratio),
         "ord_margin": _round(ord_margin),
         "cfo_per_share": cfo_per_share,
@@ -367,9 +370,32 @@ def run(backfill=False, weeks=None, latest_only=False):
         rows = _compute_snapshot(D, target_prices, annuals, quarters, divs, shares, nk, market,revisions)
         if rows:
             conn = get_conn(); cur = conn.cursor()
-            bulk_upsert(cur, "price_stats_history", HISTORY_COLS, rows,
-                        update_cols=[c for c in HISTORY_COLS if c not in ("code", "snapshot_date")])
-            conn.commit(); cur.close(); conn.close()
+            try:
+                bulk_upsert(cur, "price_stats_history", HISTORY_COLS, rows,
+                            update_cols=[c for c in HISTORY_COLS if c not in ("code", "snapshot_date")])
+
+                # 部分再計算時も既存行と合わせた全コードがそろってから、
+                # 現在画面とバックテスト共通の完成版を公開する。
+                column_sql = ", ".join("`" + c + "`" for c in HISTORY_COLS)
+                cur.execute(
+                    f"SELECT {column_sql} FROM price_stats_history_current WHERE snapshot_date=%s",
+                    (D,),
+                )
+                complete_rows = cur.fetchall()
+                from screening_snapshot import publish_snapshot, serialize_history_rows
+                stocks = serialize_history_rows(
+                    cur,
+                    complete_rows,
+                    HISTORY_COLS,
+                    include_current_supplement=(D == end),
+                )
+                publish_snapshot(cur, D, stocks)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cur.close(); conn.close()
             total += len(rows)
         print(f"  [{i+1}/{len(snap_dates)}] {D}: {len(rows)}銘柄  (累計 {total})")
     # 全週の保存後にだけ完了を記録する。途中終了した場合は次便で同じ版を再実行できる。

@@ -407,7 +407,8 @@ def _load_financials() -> dict[str, dict]:
         if opi_l is not None and cap > 0:
             roic = opi_l / cap * 100
 
-        cf_positive  = 1 if (cfo_l is not None and cfo_l > 0) else 0
+        # 未取得と営業CFマイナスを区別する。
+        cf_positive = None if cfo_l is None else (1 if cfo_l > 0 else 0)
 
         # 自己資本比率 = 自己資本 / 総資産
         equity_ratio = eq_l / ta_l * 100 if (eq_l is not None and ta_l and ta_l > 0) else None
@@ -584,7 +585,7 @@ def compute_stock_stats(prices, w52_pair, ytd_pair, nikkei_1m_chg, fm):
     ord_growth   = fm.get("ord_growth")
     eps_growth   = fm.get("eps_growth")
     roic         = fm.get("roic")
-    cf_positive  = fm.get("cf_positive", 0)
+    cf_positive  = fm.get("cf_positive")
     equity_ratio = fm.get("equity_ratio")
     ord_margin   = fm.get("ord_margin")
     fscore       = fm.get("fscore")

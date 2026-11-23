@@ -52,6 +52,18 @@ DB構造、取得元の優先順位、正本、公開ビュー、品質状態、
 6. 日次再実行、同じ公式文書の再取得、途中失敗後の再開で、原本件数と公開値が不必要に変わらないことを
    テストする。並行実行では古い結果が新しい公開版を巻き戻さないことを保証する。
 
+### スクリーニング公開版の契約
+
+`price_stats_history` をPIT計算原本、`screening_snapshots` を画面とバックテストの
+唯一の公開読取モデルとする。PER/PBR/ROE/配当利回りとテクニカル指標は
+`compute_stats_history.py` の同じ式で作り、現在画面だけ別のライブJOIN値に差し替えない。
+配当利回りは直近12か月の実績配当、ROE/PBRは公開済みの最新年次実績に統一し、
+バックテストで未公開情報を先読みしない。未取得はNULLとし、負値や0と区別する。
+
+バッチは全コードのAPI行をメモリ上で完成させ、件数と主要指標の有効数が
+前回正常版から20%以上急減していないことを確認してから、圧縮済みpayloadを1行で原子的に保存する。
+失敗や途中終了では新しい `ready` が作られず、APIは直前の `ready` を読み続ける。
+
 ### 株式分割・併合に関する稼働構成
 
 2026-11-22から、公式台帳 `corporate_actions` は `action_id` を主キーとし、同日の別事象を
@@ -64,7 +76,7 @@ EDINETのEPS/BPS原本は `per_share_fact_versions`、同じ権利digestへの�
 `per_share_fact_projections` に保存する。純利益または純資産を1株値で割った逆算株式数と
 現在株式数、公式権利の連続suffixを照合し、一意に決まらない原本は `needs_review` のままとする。
 配当は `dividend_notices` の中間・期末等を個別に正規化し、`dividend_events` を経て
-`dividend_annual_normalized` で年度合計する。現在画面、スクリーニング、理論株価が読む正本は
+`dividend_annual_normalized` で年度合計する。現在の理論株価と個別画面が読む価値指標の正本は
 `valuation_metrics_current` で、`price_version` / `action_digest` / `target_basis_date` が公開価格と
 一致する行だけを使う。旧読取先の `stock_fundamentals` には移行互換用のPER/PBR/利回り/時価総額だけを投影し、
 Yahoo原本のEPS/BPS/DPSは上書きしない。
@@ -166,7 +178,8 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 7. PER/PBR等の最新値再計算 (`fundamentals.recompute_price_metrics`)
 8. テクニカル指標 (`compute_price_stats`) → `price_stats`
 9. **理論株価** (`compute_theoretical`) — price_stats と stock_fundamentals に依存するため必ずその後
-10. 週次スナップショット追記 (`compute_stats_history`) → `price_stats_history`（バックテスト用）
+10. 週次スナップショット追記 (`compute_stats_history`) → `price_stats_history`（PIT計算原本）→ `screening_snapshots`（現在画面・バックテスト共通の完成版）
+    - 全コードを計算し、品質検査を通過した後に同一トランザクションで `ready` にする。失敗時は直前の `ready` を読み続ける
 11. スイング候補スコア → `swing_scores` テーブル保存 (`swing_scorer`。/swing ページで表示)
 12. ランキング (`rankings`)・資金フロー週次集計 (`money_flow`)
 13. 適時開示 (`disclosures`) — 重いAI調査より先に実行（timeout時も当日開示を確保）
@@ -310,8 +323,9 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
   計算窓と `updated_at` は実行ホストの日付ではなく `daily_prices` の最新営業日を基準にする。
   `fscore` = 当サイト版 Piotroski F-score（`_fscore_7`・7点。標準9項目のうち流動比率/希薄化はデータ未保持で除外し、
   総負債→自己資本比率改善・粗利率→営業利益率改善で代替。クオリティ・ファクター。詳細は docs/capital_gains_strategy_survey.md）
-- `compute_stats_history.py` — 週次スナップショット → `price_stats_history`（バックテスト用・PIT補正=期末+45日）。
-  fscore も PIT（`_pit_fm`）で再現・全履歴バックフィル済み
+- `compute_stats_history.py` — 週次スナップショット → `price_stats_history`（PIT補正=期末+45日）。
+  fscore も PIT（`_pit_fm`）で再現・全履歴バックフィル済み。各日の全行保存後に `screening_snapshot.py` を通して公開用の完成版を作る
+- `screening_snapshot.py` — 現在画面とバックテストの共通読取モデル。同じ指標定義・NULLルールでAPI行を作り、`ready` の完成版だけを返す。財務未取得は不合格(0)ではなくNULLとする
 - `compute_theoretical.py` — はっしゃん式理論株価 → `theoretical_values`。係数は config.py
 - `theme_master.py` — **統一テーママスタ（みんかぶを正とする。2026-07再設計）**。
   minkabu.jp の全テーマ(~780)と**銘柄ごとの編集済み関連度(0-100)**を同期（kabutanと同じ
@@ -414,7 +428,7 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 |---|---|
 | `/` | ホーム（指数・注目銘柄） |
 | `/stock/<code>` | 銘柄詳細（チャート・業績・理論株価・メモ）。四半期業績は単独3か月値をQ1〜Q4表示し、最新四半期の増収増益等の評価・加速/減速・前年同期比・利益率・会社予想進捗を結論カードで表示。グラフ横軸はQ×決算期の2段階層、比較表は指標×四半期の横持ち（スマホは最新列へ自動スクロール） |
-| `/screen` + `/api/screen` | スクリーニング（条件stateはDOM非依存のJSオブジェクト `_cmin/_cmax/_cflg`）。株価カードは表示範囲に近づいた時にチャートを描画し、カード下部の3列にPER・PBR・配当利回りを表示する |
+| `/screen` + `/api/screen` | スクリーニング（条件stateはDOM非依存のJSオブジェクト `_cmin/_cmax/_cflg`）。`screening_snapshots` の最新 `ready` を読み、ライブ表を部分JOINしない。株価カードは表示範囲に近づいた時にチャートを描画する |
 | `/api/period_stats` | 任意期間（days=N or from=日付）の騰落率・高安レンジ幅。スクリーニングの期間騰落条件📅で使用。バックテストでは期間条件は無視される |
 | `/api/screen_asof` `/api/backtest` `/api/backtest_dates` | バックテスト（週次スナップショット、TOPIX ETF 1306がベンチマーク） |
 | `/valuation` + `/api/theoretical/<code>` | 理論株価ランキング・個別シミュレーション |
@@ -461,6 +475,7 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 | 再計算・適用範囲 | `corporate_action_projection_state` / `data_coverage_state` | consumerごとの必要/completed digestと、新規上場待ち・対象外市場・品質保留を欠損と区別 |
 | 指標 | `price_stats` / `price_stats_current` | compute_price_stats（最新値と元の価格版。参照ビューは公開価格と版が一致する指標だけを返す） |
 | 指標 | `price_stats_history` | compute_stats_history.py（週次・バックテスト用） |
+| スクリーニング公開版 | `screening_snapshots` | screening_snapshot.py / compute_stats_history.py（日付・内容digest・品質件数・圧縮済み共通API行。全1行を原子的に保存し、`ready`のみ公開。失敗時は前回版を維持） |
 | 指標 | `stock_metrics_history` | 旧方式（archive/compute_metrics_history.py）。現役コードから参照なし・更新停止 |
 | 分析 | `theoretical_values` | compute_theoretical.py |
 | 分析 | `rankings` `swing_scores` `price_events` | 各計算モジュール |
