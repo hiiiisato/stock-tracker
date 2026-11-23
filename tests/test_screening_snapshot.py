@@ -4,7 +4,7 @@ import zlib
 from datetime import date
 
 from compute_price_stats import STAT_COLS
-from compute_stats_history import EXTRA_COLS, HISTORY_COLS, _pit_fm
+from compute_stats_history import EXTRA_COLS, HISTORY_COLS, _pit_extra, _pit_fm
 from screening_snapshot import matches_conditions, publish_snapshot, serialize_history_rows
 
 
@@ -53,14 +53,36 @@ class ScreeningSnapshotTest(unittest.TestCase):
     def test_common_serializer_produces_high_dividend_value_input(self):
         stocks = serialize_history_rows(
             _MetadataCursor(),
-            [self._history_row()],
+            [self._history_row(dev_ma75=-20)],
             HISTORY_COLS,
         )
 
         self.assertEqual(1, len(stocks))
         self.assertTrue(matches_conditions(stocks[0]))
-        self.assertEqual(7.32, stocks[0]["dev_ma75"])
+        self.assertEqual(-20, stocks[0]["dev_ma75"])
         self.assertAlmostEqual(5.14, stocks[0]["dev_ma50"], places=2)
+
+    def test_roe_uses_average_equity_like_stock_page(self):
+        latest = {
+            "teq": 399_188.5,
+            "ta": 1_055_223.3,
+            "ni": 38_481.0,
+            "opi": 37_662.2,
+            "rev": 506_849.5,
+            "tdebt": 0,
+        }
+        prior = {
+            "teq": 359_248.3,
+            "ta": 936_013.5,
+            "ni": 47_650.9,
+            "opi": 47_955.9,
+            "rev": 480_367.0,
+            "tdebt": 0,
+        }
+
+        metrics = _pit_extra([latest, prior], 3312, 295.25, 100, 130.3)
+
+        self.assertEqual(10.15, metrics["roe"])
 
     def test_unknown_cashflow_is_not_treated_as_negative(self):
         fm = _pit_fm([{

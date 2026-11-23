@@ -5681,10 +5681,10 @@ def _build_screen_page() -> str:
 <script>
 (function(){{
   var STRATS=[
-    {{name:'① 高配当バリュー',desc:'直近12か月配当×最新年次実績の割安性・ROE。流動性とMA75上で下落トレンドも除外。',
+    {{name:'① 高配当バリュー',desc:'直近12か月配当×最新年次実績の割安性・ROE。営業CFと流動性も確認。',
       conds:[{{f:'div_yield',op:'>=',val:3,lbl:'直近12か月配当3%+'}},{{f:'pbr',op:'<=',val:1.5,lbl:'実績PBR≤1.5倍'}},
              {{f:'roe',op:'>=',val:10,lbl:'実績ROE≥10%'}},{{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}},
-             {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}},{{f:'dev_ma75',op:'>=',val:0,lbl:'株価>MA75'}}],
+             {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}}],
       cols:['name','close','change_pct','div_yield','pbr','per','roe','roic','cf_positive'],sort:'div_yield-desc'}},
     {{name:'② 高ROEグロース',desc:'ROE20%以上・ROIC10%以上・CF黒字・営業利益率15%以上の高資本効率優良成長株。',
       conds:[{{f:'roe',op:'>=',val:20,lbl:'ROE≥20%'}},{{f:'roic',op:'>=',val:10,lbl:'ROIC≥10%'}},

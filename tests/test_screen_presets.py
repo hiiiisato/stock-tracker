@@ -31,6 +31,7 @@ class ScreenPresetDefinitionTest(unittest.TestCase):
         first = self._block("{{name:'① 高配当バリュー'", "{{name:'② 高ROEグロース'")
         for field, operator, value in HIGH_DIVIDEND_VALUE_CONDITIONS:
             self.assertIn(f"f:'{field}',op:'{operator}',val:{value}", first)
+        self.assertNotIn("f:'dev_ma75'", first)
 
     def test_last_preset_is_not_excluded_by_a_hard_coded_index(self):
         self.assertIn(

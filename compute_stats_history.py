@@ -246,14 +246,20 @@ def _pit_extra(known_annuals, price_D, ttm_eps, ann_dps, shares):
             per = None
     if known_annuals:
         a = known_annuals[0]
+        prior = known_annuals[1] if len(known_annuals) >= 2 else None
         eq, ta, ni, opi, rev, dbt = a["teq"], a["ta"], a["ni"], a["opi"], a["rev"], a["tdebt"]
+        prior_eq = prior["teq"] if prior else eq
+        prior_ta = prior["ta"] if prior else ta
+        avg_eq = (eq + prior_eq) / 2 if eq is not None and prior_eq is not None else eq
+        avg_ta = (ta + prior_ta) / 2 if ta is not None and prior_ta is not None else ta
         if eq and eq > 0 and shares and shares > 0 and price_D:
             bps = eq / shares
             pbr = _round(price_D / bps, 2) if bps > 0 else None
-        if ni is not None and eq and eq > 0:
-            roe = _round(ni / eq * 100, 2)
-        if ni is not None and ta and ta > 0:
-            roa = _round(ni / ta * 100, 4)
+        # ROE/ROAは個別画面と同じく、期首・期末の平均残高を分母にする。
+        if ni is not None and avg_eq and avg_eq > 0:
+            roe = _round(ni / avg_eq * 100, 2)
+        if ni is not None and avg_ta and avg_ta > 0:
+            roa = _round(ni / avg_ta * 100, 4)
         if opi is not None and rev and rev > 0:
             op_margin = _round(opi / rev * 100, 2)
         if dbt is not None and eq and eq > 0:

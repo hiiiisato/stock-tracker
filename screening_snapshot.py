@@ -21,7 +21,6 @@ HIGH_DIVIDEND_VALUE_CONDITIONS = (
     ("roe", ">=", 10),
     ("cf_positive", "=", 1),
     ("turnover_20d", ">=", 1),
-    ("dev_ma75", ">=", 0),
 )
 
 # 全プリセットが参照できる、週次スナップショット由来の共通項目。
