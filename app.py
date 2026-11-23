@@ -5684,14 +5684,14 @@ def _build_screen_page() -> str:
     {{name:'① 高配当バリュー',desc:'高配当×割安×ROE。流動性とMA75上（下落トレンドの罠回避）を追加（バックテストで対TOPIXほぼ互角の最上位クラス）。',
       conds:[{{f:'div_yield',op:'>=',val:3,lbl:'配当3%+'}},{{f:'pbr',op:'<=',val:1.5,lbl:'PBR≤1.5倍'}},
              {{f:'roe',op:'>=',val:10,lbl:'ROE≥10%'}},{{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}},
-             {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}},{{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}}],
+             {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}},{{f:'dev_ma75',op:'>=',val:0,lbl:'株価>MA75'}}],
       cols:['name','close','change_pct','div_yield','pbr','per','roe','roic','cf_positive'],sort:'div_yield-desc'}},
     {{name:'② 高ROEグロース',desc:'ROE20%以上・ROIC10%以上・CF黒字・営業利益率15%以上の高資本効率優良成長株。',
       conds:[{{f:'roe',op:'>=',val:20,lbl:'ROE≥20%'}},{{f:'roic',op:'>=',val:10,lbl:'ROIC≥10%'}},
              {{f:'cf_positive',op:'=',val:1,lbl:'営業CF黒字'}},{{f:'op_margin',op:'>=',val:15,lbl:'営業利益率≥15%'}}],
       cols:['name','close','change_pct','per','pbr','roe','roic','op_margin','rev_growth','eps_growth'],sort:'roe-desc'}},
     {{name:'③ トレンド初動',desc:'上昇トレンドの初動局面。MA25>MA75・52週高値圏・出来高増加が揃ったとき。',
-      conds:[{{f:'vs_ma25',op:'>=',val:0,lbl:'株価>MA25'}},{{f:'ma25_vs_ma75',op:'>=',val:0,lbl:'MA25>MA75'}},
+      conds:[{{f:'dev_ma25',op:'>=',val:0,lbl:'株価>MA25'}},{{f:'ma25_vs_ma75',op:'>=',val:0,lbl:'MA25>MA75'}},
              {{f:'dev_high52w',op:'>=',val:-10,lbl:'52週高値-10%内'}},{{f:'vol20_ratio',op:'>=',val:1.5,lbl:'出来高1.5倍+'}},
              {{f:'turnover_20d',op:'>=',val:10,lbl:'売買代金10億+'}}],
       cols:['name','close','change_pct','chg25d','dev_ma25','dev_high52w','vol20_ratio','turnover_20d','market_cap'],sort:'chg25d-desc'}},
@@ -5706,7 +5706,7 @@ def _build_screen_page() -> str:
       cols:['name','close','change_pct','chg25d','rev_growth','op_growth','eps_growth','roe','rsi14'],sort:'op_growth-desc'}},
     {{name:'⑥ 高値圏の静かな強さ',desc:'52週高値-5%圏で出来高が静か＝急騰前の蓄積局面。旧「V字反転」は全期間で劣後したため差し替え。',
       conds:[{{f:'dev_high52w',op:'>=',val:-5,lbl:'52週高値-5%圏'}},{{f:'vol20_ratio',op:'<=',val:1.2,lbl:'出来高静か(≤1.2倍)'}},
-             {{f:'vs_ma25',op:'>=',val:0,lbl:'株価>MA25'}},{{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}},
+             {{f:'dev_ma25',op:'>=',val:0,lbl:'株価>MA25'}},{{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}},
              {{f:'volatility_60d',op:'<=',val:40,lbl:'低ボラ(60日≤40%)'}}],
       cols:['name','close','change_pct','chg25d','dev_high52w','vol20_ratio','volatility_60d','turnover_20d','market_cap'],sort:'dev_high52w-desc'}},
     {{name:'⑦ 業績急成長',desc:'売上+20%・EPS+25%・ROE15%・営業利益率10%以上が揃った成長株。',
@@ -5735,12 +5735,12 @@ def _build_screen_page() -> str:
       cols:['name','close','change_pct','chg75d','rsi14','vol20_ratio','turnover_day','break_65d','macd_gc'],sort:'chg75d-desc'}},
     {{name:'⑫ 押し目買い',desc:'MA25付近に押してきた（乖離-5〜+2%）・MA75上・RSI40〜65。流動性条件を追加。',
       conds:[{{f:'dev_ma25',op:'>=',val:-5,lbl:'MA25乖離-5%以上'}},{{f:'dev_ma25',op:'<=',val:2,lbl:'MA25乖離+2%以下'}},
-             {{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}},{{f:'rsi14',op:'>=',val:40,lbl:'RSI≥40'}},{{f:'rsi14',op:'<=',val:65,lbl:'RSI≤65'}},
+             {{f:'dev_ma75',op:'>=',val:0,lbl:'株価>MA75'}},{{f:'rsi14',op:'>=',val:40,lbl:'RSI≥40'}},{{f:'rsi14',op:'<=',val:65,lbl:'RSI≤65'}},
              {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}}],
       cols:['name','close','change_pct','dev_ma25','dev_ma75','rsi14','vol20_ratio','chg75d','market_cap'],sort:'dev_ma25-asc'}},
     {{name:'⑬ MACD-GC',desc:'MACDがシグナルを上抜け。MA75上（中期トレンド内のGCのみ拾う）と流動性を追加。',
-      conds:[{{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC発生'}},{{f:'vs_ma25',op:'>=',val:0,lbl:'株価>MA25'}},
-             {{f:'rsi14',op:'>=',val:50,lbl:'RSI≥50'}},{{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}},
+      conds:[{{f:'macd_gc',op:'=',val:1,lbl:'MACD-GC発生'}},{{f:'dev_ma25',op:'>=',val:0,lbl:'株価>MA25'}},
+             {{f:'rsi14',op:'>=',val:50,lbl:'RSI≥50'}},{{f:'dev_ma75',op:'>=',val:0,lbl:'株価>MA75'}},
              {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}}],
       cols:['name','close','change_pct','rsi14','macd','macd_signal','dev_ma25','vol20_ratio','chg25d'],sort:'chg25d-desc'}},
     {{name:'⑭ 増配・高配当',desc:'配当利回り2%以上・配当性向50%以下（増配余地）・ROE10%以上・CF黒字。流動性条件を追加。',
@@ -5750,11 +5750,11 @@ def _build_screen_page() -> str:
       cols:['name','close','change_pct','div_yield','payout_ratio','pbr','roe','rev_growth','market_cap'],sort:'div_yield-desc'}},
     {{name:'⑮ 業績+チャート複合',desc:'売上+15%・EPS+15%・ROE15%+・MA75上・出来高増加の総合戦略。流動性条件を追加。',
       conds:[{{f:'rev_growth',op:'>=',val:15,lbl:'売上+15%'}},{{f:'eps_growth',op:'>=',val:15,lbl:'EPS+15%'}},
-             {{f:'roe',op:'>=',val:15,lbl:'ROE≥15%'}},{{f:'vs_ma75',op:'>=',val:0,lbl:'株価>MA75'}},
+             {{f:'roe',op:'>=',val:15,lbl:'ROE≥15%'}},{{f:'dev_ma75',op:'>=',val:0,lbl:'株価>MA75'}},
              {{f:'vol20_ratio',op:'>=',val:1.3,lbl:'出来高1.3倍+'}},{{f:'turnover_20d',op:'>=',val:2,lbl:'売買代金2億+'}}],
       cols:['name','close','change_pct','rev_growth','eps_growth','roe','roic','chg25d','rsi14','vol20_ratio'],sort:'rev_growth-desc'}},
     {{name:'⑯ 高クオリティ×上昇初動',desc:'財務健全性スコア(F-score)6点以上＝収益性・利益の質・財務改善がそろった優良企業を、上昇に転じた初動(MA25上・25日騰落プラス・過熱前)で拾う。クオリティ・ファクター(F-score8-9で年率+13%超過の実証)の取り込み。',
-      conds:[{{f:'fscore',op:'>=',val:6,lbl:'F-score≥6'}},{{f:'vs_ma25',op:'>=',val:0,lbl:'株価>MA25'}},
+      conds:[{{f:'fscore',op:'>=',val:6,lbl:'F-score≥6'}},{{f:'dev_ma25',op:'>=',val:0,lbl:'株価>MA25'}},
              {{f:'chg25d',op:'>=',val:0,lbl:'25日騰落プラス'}},{{f:'chg25d',op:'<=',val:25,lbl:'25日+25%以内(過熱前)'}},
              {{f:'turnover_20d',op:'>=',val:1,lbl:'売買代金1億+'}}],
       cols:['name','close','change_pct','fscore','roe','op_margin','rev_growth','chg25d','rsi14','market_cap'],sort:'fscore-desc'}},
@@ -5897,7 +5897,7 @@ def _build_screen_page() -> str:
   function populateInputs(stratIdx){{
     _cmin={{}};_cmax={{}};_cflg={{}};
     var hw=document.getElementById('scHistWrap');if(hw)hw.style.display='none';scHistCond=null;
-    if(stratIdx>=0&&stratIdx<=14){{
+    if(stratIdx>=0&&stratIdx<STRATS.length){{
       STRATS[stratIdx].conds.forEach(function(c){{
         var fm=IMAP[c.f];if(!fm)return;
         var arr=fm[c.op];if(!arr)return;
