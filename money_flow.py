@@ -109,7 +109,7 @@ def _load_groups(cur) -> tuple[dict, dict]:
                ps.rev_growth, ps.op_growth, ps.close
         FROM stocks s
         LEFT JOIN sectors sec ON s.sector_id = sec.id
-        LEFT JOIN stock_fundamentals f ON f.code = s.code
+        LEFT JOIN screening_metrics_current f ON f.code = s.code
         LEFT JOIN price_stats_current ps ON ps.code = s.code
         WHERE s.is_active = 1 AND s.market_id IN (2, 3, 4)
     """)

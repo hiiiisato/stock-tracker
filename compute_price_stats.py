@@ -47,6 +47,7 @@ daily_run.py から毎日呼び出す。
 from datetime import date, timedelta
 from collections import defaultdict
 from config import get_conn, bulk_upsert
+from financial_metric_engine import growth_pct
 
 
 def _round(v, dec=2):
@@ -329,92 +330,54 @@ def _load_financials() -> dict[str, dict]:
     conn = get_conn()
     cur  = conn.cursor()
 
-    # 最新2期分の通期データ + stock_fundamentals
+    # 年次実績の取得元と共通指標は annual_performance に一本化する。
     cur.execute("""
-        SELECT f.code, f.period_end,
-               f.revenue, f.operating_income, f.ordinary_income, f.net_income,
-               f.total_assets, f.total_equity, f.total_debt, f.cf_operating,
-               s.shares_outstanding
-        FROM financials f
-        JOIN (
-            SELECT code,
-                   MAX(CASE WHEN rn=1 THEN period_end END) AS latest,
-                   MAX(CASE WHEN rn=2 THEN period_end END) AS prior
-            FROM (
-                SELECT code, period_end,
-                       ROW_NUMBER() OVER (PARTITION BY code ORDER BY period_end DESC) AS rn
-                FROM financials
-                WHERE period_type = 'A' AND period_end <= CURDATE()
-            ) ranked
-            WHERE rn <= 2
-            GROUP BY code
-        ) top2 ON f.code = top2.code
-              AND f.period_end IN (top2.latest, top2.prior)
-        LEFT JOIN stock_fundamentals s ON f.code = s.code
-        WHERE f.period_type = 'A' AND f.period_end <= CURDATE()
-        ORDER BY f.code, f.period_end DESC
-    """)  # period_end <= CURDATE(): 会社予想（未来期）が 'A' 行に混入するため実績のみに限定
-    # （成長率・F-score等を予想値で計算してしまう先読みを防ぐ）
-    rows = cur.fetchall()
+        SELECT s.code, f.shares_outstanding
+        FROM stocks s LEFT JOIN stock_fundamentals f ON f.code=s.code
+    """)
+    shares_by_code = {
+        code: (float(shares) if shares is not None else None)
+        for code, shares in cur.fetchall()
+    }
+    from financials_view import annual_performance
+    by_code = annual_performance(list(shares_by_code), cur=cur)
     cur.close()
     conn.close()
-
-    by_code: dict[str, list] = defaultdict(list)
-    for r in rows:
-        by_code[r[0]].append(r)
 
     result = {}
     for code, periods in by_code.items():
         if not periods:
             continue
 
-        latest = periods[0]
-        prior  = periods[1] if len(periods) >= 2 else None
+        latest = periods[-1]
+        prior = periods[-2] if len(periods) >= 2 else None
 
-        rev_l  = float(latest[2])  if latest[2]  is not None else None
-        opi_l  = float(latest[3])  if latest[3]  is not None else None
-        ord_l  = float(latest[4])  if latest[4]  is not None else None
-        ni_l   = float(latest[5])  if latest[5]  is not None else None
-        ta_l   = float(latest[6])  if latest[6]  is not None else None
-        eq_l   = float(latest[7])  if latest[7]  is not None else None
-        dbt_l  = float(latest[8])  if latest[8]  is not None else None
-        cfo_l  = float(latest[9])  if latest[9]  is not None else None
-        shr    = float(latest[10]) if latest[10] is not None else None
+        rev_l = latest.get("revenue")
+        opi_l = latest.get("operating_income")
+        ord_l = latest.get("ordinary_income")
+        ni_l = latest.get("net_income")
+        ta_l = latest.get("total_assets")
+        eq_l = latest.get("net_assets")
+        cfo_l = latest.get("cf_operating")
+        shr = shares_by_code.get(code)
 
-        rev_p  = float(prior[2])  if (prior and prior[2]  is not None) else None
-        opi_p  = float(prior[3])  if (prior and prior[3]  is not None) else None
-        ord_p  = float(prior[4])  if (prior and prior[4]  is not None) else None
-        ni_p   = float(prior[5])  if (prior and prior[5]  is not None) else None
-        ta_p   = float(prior[6])  if (prior and prior[6]  is not None) else None
-        eq_p   = float(prior[7])  if (prior and prior[7]  is not None) else None
+        rev_p = prior.get("revenue") if prior else None
+        opi_p = prior.get("operating_income") if prior else None
+        ord_p = prior.get("ordinary_income") if prior else None
+        ni_p = prior.get("net_income") if prior else None
+        ta_p = prior.get("total_assets") if prior else None
+        eq_p = prior.get("net_assets") if prior else None
 
-        def yoy(new, old):
-            if new is None or old is None or old == 0:
-                return None
-            return (new / old - 1) * 100
-
-        rev_growth = yoy(rev_l, rev_p)
-        op_growth  = yoy(opi_l, opi_p)
-        ord_growth = yoy(ord_l, ord_p)
+        rev_growth = growth_pct(rev_l, rev_p)
+        op_growth = growth_pct(opi_l, opi_p)
+        ord_growth = growth_pct(ord_l, ord_p)
 
         eps_l = (ni_l / shr) if (ni_l is not None and shr and shr > 0) else None
         eps_p = (ni_p / shr) if (ni_p is not None and shr and shr > 0) else None
-        eps_growth = yoy(eps_l, eps_p)
-
-        # ROIC = 営業利益 / (自己資本 + 有利子負債) × 100
-        roic = None
-        cap = (eq_l or 0) + (dbt_l or 0)
-        if opi_l is not None and cap > 0:
-            roic = opi_l / cap * 100
+        eps_growth = growth_pct(eps_l, eps_p)
 
         # 未取得と営業CFマイナスを区別する。
         cf_positive = None if cfo_l is None else (1 if cfo_l > 0 else 0)
-
-        # 自己資本比率 = 自己資本 / 総資産
-        equity_ratio = eq_l / ta_l * 100 if (eq_l is not None and ta_l and ta_l > 0) else None
-
-        # 経常利益率 = 経常利益 / 売上高
-        ord_margin   = ord_l / rev_l * 100 if (ord_l is not None and rev_l and rev_l > 0) else None
 
         # 1株あたり CFO・売上高（当日終値と組み合わせて PCFR/PSR を計算するため）
         cfo_per_share = cfo_l / shr if (cfo_l is not None and shr and shr > 0) else None
@@ -429,10 +392,10 @@ def _load_financials() -> dict[str, dict]:
             "op_growth":     _round(op_growth),
             "ord_growth":    _round(ord_growth),
             "eps_growth":    _round(eps_growth),
-            "roic":          _round(roic),
+            "roic":          _round(latest.get("roic_pct")),
             "cf_positive":   cf_positive,
-            "equity_ratio":  _round(equity_ratio),
-            "ord_margin":    _round(ord_margin),
+            "equity_ratio":  _round(latest.get("equity_ratio_pct")),
+            "ord_margin":    _round(latest.get("ordinary_margin_pct")),
             "cfo_per_share": cfo_per_share,
             "rev_per_share": rev_per_share,
             "fscore":        fscore,

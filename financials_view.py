@@ -7,13 +7,14 @@ canonical financials（TDnet > Yahoo）を基準に、同一年度の値が整�
 from __future__ import annotations
 
 from config import get_conn
+from financial_metric_engine import enrich_annual_series
 from financials_store import financial_rows_consistent
 
 
 _VALUE_KEYS = (
     "revenue", "gross_profit", "operating_income", "ordinary_income",
     "profit_before_tax", "net_income", "total_assets", "net_assets",
-    "cf_operating", "roe_official", "dividend_per_share", "eps",
+    "total_debt", "cf_operating", "roe_official", "dividend_per_share", "eps",
 )
 
 
@@ -95,6 +96,8 @@ def _merge_annual_records(edinet_rows: list[dict], fallback_rows: list[dict]) ->
             item["secondary_profit"] = item.get("ordinary_income")
             item["secondary_profit_label"] = "経常利益"
         result.setdefault(code, []).append(item)
+    for code, rows in result.items():
+        result[code] = enrich_annual_series(rows)
     return result
 
 
@@ -125,6 +128,8 @@ def annual_performance(codes: list[str], cur=None) -> dict[str, list[dict]]:
                 "operating_income": _f(r[5]), "ordinary_income": _f(r[6]),
                 "profit_before_tax": _f(r[7]), "net_income": _f(r[8]),
                 "total_assets": _f(r[9]), "net_assets": _f(r[10]) or _f(r[11]),
+                # EDINETの「負債合計」は有利子負債と同義ではないため代用しない。
+                "total_debt": None,
                 "cf_operating": _f(r[12]), "roe_official": _f(r[13]),
                 "dividend_per_share": _f(r[14]), "eps": _f(r[15]),
                 "accounting_standard": r[16],
@@ -132,13 +137,14 @@ def annual_performance(codes: list[str], cur=None) -> dict[str, list[dict]]:
 
         cur.execute(f"""
             SELECT code, period_end, revenue, gross_profit, operating_income,
-                   ordinary_income, net_income, total_assets, total_equity, cf_operating
+                   ordinary_income, net_income, total_assets, total_equity,
+                   total_debt, cf_operating
             FROM financials
             WHERE code IN ({ph}) AND period_type='A' AND period_end <= CURDATE()
             ORDER BY code, period_end
         """, (*codes,))
         fallback_rows = []
-        for code, pe, rev, gp, op, ordi, net, ta, te, cfo in cur.fetchall():
+        for code, pe, rev, gp, op, ordi, net, ta, te, debt, cfo in cur.fetchall():
             net_value, equity_value = _f(net), _f(te)
             fallback_rows.append({
                 "code": code, "fiscal_year": int(str(pe)[:4]), "period_end": pe,
@@ -146,11 +152,11 @@ def annual_performance(codes: list[str], cur=None) -> dict[str, list[dict]]:
                 "operating_income": _f(op), "ordinary_income": _f(ordi),
                 "profit_before_tax": None, "net_income": net_value,
                 "total_assets": _f(ta), "net_assets": equity_value,
+                "total_debt": _f(debt),
                 "cf_operating": _f(cfo),
-                "roe_official": (
-                    net_value / equity_value
-                    if net_value is not None and equity_value else None
-                ),
+                # 公式ROEが無い行は「公式値」を捏造しない。
+                # enrich_annual_seriesが共通式（平均自己資本）で補完する。
+                "roe_official": None,
                 "dividend_per_share": None, "eps": None,
                 "accounting_standard": None,
             })

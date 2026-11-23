@@ -13,6 +13,7 @@ from datetime import date
 from typing import Any, Iterable, Sequence
 
 from config import get_conn
+from financial_metric_engine import FINANCIAL_FORMULA_VERSION
 
 
 HIGH_DIVIDEND_VALUE_CONDITIONS = (
@@ -45,7 +46,7 @@ _CURRENT_EXTRA_FIELDS = (
     "buyback_recent", "rev_cagr_5y", "profit_cagr_5y", "consec_rev_growth",
     "consec_profit_growth", "consec_div_growth", "roe_5y_avg", "roa_5y_avg",
     "opm_5y_avg", "is_record_profit", "roe_delta_3y", "roe_driver_3y",
-    "net_margin", "eps", "bps", "dps",
+    "eps", "bps", "dps",
 )
 
 
@@ -61,12 +62,19 @@ def ensure_schema() -> None:
             status VARCHAR(16) NOT NULL,
             row_count INT NOT NULL,
             quality_json TEXT,
+            financial_formula_version VARCHAR(32) NULL,
             payload LONGBLOB NOT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             published_at DATETIME NULL,
             KEY idx_screening_ready (status, snapshot_date, published_at)
         )
     """)
+    cur.execute("SHOW COLUMNS FROM screening_snapshots")
+    if "financial_formula_version" not in {row[0] for row in cur.fetchall()}:
+        cur.execute(
+            "ALTER TABLE screening_snapshots "
+            "ADD COLUMN financial_formula_version VARCHAR(32) NULL"
+        )
     conn.commit()
     cur.close()
     conn.close()
@@ -97,7 +105,6 @@ def _stock_metadata(cur, include_current_supplement: bool) -> dict[str, dict[str
                fm.consec_rev_growth, fm.consec_profit_growth, fm.consec_div_growth,
                fm.roe_5y_avg, fm.roa_5y_avg, fm.opm_5y_avg,
                fm.is_record_profit, fm.roe_delta_3y, fm.roe_driver_3y,
-               f.profit_margin,
                CASE WHEN v.code IS NOT NULL THEN v.eps_latest_annual ELSE f.eps_ttm END,
                CASE WHEN v.code IS NOT NULL THEN v.bps_latest ELSE f.bps END,
                CASE WHEN v.code IS NOT NULL THEN v.dps_company_forecast ELSE f.annual_dps END
@@ -146,10 +153,9 @@ def _stock_metadata(cur, include_current_supplement: bool) -> dict[str, dict[str
             "is_record_profit": _int_or_none(r[16]),
             "roe_delta_3y": _float(r[17]),
             "roe_driver_3y": _int_or_none(r[18]),
-            "net_margin": float(r[19]) * 100 if r[19] is not None else None,
-            "eps": _float(r[20]),
-            "bps": _float(r[21]),
-            "dps": _float(r[22]),
+            "eps": _float(r[19]),
+            "bps": _float(r[20]),
+            "dps": _float(r[21]),
         }
     return result
 
@@ -190,6 +196,7 @@ def serialize_history_rows(
             "div_yield": _float(value("div_yield")),
             "market_cap": int(value("market_cap")) if value("market_cap") is not None else None,
             "op_margin": _float(value("op_margin")),
+            "net_margin": _float(value("net_margin")),
             "payout_ratio": _float(value("payout_ratio")),
             "roa": _float(value("roa")),
             "debt_to_equity": _float(value("debt_to_equity")),
@@ -266,6 +273,7 @@ def _quality(stocks: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "dividend_count": sum(s.get("div_yield") is not None for s in stocks),
         "cashflow_count": sum(s.get("cf_positive") is not None for s in stocks),
         "high_dividend_value_count": sum(matches_conditions(s) for s in stocks),
+        "financial_formula_version": FINANCIAL_FORMULA_VERSION,
     }
 
 
@@ -301,20 +309,23 @@ def publish_snapshot(cur, snapshot_date: date, stocks: Sequence[dict[str, Any]])
         ordered_stocks, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode()
     content_digest = hashlib.sha256(payload_json).hexdigest()
-    snapshot_id = hashlib.sha256(f"{snapshot_date}:{content_digest}".encode()).hexdigest()
+    snapshot_id = hashlib.sha256(
+        f"{snapshot_date}:{FINANCIAL_FORMULA_VERSION}:{content_digest}".encode()
+    ).hexdigest()
     quality_json = json.dumps(quality, ensure_ascii=False, sort_keys=True)
     compressed_payload = zlib.compress(payload_json, level=9)
 
     cur.execute("""
         INSERT INTO screening_snapshots
             (snapshot_id, snapshot_date, content_digest, status, row_count,
-             quality_json, payload, published_at)
-        VALUES (%s, %s, %s, 'ready', %s, %s, %s, CURRENT_TIMESTAMP)
+             quality_json, financial_formula_version, payload, published_at)
+        VALUES (%s, %s, %s, 'ready', %s, %s, %s, %s, CURRENT_TIMESTAMP)
         ON DUPLICATE KEY UPDATE status='ready', row_count=VALUES(row_count),
                                 quality_json=VALUES(quality_json), payload=VALUES(payload),
+                                financial_formula_version=VALUES(financial_formula_version),
                                 published_at=CURRENT_TIMESTAMP
     """, (snapshot_id, snapshot_date, content_digest, len(stocks), quality_json,
-          compressed_payload))
+          FINANCIAL_FORMULA_VERSION, compressed_payload))
     return snapshot_id
 
 

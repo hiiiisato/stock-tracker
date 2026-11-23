@@ -5776,7 +5776,7 @@ def _build_screen_page() -> str:
     net_margin:{{h:'純利益率%',cls:'num'}},eps:{{h:'EPS',cls:'num'}},bps:{{h:'BPS',cls:'num'}},
     dps:{{h:'1株配当',cls:'num'}},roa:{{h:'ROA%',cls:'num'}},psr:{{h:'PSR',cls:'num'}},
     pcfr:{{h:'PCFR',cls:'num'}},payout_ratio:{{h:'配当性向%',cls:'num'}},
-    equity_ratio:{{h:'自己資本比率%',cls:'num'}},debt_to_equity:{{h:'D/E',cls:'num'}},
+    equity_ratio:{{h:'自己資本比率%',cls:'num'}},debt_to_equity:{{h:'D/E%',cls:'num'}},
     roic:{{h:'ROIC%',cls:'num'}},op_growth:{{h:'営業益成長%',cls:'num'}},eps_growth:{{h:'EPS成長%',cls:'num'}},
     macd:{{h:'MACD',cls:'num'}},macd_signal:{{h:'Signal',cls:'num'}},macd_gc:{{h:'GC',cls:'num'}},
     vol20_ratio:{{h:'出来高比',cls:'num'}},turnover_day:{{h:'売買代金',cls:'num'}},
@@ -6315,7 +6315,7 @@ def _build_screen_page() -> str:
     {{cat:'バリュー',id:'pout', lbl:'配当性向',   field:'payout_ratio',  minId:'f-pout-min', maxId:'f-pout-max', unit:'%',  step:1}},
     {{cat:'バリュー',id:'ey',   lbl:'益利回り',   field:'earnings_yield',minId:'f-ey-min',   maxId:'f-ey-max',   unit:'%',  step:0.1}},
     {{cat:'バリュー',id:'eq',   lbl:'自己資本比率',field:'equity_ratio',  minId:'f-eq-min',   maxId:'f-eq-max',   unit:'%',  step:1}},
-    {{cat:'バリュー',id:'de',   lbl:'D/Eレシオ',  field:'debt_to_equity',minId:'f-de-min',   maxId:'f-de-max',   unit:'x',  step:0.1}},
+    {{cat:'バリュー',id:'de',   lbl:'D/Eレシオ',  field:'debt_to_equity',minId:'f-de-min',   maxId:'f-de-max',   unit:'%',  step:1}},
     {{cat:'バリュー',id:'psr',  lbl:'PSR',       field:'psr',           minId:'f-psr-min',  maxId:'f-psr-max',  unit:'倍', step:0.1}},
     {{cat:'バリュー',id:'pcfr', lbl:'PCFR',      field:'pcfr',          minId:'f-pcfr-min', maxId:'f-pcfr-max', unit:'倍', step:0.1}},
     {{cat:'バリュー',id:'beta', lbl:'Beta',      field:'beta',          minId:'f-beta-min', maxId:'f-beta-max', unit:'',   step:0.1}},
@@ -7498,15 +7498,13 @@ def _build_stock_page(code: str) -> str:
     # ファンダメンタルズ（列名で取得してdict化 → 列順変更に強い）
     cur.execute("""
         SELECT code, shares_outstanding, eps_ttm, eps_forward, bps,
-               dividend_rate, annual_dps, payout_ratio, roe, roa, debt_to_equity,
-               operating_margin, profit_margin, beta, market_cap,
+               dividend_rate, annual_dps, payout_ratio, beta, market_cap,
                per, pbr, div_yield, updated_at
         FROM stock_fundamentals WHERE code = %s
     """, (code,))
     fund_raw = cur.fetchone()
     fund_cols = ["code","shares_outstanding","eps_ttm","eps_forward","bps",
-                 "dividend_rate","annual_dps","payout_ratio","roe","roa","debt_to_equity",
-                 "operating_margin","profit_margin","beta","market_cap",
+                 "dividend_rate","annual_dps","payout_ratio","beta","market_cap",
                  "per","pbr","div_yield","updated_at"]
     fund = dict(zip(fund_cols, fund_raw)) if fund_raw else {}
 
@@ -7576,6 +7574,16 @@ def _build_stock_page(code: str) -> str:
                 row.get("operating_income"), row.get("secondary_profit"),
                 row.get("net_income"), row.get("total_assets"),
                 row.get("net_assets"), row.get("cf_operating"),
+                {
+                    "roe_actual_pct": row.get("roe_actual_pct"),
+                    "roa_actual_pct": row.get("roa_actual_pct"),
+                    "operating_margin_pct": row.get("operating_margin_pct"),
+                    "ordinary_margin_pct": row.get("ordinary_margin_pct"),
+                    "net_margin_pct": row.get("net_margin_pct"),
+                    "debt_to_equity_pct": row.get("debt_to_equity_pct"),
+                    "formula_version": row.get("formula_version"),
+                    "input_digest": row.get("input_digest"),
+                },
             )
             for row in _annual_records if row.get("period_end") is not None
         ]
@@ -7774,8 +7782,7 @@ def _build_stock_page(code: str) -> str:
                 conn2 = get_conn(); cur2 = conn2.cursor()
                 cur2.execute("""
                     SELECT code, shares_outstanding, eps_ttm, eps_forward, bps,
-                           dividend_rate, annual_dps, payout_ratio, roe, roa, debt_to_equity,
-                           operating_margin, profit_margin, beta, market_cap,
+                           dividend_rate, annual_dps, payout_ratio, beta, market_cap,
                            per, pbr, div_yield, updated_at
                     FROM stock_fundamentals WHERE code = %s
                 """, (code,))
@@ -7814,11 +7821,7 @@ def _build_stock_page(code: str) -> str:
     bps_val  = _vv("bps_latest") if valuation else _fv("bps")
     ann_dps  = _fv("annual_dps")
     payout   = _fv("payout_ratio")
-    roe      = _fv("roe")
-    roa      = _fv("roa")
-    dte      = _fv("debt_to_equity")
-    op_mgn   = _fv("operating_margin")
-    pr_mgn   = _fv("profit_margin")
+    roe = roa = dte = op_mgn = pr_mgn = None
     beta     = _fv("beta")
 
     # 最新株価で再計算（PER/PBR/時価総額は毎日変わる）
@@ -7875,11 +7878,10 @@ def _build_stock_page(code: str) -> str:
     def _to_oku(v):
         return round(float(v) / 1e8, 1) if v is not None else None
 
+    from financial_metric_engine import forecast_roe_pct, percent_ratio
+
     def _safe_pct(a, b):
-        try:
-            return round(float(a) / float(b) * 100, 1) if a is not None and b and float(b) != 0 else None
-        except Exception:
-            return None
+        return percent_ratio(a, b, 1)
 
     # 配当の権利落ち日リスト（決算期ベースの集計に使う）
     _div_events = sorted((str(_ex_date), float(_amount or 0)) for _ex_date, _amount in div_all_rows)
@@ -7914,6 +7916,7 @@ def _build_stock_page(code: str) -> str:
         #   [6]total_assets [7]total_equity [8]cf_operating
         # r indices (forecast):   [0]fiscal_year_end [1]revenue
         #   [2]operating_income [3]ordinary_income [4]net_income [5]div_per_share
+        # r[9]: annual_performanceが共通指標エンジンで作った年次指標。
         # latest_te: 最新実績の自己資本（予想ROE計算用）
         result = []
         _today = str(date.today())
@@ -7967,16 +7970,9 @@ def _build_stock_page(code: str) -> str:
                 dps = round(_plan_dps, 1)   # 実績が計画未達（期中） → 計画値で補完
             else:
                 dps = round(_actual_dps, 1) if _actual_dps > 0 else None
-            # ROE = 純利益 ÷ 平均自己資本（当期・前期平均）× 100
-            cur_te = float(r[7]) if r[7] is not None else None
-            cur_ta = float(r[6]) if r[6] is not None else None
-            prev_te = float(rows[i-1][7]) if i > 0 and rows[i-1][7] is not None else cur_te
-            prev_ta = float(rows[i-1][6]) if i > 0 and rows[i-1][6] is not None else cur_ta
-            avg_te = (cur_te + prev_te) / 2 if cur_te is not None and prev_te is not None else cur_te
-            avg_ta = (cur_ta + prev_ta) / 2 if cur_ta is not None and prev_ta is not None else cur_ta
-            roe_val = _safe_pct(r[5], avg_te)
-            # ROA = 純利益 ÷ 平均総資産 × 100
-            roa_val = _safe_pct(r[5], avg_ta)
+            annual_metrics = r[9] if len(r) > 9 and isinstance(r[9], dict) else {}
+            roe_val = annual_metrics.get("roe_actual_pct")
+            roa_val = annual_metrics.get("roa_actual_pct")
             # EPS = 当期純利益(円) / 発行済株式数
             eps_val = None
             if normalized_tables_ready and not is_quarterly:
@@ -8007,11 +8003,18 @@ def _build_stock_page(code: str) -> str:
                 ),
                 "revenue": rev, "op": op, "ord": ord_, "net": net,
                 "total_assets": ta, "total_equity": te, "cf_op": cf,
-                "op_mgn":  _safe_pct(r[3], r[2]),
-                "ord_mgn": _safe_pct(r[4], r[2]),
-                "net_mgn": _safe_pct(r[5], r[2]),
+                "op_mgn": (annual_metrics.get("operating_margin_pct")
+                           if annual_metrics.get("operating_margin_pct") is not None
+                           else _safe_pct(r[3], r[2])),
+                "ord_mgn": (annual_metrics.get("ordinary_margin_pct")
+                            if annual_metrics.get("ordinary_margin_pct") is not None
+                            else _safe_pct(r[4], r[2])),
+                "net_mgn": (annual_metrics.get("net_margin_pct")
+                            if annual_metrics.get("net_margin_pct") is not None
+                            else _safe_pct(r[5], r[2])),
                 "dps": dps, "payout": payout_val,
                 "roe": roe_val, "roa": roa_val,
+                "debt_to_equity": annual_metrics.get("debt_to_equity_pct"),
                 "eps": eps_val, "bps": bps_val_row,
                 "quarter_no": quarter_no, "fiscal_year_label": fiscal_year_label,
                 "is_forecast": is_future,
@@ -8044,10 +8047,8 @@ def _build_stock_page(code: str) -> str:
                 if normalized_tables_ready:
                     fc_roe = normalized_forecasts.get(fend, {}).get("roe")
                 elif r[4] is not None and latest_te:
-                    try:
-                        fc_roe = round(float(r[4]) / float(latest_te) * 100, 1)
-                    except Exception:
-                        pass
+                    fc_roe = forecast_roe_pct(r[4], latest_te)
+                    fc_roe = round(fc_roe, 1) if fc_roe is not None else None
                 result.append({
                     "label": lbl, "period_end": fend,
                     "revenue": rev, "op": op, "ord": ord_, "net": net,
@@ -8192,6 +8193,8 @@ def _build_stock_page(code: str) -> str:
             op_mgn = round(_r['op_mgn'] / 100, 4)
         if _r.get('net_mgn') is not None:
             pr_mgn = round(_r['net_mgn'] / 100, 4)
+        if _r.get('debt_to_equity') is not None:
+            dte = _r['debt_to_equity']
         # 配当性向
         if _r.get('payout') is not None:
             payout = round(_r['payout'] / 100, 4)
@@ -8364,7 +8367,7 @@ def _build_stock_page(code: str) -> str:
         return "color:#E84040" if pos else "color:#3A9FE0"
 
     # ─ キーメトリクス 4カード ─
-    has_fund = bool(fund)
+    has_fund = bool(fund or _fin_acts)
     def _km(label, val, sub="", color=""):
         col = f";{color}" if color else ""
         return f"""<div class="km-card">
@@ -8621,7 +8624,7 @@ def _build_stock_page(code: str) -> str:
   {_mp_row("営業利益率",           _pct(op_mgn), _color(op_mgn))}
   {_mp_row("純利益率",             _pct(pr_mgn), _color(pr_mgn))}
   <div class="mp-row" style="background:#0d1117"></div>
-  {_mp_row("D/E比率",  _fmtv(dte, "{:.1f}", "倍"),
+  {_mp_row("D/E比率",  _fmtv(dte, "{:.1f}", "%"),
            "color:#E84040" if dte and dte > 150 else "")}
   {_mp_row("配当性向",             _pct(payout))}
   {_mp_row("PER（予想）",
@@ -10816,6 +10819,7 @@ def api_perf_grid():
         return _json.dumps({"error": "invalid"}), 400
 
     from financials_view import annual_performance, annual_forecast
+    from financial_metric_engine import percent_ratio
     conn = get_conn(); cur = conn.cursor()
     perf = annual_performance(codes, cur=cur)
     fcmap = annual_forecast(codes, cur=cur)
@@ -10830,7 +10834,7 @@ def api_perf_grid():
         return round(float(v) / 1e8, 1) if v is not None else None
 
     def _pct(a, b):
-        return round(float(a) / float(b) * 100, 1) if a is not None and b else None
+        return percent_ratio(a, b, 1)
 
     _PK = [("operating_income", "営業益"), ("ordinary_income", "経常益"),
            ("net_income", "純益")]
@@ -10855,7 +10859,10 @@ def api_perf_grid():
             d["net_margin"].append(_pct(r.get("net_income"), r.get("revenue")))
             d["profit"].append(_oku(r.get(pk)))
             d["profit_margin"].append(_pct(r.get(pk), r.get("revenue")))
-            d["roe"].append(round(r["roe_official"] * 100, 1) if r.get("roe_official") is not None else None)
+            d["roe"].append(
+                round(r["roe_actual_pct"], 1)
+                if r.get("roe_actual_pct") is not None else None
+            )
             d["eps"].append(round(r["eps"], 1) if r.get("eps") is not None else None)
             d["is_forecast"].append(is_fc)
 

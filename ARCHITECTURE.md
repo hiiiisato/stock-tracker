@@ -56,9 +56,17 @@ DB構造、取得元の優先順位、正本、公開ビュー、品質状態、
 
 `price_stats_history` をPIT計算原本、`screening_snapshots` を画面とバックテストの
 唯一の公開読取モデルとする。PER/PBR/ROE/配当利回りとテクニカル指標は
-`compute_stats_history.py` の同じ式で作り、現在画面だけ別のライブJOIN値に差し替えない。
+`financial_metric_engine.py` と `compute_stats_history.py` の同じ定義で作り、現在画面だけ別のライブJOIN値に差し替えない。
 配当利回りは直近12か月の実績配当、ROE/PBRは公開済みの最新年次実績に統一する。
-ROEは純利益÷期首・期末の平均自己資本、ROAは純利益÷平均総資産とし、個別画面と同じ式を使う。
+ROEは整合性検証済みのEDINET公式値を優先し、無い場合だけ純利益÷期首・期末の
+平均自己資本で補完する。ROAは純利益÷平均総資産。利益率・自己資本比率・ROICも
+同じ純粋計算エンジンを使い、個別画面・現在指標・PIT履歴で別式を持たない。
+一方、直近年次EPSとTTM EPS、実績ROEと予想ROEなど意味の異なる指標は別名・別定義のまま保持する。
+
+`price_stats_history` と `screening_snapshots` に `financial_formula_version` を保存する。
+バッチは `price_sync_state.financial_formula_version` と現行版を比較し、式が変わったときだけ
+全PIT履歴を自動再生成する。最新の完成済み行は `screening_metrics_current` で公開し、
+AIファンド・資金フロー・日次レポートも旧 `stock_fundamentals.roe` を再利用しない。
 バックテストで未公開情報を先読みしない。未取得はNULLとし、負値や0と区別する。
 
 バッチは全コードのAPI行をメモリ上で完成させ、件数と主要指標の有効数が
@@ -266,6 +274,9 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
   年度・項目単位でcanonicalと整合性検証済みEDINETを統合。業績カード、CAGR算出、銘柄詳細の年次財務がこれを通す。
   EDINET取得済みでも、まだ有報の無い最新TDnet年度を落とさない。IFRS/USGAAPは「経常利益」ではなく「税引前利益」を表示する。
   **枠集中のため edinet_texts/segments は一時停止中**（misc_batch.yml の `if: false`。キャッチアップ後に再開）
+- `financial_metric_engine.py` — **年次実績指標の唯一の純粋計算実装**。ROE/ROA/利益率/自己資本比率/
+  D/E/ROICと成長率を作り、式版と入力digestを付与する。年次実績の統合後に一度付与し、
+  `compute_price_stats` / `fundamentals_ext` / 銘柄詳細 / PIT履歴はその値を使う。
 - `earnings_calendar_jpx.py` — JPX公式「決算発表予定日」Excelを取込 → `earnings_schedule`（決算跨ぎ管理）
 - `fundamentals.py` — PER/PBR/時価総額等 → `stock_fundamentals`
 - `market_indices.py` — 海外・国内指数 → `market_index_prices`
@@ -325,7 +336,8 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
   `fscore` = 当サイト版 Piotroski F-score（`_fscore_7`・7点。標準9項目のうち流動比率/希薄化はデータ未保持で除外し、
   総負債→自己資本比率改善・粗利率→営業利益率改善で代替。クオリティ・ファクター。詳細は docs/capital_gains_strategy_survey.md）
 - `compute_stats_history.py` — 週次スナップショット → `price_stats_history`（PIT補正=期末+45日）。
-  fscore も PIT（`_pit_fm`）で再現・全履歴バックフィル済み。各日の全行保存後に `screening_snapshot.py` を通して公開用の完成版を作る
+  fscore も PIT（`_pit_fm`）で再現。式版変更時は全履歴を自動再生成する。各日の全行保存後に
+  `screening_snapshot.py` を通して公開用の完成版を作る。`screening_metrics_current` は最新日の行だけを返す
 - `screening_snapshot.py` — 現在画面とバックテストの共通読取モデル。同じ指標定義・NULLルールでAPI行を作り、`ready` の完成版だけを返す。財務未取得は不合格(0)ではなくNULLとする
 - `compute_theoretical.py` — はっしゃん式理論株価 → `theoretical_values`。係数は config.py
 - `theme_master.py` — **統一テーママスタ（みんかぶを正とする。2026-07再設計）**。
@@ -475,8 +487,8 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 | 現在価値指標 | `valuation_metrics_current` | valuation_metrics.py（公開価格と同じprice version/action digest/target basisのEPS/BPS/DPS/PER/PBR/利回り/時価総額） |
 | 再計算・適用範囲 | `corporate_action_projection_state` / `data_coverage_state` | consumerごとの必要/completed digestと、新規上場待ち・対象外市場・品質保留を欠損と区別 |
 | 指標 | `price_stats` / `price_stats_current` | compute_price_stats（最新値と元の価格版。参照ビューは公開価格と版が一致する指標だけを返す） |
-| 指標 | `price_stats_history` | compute_stats_history.py（週次・バックテスト用） |
-| スクリーニング公開版 | `screening_snapshots` | screening_snapshot.py / compute_stats_history.py（日付・内容digest・品質件数・圧縮済み共通API行。全1行を原子的に保存し、`ready`のみ公開。失敗時は前回版を維持） |
+| 指標 | `price_stats_history` / `price_stats_history_current` / `screening_metrics_current` | compute_stats_history.py（週次PIT履歴・価格版整合ビュー・最新完成行ビュー。式版を保存） |
+| スクリーニング公開版 | `screening_snapshots` | screening_snapshot.py / compute_stats_history.py（日付・内容digest・式版・品質件数・圧縮済み共通API行。全1行を原子的に保存し、`ready`のみ公開。失敗時は前回版を維持） |
 | 指標 | `stock_metrics_history` | 旧方式（archive/compute_metrics_history.py）。現役コードから参照なし・更新停止 |
 | 分析 | `theoretical_values` | compute_theoretical.py |
 | 分析 | `rankings` `swing_scores` `price_events` | 各計算モジュール |

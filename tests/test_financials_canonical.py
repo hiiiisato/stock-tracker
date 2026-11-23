@@ -123,6 +123,43 @@ class FinancialCanonicalMergeTests(unittest.TestCase):
         self.assertEqual(rows[0]["source"], "edinet")
         self.assertEqual(rows[1]["net_income"], 15_672_000_000.0)
 
+    def test_annual_view_calculates_missing_roe_from_average_equity(self):
+        fallback = [
+            {
+                "code": "7203", "fiscal_year": 2025,
+                "period_end": date(2025, 3, 31), "net_income": 47_650.9,
+                "net_assets": 359_248.3, "total_assets": 936_013.5,
+            },
+            {
+                "code": "7203", "fiscal_year": 2026,
+                "period_end": date(2026, 3, 31), "net_income": 38_481.0,
+                "net_assets": 399_188.5, "total_assets": 1_055_223.3,
+            },
+        ]
+
+        latest = _merge_annual_records([], fallback)["7203"][-1]
+
+        self.assertEqual(10.1475, latest["roe_actual_pct"])
+        self.assertEqual("calculated_average_balance", latest["roe_source"])
+
+    def test_annual_view_prefers_reported_roe(self):
+        edinet = [{
+            "code": "7203", "fiscal_year": 2026,
+            "period_end": date(2026, 3, 31), "net_income": 38_481.0,
+            "net_assets": 399_188.5, "total_assets": 1_055_223.3,
+            "roe_official": 0.101,
+        }]
+        fallback = [{
+            "code": "7203", "fiscal_year": 2026,
+            "period_end": date(2026, 3, 31), "net_income": 38_481.0,
+            "net_assets": 399_188.5, "total_assets": 1_055_223.3,
+        }]
+
+        latest = _merge_annual_records(edinet, fallback)["7203"][-1]
+
+        self.assertEqual(10.1, latest["roe_actual_pct"])
+        self.assertEqual("reported", latest["roe_source"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,7 +4,14 @@ import zlib
 from datetime import date
 
 from compute_price_stats import STAT_COLS
-from compute_stats_history import EXTRA_COLS, HISTORY_COLS, _pit_extra, _pit_fm
+from compute_stats_history import (
+    EXTRA_COLS,
+    HISTORY_COLS,
+    _missing_formula_snapshot_dates,
+    _pit_extra,
+    _pit_fm,
+)
+from financial_metric_engine import FINANCIAL_FORMULA_VERSION
 from screening_snapshot import matches_conditions, publish_snapshot, serialize_history_rows
 
 
@@ -25,6 +32,18 @@ class _PublishCursor:
 
     def fetchone(self):
         return None
+
+
+class _FormulaHistoryCursor:
+    def __init__(self, rows):
+        self.rows = rows
+        self.statement = None
+
+    def execute(self, sql, params=None):
+        self.statement = (sql, params)
+
+    def fetchall(self):
+        return self.rows
 
 
 class ScreeningSnapshotTest(unittest.TestCase):
@@ -84,6 +103,34 @@ class ScreeningSnapshotTest(unittest.TestCase):
 
         self.assertEqual(10.15, metrics["roe"])
 
+    def test_reported_roe_wins_over_calculated_roe(self):
+        latest = {
+            "teq": 399_188.5, "ta": 1_055_223.3, "ni": 38_481.0,
+            "opi": 37_662.2, "rev": 506_849.5, "tdebt": 0,
+            "roe_official": 0.101,
+        }
+        prior = {
+            "teq": 359_248.3, "ta": 936_013.5, "ni": 47_650.9,
+            "opi": 47_955.9, "rev": 480_367.0, "tdebt": 0,
+        }
+
+        metrics = _pit_extra([latest, prior], 3312, 295.25, 100, 130.3)
+
+        self.assertEqual(10.1, metrics["roe"])
+
+    def test_precomputed_engine_metrics_keep_net_margin(self):
+        latest = {
+            "teq": 400, "ta": 1_000, "ni": 40, "opi": 50, "rev": 500,
+            "tdebt": 100, "formula_version": FINANCIAL_FORMULA_VERSION,
+            "roe_actual_pct": 10.0, "roa_actual_pct": 4.0,
+            "operating_margin_pct": 10.0, "net_margin_pct": 8.0,
+            "debt_to_equity_pct": 25.0,
+        }
+
+        metrics = _pit_extra([latest], 1_000, 100, 30, 100)
+
+        self.assertEqual(8.0, metrics["net_margin"])
+
     def test_unknown_cashflow_is_not_treated_as_negative(self):
         fm = _pit_fm([{
             "rev": 100,
@@ -107,9 +154,24 @@ class ScreeningSnapshotTest(unittest.TestCase):
 
     def test_history_schema_is_still_single_ordered_contract(self):
         self.assertEqual(
-            ["code", "snapshot_date"] + STAT_COLS + EXTRA_COLS + ["market", "source_series_revision"],
+            ["code", "snapshot_date"] + STAT_COLS + EXTRA_COLS
+            + ["market", "source_series_revision", "financial_formula_version"],
             HISTORY_COLS,
         )
+
+    def test_formula_rebuild_targets_only_published_dates_without_current_version(self):
+        missing = _FormulaHistoryCursor([
+            (date(2026, 7, 7),),
+            (date(2026, 7, 8),),
+        ])
+        complete = _FormulaHistoryCursor([])
+
+        self.assertEqual(
+            [date(2026, 7, 7), date(2026, 7, 8)],
+            _missing_formula_snapshot_dates(missing),
+        )
+        self.assertEqual([], _missing_formula_snapshot_dates(complete))
+        self.assertIn("status='ready'", missing.statement[0])
 
     def test_publish_is_one_atomic_ready_row(self):
         cursor = _PublishCursor()
@@ -125,7 +187,8 @@ class ScreeningSnapshotTest(unittest.TestCase):
         insert_sql, params = cursor.statements[-1]
         self.assertIn("'ready'", insert_sql)
         self.assertNotIn("building", insert_sql)
-        stored = json.loads(zlib.decompress(params[5]))
+        self.assertEqual(FINANCIAL_FORMULA_VERSION, params[5])
+        stored = json.loads(zlib.decompress(params[6]))
         self.assertEqual("7203", stored[0]["code"])
 
 

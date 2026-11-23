@@ -361,12 +361,11 @@ def _fetch_inputs(code: str):
     cur  = conn.cursor()
     cur.execute("""
         WITH fin_eq AS (
-            SELECT code, total_equity, total_assets, net_income,
+            SELECT code, total_equity,
                    ROW_NUMBER() OVER (PARTITION BY code ORDER BY period_end DESC) AS rn
             FROM financials
             WHERE period_type = 'A'
               AND total_equity IS NOT NULL
-              AND total_assets IS NOT NULL AND total_assets > 0
         )
         SELECT ps.close,
                CASE WHEN v.code IS NOT NULL THEN v.eps_company_forecast ELSE sf.eps_forward END,
@@ -374,10 +373,7 @@ def _fetch_inputs(code: str):
                CASE WHEN v.code IS NOT NULL THEN v.bps_latest ELSE COALESCE(sf.bps,
                         CASE WHEN fe.total_equity IS NOT NULL AND sf.shares_outstanding > 0
                              THEN fe.total_equity / sf.shares_outstanding END) END AS bps,
-               COALESCE(sf.roa,
-                        CASE WHEN fe.net_income IS NOT NULL
-                             THEN fe.net_income / fe.total_assets END) AS roa,
-               COALESCE(ps.equity_ratio, fe.total_equity / fe.total_assets * 100) AS equity_ratio,
+               ps.equity_ratio,
                ps.ord_growth,
                CASE WHEN v.code IS NOT NULL THEN v.market_cap ELSE sf.market_cap END,
                s.name
@@ -398,7 +394,7 @@ def _fetch_inputs(code: str):
     if not row:
         cur.close(); conn.close()
         return None
-    close, eps_fwd, eps_ttm, bps, roa, eq_ratio, ord_growth, mktcap, name = row
+    close, eps_fwd, eps_ttm, bps, eq_ratio, ord_growth, mktcap, name = row
 
     # 成長率（会社予想・過去3年CAGR）をこの銘柄について算出
     # 会社予想 = financials に未来日付で入る翌期経常益（無ければ financials_forecast）
@@ -538,20 +534,17 @@ def run() -> int:
     # 入力データを既存テーブルから収集。欠損は以下の順でフォールバック補完する:
     #   EPS予想/実績  = eps_forward / eps_ttm（両方 compute_one に渡し内部で選定）
     #   BPS          = stock_fundamentals.bps → 最新期 total_equity / 発行済株式数
-    #   ROA          = stock_fundamentals.roa → 最新期 net_income / total_assets
-    #   自己資本比率  = price_stats.equity_ratio → 最新期 total_equity / total_assets
-    # fin_eq は「total_equity/total_assets が非NULLな最新の通期」を採用（最新期が
-    # 未確定でNULLでも取りこぼさない）。これでカバレッジが約22%→87%に向上。
+    #   自己資本比率  = 共通財務指標エンジンから price_stats へ保存した値
+    # fin_eq はBPS欠損時の自己資本だけを補完する。比率はここで再計算しない。
     conn = get_conn()
     cur  = conn.cursor()
     cur.execute("""
         WITH fin_eq AS (
-            SELECT code, total_equity, total_assets, net_income,
+            SELECT code, total_equity,
                    ROW_NUMBER() OVER (PARTITION BY code ORDER BY period_end DESC) AS rn
             FROM financials
             WHERE period_type = 'A'
               AND total_equity IS NOT NULL
-              AND total_assets IS NOT NULL AND total_assets > 0
         )
         SELECT sf.code,
                ps.close,
@@ -560,7 +553,7 @@ def run() -> int:
                CASE WHEN v.code IS NOT NULL THEN v.bps_latest ELSE COALESCE(sf.bps,
                         CASE WHEN fe.total_equity IS NOT NULL AND sf.shares_outstanding > 0
                              THEN fe.total_equity / sf.shares_outstanding END) END AS bps,
-               COALESCE(ps.equity_ratio, fe.total_equity / fe.total_assets * 100) AS equity_ratio,
+               ps.equity_ratio,
                ps.ord_growth,
                CASE WHEN v.code IS NOT NULL THEN v.market_cap ELSE sf.market_cap END
         FROM stock_fundamentals sf

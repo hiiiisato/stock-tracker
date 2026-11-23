@@ -16,11 +16,17 @@ price_stats_history テーブルに保存する（バックテスト用）。
 from __future__ import annotations
 import sys
 import bisect
+import time
 from datetime import date, timedelta
 from collections import defaultdict
 
 from config import get_conn, bulk_upsert
 from compute_price_stats import compute_stock_stats, STAT_COLS, _round, _fscore_7
+from financial_metric_engine import (
+    FINANCIAL_FORMULA_VERSION,
+    calculate_annual_metrics,
+    growth_pct,
+)
 
 LAG_DAYS = 45                       # 決算期末→公開とみなすまでのラグ（先読み対策）
 SNAPSHOT_START = date(2024, 11, 1)  # MA200/スロープが揃う最古週（daily_prices は 2024-01〜）
@@ -28,8 +34,10 @@ NIKKEI_SYMBOL = "^N225"
 
 # STAT_COLS に無い、追加のファンダ列（stock_fundamentals 相当を PIT 再構成）
 EXTRA_COLS = ["per", "pbr", "roe", "roa", "div_yield", "market_cap",
-              "op_margin", "payout_ratio", "debt_to_equity", "beta"]
-HISTORY_COLS = ["code", "snapshot_date"] + STAT_COLS + EXTRA_COLS + ["market", "source_series_revision"]
+              "op_margin", "net_margin", "payout_ratio", "debt_to_equity", "beta"]
+HISTORY_COLS = ["code", "snapshot_date"] + STAT_COLS + EXTRA_COLS + [
+    "market", "source_series_revision", "financial_formula_version",
+]
 
 _FLAG_COLS = {"macd_gc", "break_20d", "break_65d", "cf_positive",
               "gc_5_25", "gc_75_200", "bb_upper", "bb_lower", "break_ytd_high"}
@@ -46,6 +54,8 @@ def _ensure_table():
         else:
             col_defs.append(f"{c} DECIMAL(18,4)")
     col_defs.append("market VARCHAR(50)")
+    col_defs.append("source_series_revision CHAR(64) NULL")
+    col_defs.append("financial_formula_version VARCHAR(32) NULL")
     col_defs.append("UNIQUE KEY uq_code_date (code, snapshot_date)")
     col_defs.append("KEY idx_date (snapshot_date)")
     cur.execute("CREATE TABLE IF NOT EXISTS price_stats_history (\n  " +
@@ -58,12 +68,20 @@ def _ensure_table():
         except Exception:
             pass  # 既存カラムは無視
     cur.execute("SHOW COLUMNS FROM price_stats_history")
-    if "source_series_revision" not in {r[0] for r in cur.fetchall()}:
+    existing_columns = {r[0] for r in cur.fetchall()}
+    if "source_series_revision" not in existing_columns:
         cur.execute("ALTER TABLE price_stats_history ADD COLUMN source_series_revision CHAR(64) NULL")
+    if "financial_formula_version" not in existing_columns:
+        cur.execute("ALTER TABLE price_stats_history ADD COLUMN financial_formula_version VARCHAR(32) NULL")
     cur.execute("""CREATE OR REPLACE VIEW price_stats_history_current AS
         SELECT h.* FROM price_stats_history h LEFT JOIN price_adjustment_state s ON s.code=h.code
         WHERE s.status IS NULL OR s.status='legacy'
            OR (s.status IN ('published','audit_due') AND h.source_series_revision=s.series_revision)
+    """)
+    # 最新の完成済み履歴を、AIファンドや資金フローも読める共通現在値にする。
+    cur.execute("""CREATE OR REPLACE VIEW screening_metrics_current AS
+        SELECT h.* FROM price_stats_history_current h
+        WHERE h.snapshot_date=(SELECT MAX(snapshot_date) FROM price_stats_history_current)
     """)
     conn.commit(); cur.close(); conn.close()
     from screening_snapshot import ensure_schema as ensure_screening_snapshot_schema
@@ -84,18 +102,39 @@ def _load_all():
         prices[code].append((dt, float(adj), float(hi or adj), float(lo or adj),
                              float(vol or 0), float(raw or adj), int(raw_volume or 0)))
 
+    print("  銘柄マスタ(market) ロード中...")
+    cur.execute("""
+        SELECT s.code, m.name FROM stocks s LEFT JOIN markets m ON s.market_id=m.id
+    """)
+    market = {r[0]: (r[1] or "") for r in cur.fetchall()}
+
     print("  financials(年次) ロード中...")
     annuals = defaultdict(list)
-    cur.execute("""
-        SELECT code, period_end, revenue, operating_income, ordinary_income,
-               net_income, total_assets, total_equity, total_debt, cf_operating
-        FROM financials WHERE period_type='A' ORDER BY code, period_end
-    """)
-    for r in cur.fetchall():
-        annuals[r[0]].append(dict(
-            period_end=r[1], avail=r[1] + timedelta(days=LAG_DAYS),
-            rev=_f(r[2]), opi=_f(r[3]), ord=_f(r[4]), ni=_f(r[5]),
-            ta=_f(r[6]), teq=_f(r[7]), tdebt=_f(r[8]), cfo=_f(r[9])))
+    from financials_view import annual_performance
+    for code, rows in annual_performance(list(market), cur=cur).items():
+        for row in rows:
+            period_end = row.get("period_end")
+            if period_end is None:
+                continue
+            annuals[code].append(dict(
+                period_end=period_end, avail=period_end + timedelta(days=LAG_DAYS),
+                rev=_f(row.get("revenue")), opi=_f(row.get("operating_income")),
+                ord=_f(row.get("ordinary_income")), ni=_f(row.get("net_income")),
+                ta=_f(row.get("total_assets")), teq=_f(row.get("net_assets")),
+                tdebt=_f(row.get("total_debt")), cfo=_f(row.get("cf_operating")),
+                roe_official=_f(row.get("roe_official")),
+                roe_actual_pct=_f(row.get("roe_actual_pct")),
+                roa_actual_pct=_f(row.get("roa_actual_pct")),
+                operating_margin_pct=_f(row.get("operating_margin_pct")),
+                ordinary_margin_pct=_f(row.get("ordinary_margin_pct")),
+                net_margin_pct=_f(row.get("net_margin_pct")),
+                equity_ratio_pct=_f(row.get("equity_ratio_pct")),
+                debt_to_equity_pct=_f(row.get("debt_to_equity_pct")),
+                roic_pct=_f(row.get("roic_pct")),
+                formula_version=row.get("formula_version"),
+                input_digest=row.get("input_digest"),
+                source=row.get("source"),
+            ))
 
     print("  financials(四半期) ロード中...")
     quarters = defaultdict(list)
@@ -123,18 +162,66 @@ def _load_all():
     cur.execute("SELECT date, close FROM market_index_prices WHERE symbol=%s AND close IS NOT NULL ORDER BY date", (NIKKEI_SYMBOL,))
     nk = [(r[0], float(r[1])) for r in cur.fetchall()]
 
-    print("  銘柄マスタ(market) ロード中...")
-    cur.execute("""
-        SELECT s.code, m.name FROM stocks s LEFT JOIN markets m ON s.market_id=m.id
-    """)
-    market = {r[0]: (r[1] or "") for r in cur.fetchall()}
-
     cur.close(); conn.close()
     return prices, annuals, quarters, divs, shares, nk, market
 
 
 def _f(v):
     return float(v) if v is not None else None
+
+
+def _missing_formula_snapshot_dates(cur) -> list[date]:
+    """公開済みだが現行式版がまだ無いスナップショット日を返す。
+
+    旧運用の日次スナップショットと現行の週次スナップショットが混在するため、
+    物理履歴表の全行ではなく、実際に `ready` 公開された日だけを対象にする。
+    同じ日に現行版の `ready` が1件でもあれば、旧版は読み取り順で選ばれない。
+    """
+    cur.execute("""
+        SELECT snapshot_date
+        FROM screening_snapshots
+        WHERE status='ready' AND snapshot_date >= %s
+        GROUP BY snapshot_date
+        HAVING SUM(CASE WHEN financial_formula_version=%s THEN 1 ELSE 0 END)=0
+        ORDER BY snapshot_date
+    """, (SNAPSHOT_START, FINANCIAL_FORMULA_VERSION))
+    return [row[0] for row in cur.fetchall()]
+
+
+def _finalize_sync_state(rebuild_codes, revisions, formula_state_pending) -> None:
+    """再生成完了stateを先に確定し、キャッシュ世代更新は別TXで再試行する。"""
+    sync_rows = [
+        (f"history_series:{code}", revisions[code], None)
+        for code in sorted(rebuild_codes)
+    ]
+    if formula_state_pending:
+        sync_rows.append(("financial_formula_version", FINANCIAL_FORMULA_VERSION, None))
+    if sync_rows:
+        conn = get_conn(); cur = conn.cursor()
+        try:
+            bulk_upsert(cur, "price_sync_state", ["name", "value", "error"], sync_rows)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close(); conn.close()
+
+    from price_store import bump_generation
+    for attempt in range(3):
+        conn = get_conn(); cur = conn.cursor()
+        try:
+            bump_generation(cur)
+            conn.commit()
+            return
+        except Exception as error:
+            conn.rollback()
+            code = getattr(error, "args", (None,))[0]
+            if code not in (1205, 1213) or attempt == 2:
+                raise
+            time.sleep(1 + attempt * 2)
+        finally:
+            cur.close(); conn.close()
 
 
 # ─── 週次スナップショット日の決定 ────────────────────────────────────────────
@@ -164,6 +251,13 @@ def _pit_annuals(alist, D):
     return known[::-1]  # alist は昇順なので反転して降順
 
 
+def _shared_annual_metrics(latest, prior):
+    """annual_performanceで作成済みの共通指標を優先し、旧行だけ補完する。"""
+    if latest.get("formula_version") == FINANCIAL_FORMULA_VERSION:
+        return latest
+    return calculate_annual_metrics(latest, prior)
+
+
 def _pit_fm(known_annuals, shares):
     """_load_financials と同じ計算を PIT の最新/前期年次で再現する。"""
     if not known_annuals:
@@ -171,11 +265,6 @@ def _pit_fm(known_annuals, shares):
     latest = known_annuals[0]
     prior = known_annuals[1] if len(known_annuals) >= 2 else None
     shr = shares
-
-    def yoy(new, old):
-        if new is None or old is None or old == 0:
-            return None
-        return (new / old - 1) * 100
 
     rev_l, opi_l, ord_l, ni_l = latest["rev"], latest["opi"], latest["ord"], latest["ni"]
     ta_l, eq_l, dbt_l, cfo_l = latest["ta"], latest["teq"], latest["tdebt"], latest["cfo"]
@@ -189,26 +278,20 @@ def _pit_fm(known_annuals, shares):
     eps_l = (ni_l / shr) if (ni_l is not None and shr and shr > 0) else None
     eps_p = (ni_p / shr) if (ni_p is not None and shr and shr > 0) else None
 
-    roic = None
-    cap = (eq_l or 0) + (dbt_l or 0)
-    if opi_l is not None and cap > 0:
-        roic = opi_l / cap * 100
-
-    equity_ratio = eq_l / ta_l * 100 if (eq_l is not None and ta_l and ta_l > 0) else None
-    ord_margin = ord_l / rev_l * 100 if (ord_l is not None and rev_l and rev_l > 0) else None
+    annual_metrics = _shared_annual_metrics(latest, prior)
     cfo_per_share = cfo_l / shr if (cfo_l is not None and shr and shr > 0) else None
     rev_per_share = rev_l / shr if (rev_l is not None and shr and shr > 0) else None
 
     return {
-        "rev_growth": _round(yoy(rev_l, rev_p)),
-        "op_growth": _round(yoy(opi_l, opi_p)),
-        "ord_growth": _round(yoy(ord_l, ord_p)),
-        "eps_growth": _round(yoy(eps_l, eps_p)),
-        "roic": _round(roic),
+        "rev_growth": _round(growth_pct(rev_l, rev_p)),
+        "op_growth": _round(growth_pct(opi_l, opi_p)),
+        "ord_growth": _round(growth_pct(ord_l, ord_p)),
+        "eps_growth": _round(growth_pct(eps_l, eps_p)),
+        "roic": _round(annual_metrics["roic_pct"]),
         # 未取得を「営業CFマイナス」と誤判定しない。
         "cf_positive": None if cfo_l is None else (1 if cfo_l > 0 else 0),
-        "equity_ratio": _round(equity_ratio),
-        "ord_margin": _round(ord_margin),
+        "equity_ratio": _round(annual_metrics["equity_ratio_pct"]),
+        "ord_margin": _round(annual_metrics["ordinary_margin_pct"]),
         "cfo_per_share": cfo_per_share,
         "rev_per_share": rev_per_share,
         "fscore": _fscore_7(ni_l, ta_l, ta_p, cfo_l, eq_l, eq_p,
@@ -235,7 +318,7 @@ def _trailing_dps(dlist, D):
 
 def _pit_extra(known_annuals, price_D, ttm_eps, ann_dps, shares):
     """per/pbr/roe/roa/market_cap/op_margin/payout_ratio/debt_to_equity を PIT 計算。"""
-    per = pbr = roe = roa = mcap = op_margin = payout = d2e = None
+    per = pbr = roe = roa = mcap = op_margin = net_margin = payout = d2e = None
     if price_D and shares and shares > 0:
         mc = price_D * shares
         # 株数データ破損による異常値を除外（実在の時価総額は 1京円未満）
@@ -247,30 +330,24 @@ def _pit_extra(known_annuals, price_D, ttm_eps, ann_dps, shares):
     if known_annuals:
         a = known_annuals[0]
         prior = known_annuals[1] if len(known_annuals) >= 2 else None
-        eq, ta, ni, opi, rev, dbt = a["teq"], a["ta"], a["ni"], a["opi"], a["rev"], a["tdebt"]
-        prior_eq = prior["teq"] if prior else eq
-        prior_ta = prior["ta"] if prior else ta
-        avg_eq = (eq + prior_eq) / 2 if eq is not None and prior_eq is not None else eq
-        avg_ta = (ta + prior_ta) / 2 if ta is not None and prior_ta is not None else ta
+        eq = a["teq"]
         if eq and eq > 0 and shares and shares > 0 and price_D:
             bps = eq / shares
             pbr = _round(price_D / bps, 2) if bps > 0 else None
-        # ROE/ROAは個別画面と同じく、期首・期末の平均残高を分母にする。
-        if ni is not None and avg_eq and avg_eq > 0:
-            roe = _round(ni / avg_eq * 100, 2)
-        if ni is not None and avg_ta and avg_ta > 0:
-            roa = _round(ni / avg_ta * 100, 4)
-        if opi is not None and rev and rev > 0:
-            op_margin = _round(opi / rev * 100, 2)
-        if dbt is not None and eq and eq > 0:
-            d2e = _round(dbt / eq * 100, 2)
+        annual_metrics = _shared_annual_metrics(a, prior)
+        roe = _round(annual_metrics["roe_actual_pct"], 2)
+        roa = _round(annual_metrics["roa_actual_pct"], 4)
+        op_margin = _round(annual_metrics["operating_margin_pct"], 2)
+        net_margin = _round(annual_metrics["net_margin_pct"], 2)
+        d2e = _round(annual_metrics["debt_to_equity_pct"], 2)
     div_yield = None
     if ann_dps and price_D and price_D > 0:
         div_yield = _round(ann_dps / price_D * 100, 2)
     if ann_dps and ttm_eps and ttm_eps > 0:
         payout = _round(ann_dps / ttm_eps * 100, 2)
     return dict(per=per, pbr=pbr, roe=roe, roa=roa, div_yield=div_yield,
-                market_cap=mcap, op_margin=op_margin, payout_ratio=payout,
+                market_cap=mcap, op_margin=op_margin, net_margin=net_margin,
+                payout_ratio=payout,
                 debt_to_equity=d2e)
 
 
@@ -333,8 +410,10 @@ def _compute_snapshot(D, prices, annuals, quarters, divs, shares, nk, market, re
         row = [code, D] + list(stat) + [
             extra["per"], extra["pbr"], extra["roe"], extra["roa"],
             extra["div_yield"], extra["market_cap"], extra["op_margin"],
-            extra["payout_ratio"], extra["debt_to_equity"], beta,
+            extra["net_margin"], extra["payout_ratio"],
+            extra["debt_to_equity"], beta,
             market.get(code, ""), (revisions or {}).get(code),
+            FINANCIAL_FORMULA_VERSION,
         ]
         rows.append(tuple(row))
     return rows
@@ -347,6 +426,12 @@ def run(backfill=False, weeks=None, latest_only=False):
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT code,series_revision FROM price_adjustment_state WHERE status IN ('published','audit_due')")
     revisions = dict(cur.fetchall())
+    cur.execute("SELECT value FROM price_sync_state WHERE name=%s", ("financial_formula_version",))
+    formula_state = cur.fetchone()
+    formula_state_pending = not formula_state or formula_state[0] != FINANCIAL_FORMULA_VERSION
+    formula_rebuild_dates = (
+        _missing_formula_snapshot_dates(cur) if formula_state_pending else []
+    )
     cur.execute("""SELECT s.code FROM price_adjustment_state s
                    WHERE s.status IN ('published','audit_due') AND s.series_revision IS NOT NULL
                      AND NOT EXISTS (SELECT 1 FROM price_sync_state h WHERE h.name=CONCAT('history_series:',s.code)
@@ -367,12 +452,18 @@ def run(backfill=False, weeks=None, latest_only=False):
     if rebuild_codes:
         start = min(start,SNAPSHOT_START)
     snap_dates = _weekly_snapshot_dates(prices, start, end)
+    # 過去に公開した日次版も、式変更時はその日付だけ正確に再生成する。
+    snap_dates = sorted(set(snap_dates) | set(formula_rebuild_dates))
+    formula_rebuild_dates = set(formula_rebuild_dates)
     historical_prices = {c:s for c,s in prices.items() if c in rebuild_codes}
     print(f"  対象スナップショット: {len(snap_dates)}週 ({snap_dates[0] if snap_dates else '-'} 〜 {snap_dates[-1] if snap_dates else '-'})")
 
     total = 0
     for i, D in enumerate(snap_dates):
-        target_prices = prices if backfill or D >= recent_start else historical_prices
+        target_prices = (
+            prices if backfill or D in formula_rebuild_dates or D >= recent_start
+            else historical_prices
+        )
         rows = _compute_snapshot(D, target_prices, annuals, quarters, divs, shares, nk, market,revisions)
         if rows:
             conn = get_conn(); cur = conn.cursor()
@@ -405,13 +496,8 @@ def run(backfill=False, weeks=None, latest_only=False):
             total += len(rows)
         print(f"  [{i+1}/{len(snap_dates)}] {D}: {len(rows)}銘柄  (累計 {total})")
     # 全週の保存後にだけ完了を記録する。途中終了した場合は次便で同じ版を再実行できる。
-    if total or rebuild_codes:
-        conn = get_conn(); cur = conn.cursor()
-        bulk_upsert(cur,"price_sync_state",["name","value","error"],
-                    [(f"history_series:{c}",revisions[c],None) for c in sorted(rebuild_codes)])
-        from price_store import bump_generation
-        bump_generation(cur)
-        conn.commit(); cur.close(); conn.close()
+    if total or rebuild_codes or formula_state_pending:
+        _finalize_sync_state(rebuild_codes, revisions, formula_state_pending)
     print(f"\n完了: {total} 行保存")
     return total
 

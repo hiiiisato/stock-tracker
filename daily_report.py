@@ -200,7 +200,7 @@ def _fetch_movers(cur, target: date) -> dict:
                    pe.ai_summary, pe.reason_category
             FROM price_history dp
             JOIN stocks s ON s.code = dp.code AND s.is_active = 1 AND s.market_id IN (2,3,4)
-            JOIN stock_fundamentals f ON f.code = dp.code AND f.market_cap >= 5e9
+            JOIN screening_metrics_current f ON f.code = dp.code AND f.market_cap >= 5e9
             LEFT JOIN price_events pe
               ON pe.code = dp.code AND pe.event_date = %s AND pe.period = 'daily'
             WHERE dp.date = %s AND dp.change_pct IS NOT NULL
@@ -244,7 +244,7 @@ def _fetch_triggers(cur, target: date) -> dict:
         FROM price_stats_current ps
         JOIN stocks s ON s.code = ps.code AND s.is_active = 1 AND s.market_id IN (2,3,4)
         JOIN price_history dp ON dp.code = ps.code AND dp.date = %s
-        LEFT JOIN stock_fundamentals f ON f.code = ps.code
+        LEFT JOIN screening_metrics_current f ON f.code = ps.code
         WHERE ps.vol20_ratio >= 1.5
     """, (target,))
     for code, name, chg, volr, dev52, brk20, chg25, mcap in cur.fetchall():
@@ -360,7 +360,7 @@ def _fetch_disclosures(cur, target: date) -> dict:
                (TIME(d.disclosed_at) >= '15:00') AS after_close
         FROM disclosures d
         JOIN stocks s ON s.code = d.code
-        LEFT JOIN stock_fundamentals f ON f.code = d.code
+        LEFT JOIN screening_metrics_current f ON f.code = d.code
         WHERE DATE(d.disclosed_at) = %s AND d.sentiment = 1
         ORDER BY (d.ai_summary IS NULL), COALESCE(f.market_cap, 0) DESC, d.disclosed_at DESC
         LIMIT 12

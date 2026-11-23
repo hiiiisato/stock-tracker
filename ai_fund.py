@@ -573,7 +573,7 @@ _CAND_FROM = """
     FROM price_stats_current p
     JOIN stocks s ON s.code = p.code AND s.is_active = 1
     LEFT JOIN sectors sec ON sec.id = s.sector_id
-    LEFT JOIN stock_fundamentals f ON f.code = p.code
+    LEFT JOIN screening_metrics_current f ON f.code = p.code
     LEFT JOIN theoretical_values t ON t.code = p.code
     WHERE p.turnover_20d >= 3 AND p.close BETWEEN 300 AND 24000
       AND f.market_cap >= 15e9
@@ -675,7 +675,7 @@ def _candidates(cur, exclude: set[str], regime_up: bool = True) -> list[dict]:
         FROM forecast_revisions r
         JOIN stocks s ON s.code = r.code AND s.is_active = 1
         JOIN price_stats_current p ON p.code = r.code
-        LEFT JOIN stock_fundamentals f ON f.code = r.code
+        LEFT JOIN screening_metrics_current f ON f.code = r.code
         WHERE r.announced_at >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
           AND r.reaction_date <= (SELECT MAX(date) FROM price_history)
           AND (r.direction = 'up' OR (r.dps_new > r.dps_old))
@@ -716,7 +716,7 @@ def _candidates(cur, exclude: set[str], regime_up: bool = True) -> list[dict]:
         FROM disclosures d
         JOIN stocks s ON s.code = d.code AND s.is_active = 1
         JOIN price_stats_current p ON p.code = d.code
-        LEFT JOIN stock_fundamentals f ON f.code = d.code
+        LEFT JOIN screening_metrics_current f ON f.code = d.code
         WHERE d.category IN ('earnings_report','earnings_rev','earnings_up','guidance','div_up','dividend_rev')
           AND d.disclosed_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
           AND DATE(d.disclosed_at) < (SELECT MAX(date) FROM price_history)
@@ -752,7 +752,7 @@ def _candidates(cur, exclude: set[str], regime_up: bool = True) -> list[dict]:
         FROM disclosures d
         JOIN stocks s ON s.code = d.code AND s.is_active = 1
         JOIN price_stats_current p ON p.code = d.code
-        LEFT JOIN stock_fundamentals f ON f.code = d.code
+        LEFT JOIN screening_metrics_current f ON f.code = d.code
         WHERE d.category = 'buyback'
           AND (d.title LIKE '%取得に係る事項の決定%' OR d.title LIKE '%買付%')
           AND d.title NOT LIKE '%状況%' AND d.title NOT LIKE '%終了%'
@@ -791,7 +791,7 @@ def _candidates(cur, exclude: set[str], regime_up: bool = True) -> list[dict]:
         FROM forecast_revisions r
         JOIN stocks s ON s.code = r.code AND s.is_active = 1
         JOIN price_stats_current p ON p.code = r.code
-        LEFT JOIN stock_fundamentals f ON f.code = r.code
+        LEFT JOIN screening_metrics_current f ON f.code = r.code
         WHERE r.announced_at = (SELECT MAX(date) FROM price_history)
           AND r.reaction_date > (SELECT MAX(date) FROM price_history)
           AND r.direction = 1
@@ -828,7 +828,7 @@ def _candidates(cur, exclude: set[str], regime_up: bool = True) -> list[dict]:
         FROM earnings_schedule es
         JOIN stocks s ON s.code = es.code AND s.is_active = 1
         JOIN price_stats_current p ON p.code = es.code
-        LEFT JOIN stock_fundamentals f ON f.code = es.code
+        LEFT JOIN screening_metrics_current f ON f.code = es.code
         WHERE es.announce_date BETWEEN %s AND %s
           AND p.rsi14 < 85 AND p.chg25d > -10
           AND p.turnover_20d >= 3 AND p.close BETWEEN 300 AND 24000

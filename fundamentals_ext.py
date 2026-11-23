@@ -113,8 +113,8 @@ def _compute(rows: list[dict]) -> dict | None:
     rev = [r["revenue"] for r in rows]
     net = [r["net_income"] for r in rows]
     dps = [r["dividend_per_share"] for r in rows]
-    # roe_official は小数(0.11=11%)で格納されているため % に換算する
-    roe = [(r["roe_official"] * 100) if r["roe_official"] is not None else None for r in rows]
+    # 公式値優先、欠損時は平均自己資本式で補完した共通ROE。
+    roe = [r.get("roe_actual_pct") for r in rows]
 
     latest = rows[-1]
     span = rows[-(AVG_YEARS + 1):]                       # 最大6行（5区間）
@@ -130,12 +130,8 @@ def _compute(rows: list[dict]) -> dict | None:
         "consec_profit_growth": _consec_increase(net),
         "consec_div_growth": _consec_increase(dps),
         "roe_5y_avg": _avg(roe[-AVG_YEARS:]),
-        "roa_5y_avg": _avg([(net[i] / rows[i]["total_assets"] * 100)
-                            if net[i] is not None and rows[i]["total_assets"] else None
-                            for i in range(len(rows))][-AVG_YEARS:]),
-        "opm_5y_avg": _avg([(rows[i]["operating_income"] / rev[i] * 100)
-                            if rows[i]["operating_income"] is not None and rev[i] else None
-                            for i in range(len(rows))][-AVG_YEARS:]),
+        "roa_5y_avg": _avg([r.get("roa_actual_pct") for r in rows][-AVG_YEARS:]),
+        "opm_5y_avg": _avg([r.get("operating_margin_pct") for r in rows][-AVG_YEARS:]),
         "is_record_profit": None, "roe_delta_3y": None, "roe_driver_3y": None,
         "n_years": len(rows),
     }
@@ -146,8 +142,10 @@ def _compute(rows: list[dict]) -> dict | None:
     # ROE 3年差 と 主導因子（3期前が取れれば）
     if len(rows) >= 4:
         r3 = rows[-4]                                    # 3期前
-        if latest["roe_official"] is not None and r3["roe_official"] is not None:
-            m["roe_delta_3y"] = round((_f(latest["roe_official"]) - _f(r3["roe_official"])) * 100, 2)
+        if latest.get("roe_actual_pct") is not None and r3.get("roe_actual_pct") is not None:
+            m["roe_delta_3y"] = round(
+                _f(latest["roe_actual_pct"]) - _f(r3["roe_actual_pct"]), 2
+            )
         m["roe_driver_3y"] = _roe_driver(
             (latest["net_income"], latest["revenue"], latest["total_assets"], latest["net_assets"]),
             (r3["net_income"], r3["revenue"], r3["total_assets"], r3["net_assets"]))
