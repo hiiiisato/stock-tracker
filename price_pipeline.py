@@ -531,7 +531,9 @@ def refresh_derived() -> None:
     from theme_score import compute_day
     from money_flow import compute as compute_money_flow
     from compute_stats_history import run as snapshot_stats
+    from valuation_metrics import rebuild_valuation_metrics
     recompute_price_metrics()
+    rebuild_valuation_metrics()
     compute_stats()
     theoretical()
     compute_daily_rankings()

@@ -84,10 +84,15 @@ AIファンド・資金フロー・日次レポートも旧 `stock_fundamentals.
 EDINETのEPS/BPS原本は `per_share_fact_versions`、同じ権利digestへの派生値は
 `per_share_fact_projections` に保存する。純利益または純資産を1株値で割った逆算株式数と
 現在株式数、公式権利の連続suffixを照合し、一意に決まらない原本は `needs_review` のままとする。
+公開価格へEPS/BPS・配当を結合する経済キーは `action_digest` とする。
+各入力の `target_basis_date` は監査用に残すが、間に権利事象がなくdigestが同一なら日付差だけで入力値を落とさない。
+平均株式数と現在株式数は自己株式取得等で通常ずれるため、全派生処理で15%以内を同じ株式分割基準とし、
+1:2分割等の明確な基準違いだけを保留する。
 配当は `dividend_notices` の中間・期末等を個別に正規化し、`dividend_events` を経て
 `dividend_annual_normalized` で年度合計する。現在の理論株価と個別画面が読む価値指標の正本は
-`valuation_metrics_current` で、`price_version` / `action_digest` / `target_basis_date` が公開価格と
-一致する行だけを使う。旧読取先の `stock_fundamentals` には移行互換用のPER/PBR/利回り/時価総額だけを投影し、
+`valuation_metrics_current` は現在の価格版・digest・基準日を転記し、Webは3項目が公開価格と一致する
+最新の出力行だけを使う。入力のEPS/BPS・配当はdigestで結び、入力側の基準日差は除外理由にしない。
+旧読取先の `stock_fundamentals` には移行互換用のPER/PBR/利回り/時価総額だけを投影し、
 Yahoo原本のEPS/BPS/DPSは上書きしない。
 権利落ち前に、公表済みの将来分割を織り込んだ予想DPSが出る場合は、XBRL値だけで
 分割前基準へ逆変換しない。権利落ちまで `needs_review` とし、株価と基準が異なる数値を公開しない。
@@ -238,7 +243,7 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 - `dividends.py` — Yahooの権利落ち配当イベント原本。正式DPSの取得元にはせず、TDnet通知の株数基準照合に使う。
 - `per_share_metrics.py` — EDINET年次EPS/BPSを不変の公表版として取り込み、逆算株式数と公式権利suffixが一意に整合する場合だけ同一digestへ投影。入力不足・複数候補はNULLと理由を保存する。
 - `dividend_metrics.py` — TDnet短信XBRLの配当コンテキスを年額に潰さず保存。各コンポーネントを正規化後に年額へ合計する。
-- `valuation_metrics.py` — 公開価格とdigest/基準日が一致する検証済みのEPS/BPS/予想DPSだけでPER/PBR/配当利回り/時価総額を作る。復旧は読取先を旧 `stock_fundamentals` へ戻せるだけで可能で、原本表のロールバックは不要。
+- `valuation_metrics.py` — 公開価格と同じdigestへ正規化済みのEPS/BPS/予想DPSだけでPER/PBR/配当利回り/時価総額を作る。入力基準日は監査情報で、digestが同じなら日付差で値を落とさない。出力には現在の価格版・digest・基準日を転記する。復旧は読取先を旧 `stock_fundamentals` へ戻せるだけで可能で、原本表のロールバックは不要。
 - `financials_store.py` — 財務実績の取得元保存とcanonical統合。`financials` は互換読取モデルとして維持し、
   TDnetは非NULL値だけ更新、YahooはNULLだけ補完、EDINETは同一年度の既存項目と整合する行のNULLだけ補完する。
   取得元の部分レスポンスで高優先値を消さない。初回DDLはバッチ実行時の `ensure_source_tables`。
@@ -254,7 +259,7 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
   予想ROE=`予想EPS÷同じdigestへ正規化した実績BPS`。canonical自己資本は通貨・連結範囲の異常検知に
   だけ使い、計算分母にはしない。取得元による式の切替やYahoo予想EPSの混用はせず、入力不足は
   NULLと理由を保存する。採点対象はJPX公式履歴に載る上場中の国内普通株だけ。
-  `quality_status/quality_flags` に会社予想なし、債務超過、実績値不整合、株数基準5%超乖離、
+  `quality_status/quality_flags` に会社予想なし、債務超過、実績値不整合、株数基準15%超乖離、
   使用fact IDとaction digestを保存し、`verified` 以外を採点へ渡さない。TDnet予想更新直後は該当銘柄だけ、
   00:30のEDINET保守後は全件を再計算する。
 - `financials_edinet.py` — **EDINET公式有報XBRL（edinetdb.jp経由）を1コールで2役**:
@@ -484,7 +489,7 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 | 1株原本・派生 | `per_share_fact_versions` / `per_share_fact_projections` | per_share_metrics.py（EDINET EPS/BPS原本の版と、公式台帳の未反映事象だけを1度適用したdigest別派生値） |
 | 配当原本・派生 | `dividend_notices` / `dividend_events` / `dividend_annual_normalized` | dividend_metrics.py（TDnetの中間・期末・年額通知を分離保存し、通知単位で正規化後に年度合計） |
 | 財務派生 | `forecast_metrics` | forecast_metrics.py（`per_share_fact_projections`の検証済みEPS/BPSと会社予想純利益から、単一固定式で予想EPS/ROEを再生成。TOKYO PRO MARKETは`not_applicable`） |
-| 現在価値指標 | `valuation_metrics_current` | valuation_metrics.py（公開価格と同じprice version/action digest/target basisのEPS/BPS/DPS/PER/PBR/利回り/時価総額） |
+| 現在価値指標 | `valuation_metrics_current` | valuation_metrics.py（入力はaction digestで結合し、出力は現在のprice version/action digest/target basisを持つEPS/BPS/DPS/PER/PBR/利回り/時価総額） |
 | 再計算・適用範囲 | `corporate_action_projection_state` / `data_coverage_state` | consumerごとの必要/completed digestと、新規上場待ち・対象外市場・品質保留を欠損と区別 |
 | 指標 | `price_stats` / `price_stats_current` | compute_price_stats（最新値と元の価格版。参照ビューは公開価格と版が一致する指標だけを返す） |
 | 指標 | `price_stats_history` / `price_stats_history_current` / `screening_metrics_current` | compute_stats_history.py（週次PIT履歴・価格版整合ビュー・最新完成行ビュー。式版を保存） |

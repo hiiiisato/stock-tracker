@@ -8,6 +8,7 @@ from financials_tdnet import _Summary
 from per_share_metrics import resolve_applied_actions
 from price_adjustments import Action, actions_digest, stable_action_id
 from price_store import _resolve_duplicate_pending_actions
+from valuation_metrics import _validate_current_shares
 
 
 def action(code, ex_date, after, *, kind="split", status="confirmed"):
@@ -85,6 +86,14 @@ class CorporateActionIdentityTest(unittest.TestCase):
         self.assertNotEqual(actions_digest([confirmed], date(2026, 10, 1)),
                             actions_digest([cancelled], date(2026, 10, 1)))
 
+    def test_date_only_change_keeps_digest_until_an_action_takes_effect(self):
+        split = action("9999", date(2026, 12, 1), 2)
+        before = actions_digest([split], date(2026, 11, 23))
+        next_day = actions_digest([split], date(2026, 11, 24))
+        after_action = actions_digest([split], date(2026, 12, 1))
+        self.assertEqual(before, next_day)
+        self.assertNotEqual(before, after_action)
+
     def test_resolved_schedule_placeholder_is_removed_but_distinct_events_remain(self):
         connection = sqlite3.connect(":memory:")
         connection.executescript("""
@@ -123,6 +132,18 @@ class CorporateActionIdentityTest(unittest.TestCase):
             "SELECT action_id FROM corporate_action_observations WHERE observation_id='obs'"
         ).fetchone()[0], "confirmed")
         connection.close()
+
+
+class ValuationShareBasisTest(unittest.TestCase):
+    def test_normal_current_vs_average_share_drift_is_accepted(self):
+        verified, gap = _validate_current_shares(164_598_490, 173_100_000)
+        self.assertTrue(verified)
+        self.assertLess(gap, D("0.15"))
+
+    def test_split_scale_mismatch_is_rejected(self):
+        verified, gap = _validate_current_shares(100_000_000, 200_000_000)
+        self.assertFalse(verified)
+        self.assertIsNone(gap)
 
 
 class DividendNoticeTest(unittest.TestCase):

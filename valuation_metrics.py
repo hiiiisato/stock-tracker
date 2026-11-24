@@ -7,9 +7,11 @@ from typing import Iterable
 
 from batch_dates import jst_today
 from config import bulk_upsert, db
+from per_share_metrics import SHARE_BASIS_TOLERANCE
+from price_store import bump_generation
 
 
-CALCULATION_VERSION = "1"
+CALCULATION_VERSION = "2"
 BATCH_CODES = 250
 
 
@@ -24,6 +26,21 @@ def _decimal(value) -> Decimal | None:
 def _ratio(numerator, denominator, multiplier=Decimal(1)) -> Decimal | None:
     n, d = _decimal(numerator), _decimal(denominator)
     return n / d * multiplier if n is not None and d is not None and d > 0 else None
+
+
+def _validate_current_shares(current_shares, *basis_candidates) -> tuple[bool, Decimal | None]:
+    """現在株式数が、同じ分割基準へ検証済みの平均株式数と整合するか返す。"""
+    current = _decimal(current_shares)
+    if current is None or current <= 0:
+        return False, None
+    for candidate in basis_candidates:
+        basis = _decimal(candidate)
+        if basis is None or basis <= 0:
+            continue
+        gap = abs(current - basis) / abs(basis)
+        if gap <= SHARE_BASIS_TOLERANCE:
+            return True, gap
+    return False, None
 
 
 def ensure_schema(cur) -> None:
@@ -94,17 +111,22 @@ def rebuild_valuation_metrics(codes: Iterable[str] | None = None, *, basis_date:
 
         cur.execute(f"""WITH ranked AS (
             SELECT f.code,f.metric,f.period_end,f.fact_id,p.normalized_value,
+                   f.numerator_raw,
                    ROW_NUMBER() OVER (PARTITION BY f.code,f.metric
                      ORDER BY f.period_end DESC,f.announced_at DESC,f.fact_id DESC) rn
             FROM per_share_fact_versions f
             JOIN per_share_fact_projections p ON p.fact_id=f.fact_id
             JOIN price_adjustment_state s ON s.code=f.code
-             AND s.action_digest=p.action_digest AND s.target_basis_date=p.target_basis_date
+             AND s.action_digest=p.action_digest
             WHERE f.period_type='annual' AND p.quality_status='verified'
               AND f.period_end<=%s AND f.code IN ({ph})
-        ) SELECT code,metric,fact_id,normalized_value FROM ranked WHERE rn=1""",
+        ) SELECT code,metric,fact_id,normalized_value,numerator_raw
+          FROM ranked WHERE rn=1""",
                     [target, *target_codes])
-        actual: dict[tuple[str, str], tuple] = {(c, m): (fid, value) for c, m, fid, value in cur.fetchall()}
+        actual: dict[tuple[str, str], tuple] = {
+            (c, m): (fid, value, numerator)
+            for c, m, fid, value, numerator in cur.fetchall()
+        }
 
         cur.execute(f"""WITH ranked AS (
             SELECT fm.code,fm.forecast_id,fm.forecast_eps,fm.forecast_roe,
@@ -129,7 +151,7 @@ def rebuild_valuation_metrics(codes: Iterable[str] | None = None, *, basis_date:
                               CASE WHEN d.fiscal_year_end<%s THEN d.fiscal_year_end END DESC) rn
             FROM dividend_annual_normalized d
             JOIN price_adjustment_state s ON s.code=d.code
-             AND s.action_digest=d.action_digest AND s.target_basis_date=d.target_basis_date
+             AND s.action_digest=d.action_digest
             WHERE d.quality_status='verified' AND d.code IN ({ph})
         ) SELECT code,kind,normalized_dps,component_event_ids FROM ranked WHERE rn=1""",
                     [target, target, target, target, *target_codes])
@@ -140,17 +162,21 @@ def rebuild_valuation_metrics(codes: Iterable[str] | None = None, *, basis_date:
         state_rows = []
         now = datetime.now()
         for code, price_date, target_basis, price_version, digest, price, shares, shares_observed in bases:
-            eps_fact, eps = actual.get((code, "eps"), (None, None))
-            bps_fact, bps = actual.get((code, "bps"), (None, None))
+            eps_fact, eps, eps_numerator = actual.get((code, "eps"), (None, None, None))
+            bps_fact, bps, bps_numerator = actual.get((code, "bps"), (None, None, None))
             forecast_id, forecast_eps, _forecast_roe, implied_shares = forecasts.get(code, (None, None, None, None))
             dps_actual, _actual_refs = dividends.get((code, "actual"), (None, None))
             dps_forecast, forecast_refs = dividends.get((code, "forecast"), (None, None))
             price_d = _decimal(price)
             shares_d = _decimal(shares)
             implied_d = _decimal(implied_shares)
-            share_gap = (abs(shares_d - implied_d) / abs(implied_d)
-                         if shares_d is not None and implied_d not in (None, Decimal(0)) else None)
-            shares_verified = shares_d is not None and shares_d > 0 and share_gap is not None and share_gap <= Decimal("0.05")
+            # 会社予想が無くても、検証済み実績EPS/BPSから現在基準の平均株式数を逆算できる。
+            # 平均株式数と期末現在株式数の通常差を、株式分割基準の不一致と混同しない。
+            actual_eps_shares = _ratio(eps_numerator, eps)
+            actual_bps_shares = _ratio(bps_numerator, bps)
+            shares_verified, share_gap = _validate_current_shares(
+                shares_d, implied_d, actual_eps_shares, actual_bps_shares,
+            )
             market_cap = price_d * shares_d if shares_verified else None
             per_actual = _ratio(price_d, eps)
             per_forecast = _ratio(price_d, forecast_eps)
@@ -195,6 +221,8 @@ def rebuild_valuation_metrics(codes: Iterable[str] | None = None, *, basis_date:
         bulk_upsert(cur,"corporate_action_projection_state",
                     ["code","consumer","required_digest","completed_digest","status",
                      "not_before","last_error","updated_at"],state_rows)
+        # 価格以外の派生値更新でも、Web全ワーカーの1時間キャッシュを同時に失効させる。
+        bump_generation(cur)
         return len(rows)
 
 

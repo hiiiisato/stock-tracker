@@ -24,9 +24,10 @@ from typing import Iterable, Sequence
 
 from batch_dates import jst_today
 from config import bulk_upsert, get_conn
+from per_share_metrics import SHARE_BASIS_TOLERANCE
 
 
-CALCULATION_VERSION = "3"
+CALCULATION_VERSION = "4"
 _METRIC_COLUMNS = [
     "forecast_id",
     "code",
@@ -286,7 +287,7 @@ def assess_quality(
         )
     ):
         flags.append("actual_net_income_source_mismatch")
-    if share_gap is not None and share_gap > Decimal("0.05"):
+    if share_gap is not None and share_gap > SHARE_BASIS_TOLERANCE:
         flags.append("share_basis_mismatch")
     if has_corporate_action:
         flags.append("corporate_action_since_basis")
@@ -361,7 +362,6 @@ def rebuild_forecast_metrics(
             " JOIN per_share_fact_projections p ON p.fact_id=f.fact_id"
             " JOIN price_adjustment_state s ON s.code=f.code"
             "  AND s.action_digest=p.action_digest"
-            "  AND s.target_basis_date=p.target_basis_date"
             " WHERE f.period_type='annual' AND p.quality_status='verified'"
             ") SELECT period_end,code,"
             " MAX(CASE WHEN metric='eps' THEN numerator_raw END) AS net_income,"

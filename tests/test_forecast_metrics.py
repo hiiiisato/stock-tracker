@@ -65,6 +65,24 @@ class ForecastMetricsTest(unittest.TestCase):
             "share_basis_mismatch,corporate_action_since_basis,canonical_equity_mismatch",
         )
 
+    def test_normal_share_count_drift_is_not_treated_as_split_mismatch(self):
+        status, flags = assess_quality(
+            eligible=True,
+            forecast_net_income=100,
+            actual_period_end=date(2025, 3, 31),
+            actual_net_income=80,
+            canonical_actual_net_income=80,
+            actual_eps=8,
+            actual_bps=50,
+            forecast_eps=10,
+            forecast_roe=Decimal("0.2"),
+            share_gap=Decimal("0.10"),
+            equity_gap=Decimal("0.01"),
+            has_corporate_action=False,
+        )
+        self.assertEqual(status, "verified")
+        self.assertIsNone(flags)
+
     def test_no_company_guidance_is_incomplete_not_zero(self):
         status, flags = assess_quality(
             eligible=True,

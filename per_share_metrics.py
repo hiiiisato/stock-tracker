@@ -20,6 +20,9 @@ from price_store import load_actions
 CALCULATION_VERSION = "1"
 SIMPLE_KINDS = {"split", "consolidation", "bonus"}
 BATCH_CODES = 250
+# 平均株式数と現在株式数は自己株式取得などで通常ずれる。15%以内は同じ株式分割基準とみなし、
+# 1:2分割等の明確な基準違いだけを止める。予想指標・現在価値指標もこの値を共用する。
+SHARE_BASIS_TOLERANCE = Decimal("0.15")
 
 
 def _decimal(value) -> Decimal | None:
@@ -47,7 +50,7 @@ def resolve_applied_actions(
     current_shares,
     actions: list[Action],
     source_basis_date: date | None = None,
-    tolerance: Decimal = Decimal("0.15"),
+    tolerance: Decimal = SHARE_BASIS_TOLERANCE,
 ) -> tuple[list[Action], Decimal | None, str, str]:
     """原本が未反映の「後ろから連続する権利」を一意に決める。
 

@@ -582,6 +582,16 @@ def run(
             print(f"  エラー: {e}")
             _log("metrics_recompute", "failed", error=str(e))
 
+        print("\n[公開価値指標] 正規化済みEPS/BPS/DPSを当日終値へ再連動...")
+        try:
+            from valuation_metrics import rebuild_valuation_metrics
+            n = rebuild_valuation_metrics()
+            _log("valuation_metrics", "done", n)
+        except Exception as e:
+            print(f"  エラー: {e}")
+            _log("valuation_metrics", "failed", error=str(e))
+            critical_failures.append(f"valuation_metrics: {e}")
+
     # 株価テクニカル指標（MA・騰落率・乖離率・RSI など）を毎日計算
     if not rankings_only:
         print("\n[テクニカル指標] MA・騰落率・RSI・出来高比率を計算中...")
