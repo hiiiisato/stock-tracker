@@ -7813,35 +7813,21 @@ def _build_stock_page(code: str) -> str:
         v = valuation.get(key)
         return float(v) if v is not None else None
 
-    def _prefer_verified(verified, fallback):
-        return verified if verified is not None else fallback
-
-    # 新しい正本が部分状態でも、値のある項目まで一括でNULL扱いにしない。
-    # 各項目ごとに検証済み値を優先し、未整備項目だけ移行互換値へフォールバックする。
-    shares   = _prefer_verified(_vv("shares_outstanding"), _fv("shares_outstanding"))
-    eps_ttm  = _prefer_verified(_vv("eps_latest_annual"), _fv("eps_ttm"))
-    eps_fwd  = _prefer_verified(_vv("eps_company_forecast"), _fv("eps_forward"))
-    bps_val  = _prefer_verified(_vv("bps_latest"), _fv("bps"))
+    shares   = _vv("shares_outstanding") if valuation else _fv("shares_outstanding")
+    eps_ttm  = _vv("eps_latest_annual") if valuation else _fv("eps_ttm")
+    eps_fwd  = _vv("eps_company_forecast") if valuation else _fv("eps_forward")
+    bps_val  = _vv("bps_latest") if valuation else _fv("bps")
     ann_dps  = _fv("annual_dps")
     payout   = _fv("payout_ratio")
     roe = roa = dte = op_mgn = pr_mgn = None
     beta     = _fv("beta")
 
     # 最新株価で再計算（PER/PBR/時価総額は毎日変わる）
-    mktcap = _prefer_verified(
-        _vv("market_cap"), cur_price * shares if cur_price and shares else _fv("market_cap")
-    )
-    per_ttm = _prefer_verified(
-        _vv("per_latest_annual"),
-        cur_price / eps_ttm if cur_price and eps_ttm and eps_ttm > 0 else _fv("per"),
-    )
-    pbr = _prefer_verified(
-        _vv("pbr"), cur_price / bps_val if cur_price and bps_val and bps_val > 0 else _fv("pbr")
-    )
+    mktcap  = _vv("market_cap") if valuation else (cur_price * shares if cur_price and shares else _fv("market_cap"))
+    per_ttm = _vv("per_latest_annual") if valuation else (cur_price / eps_ttm if cur_price and eps_ttm and eps_ttm > 0 else _fv("per"))
+    pbr     = _vv("pbr") if valuation else (cur_price / bps_val if cur_price and bps_val and bps_val > 0 else _fv("pbr"))
     dps_use = div_ttm if div_ttm else ann_dps
-    div_yld = _prefer_verified(
-        _vv("div_yield"), (dps_use / cur_price * 100) if dps_use and cur_price else _fv("div_yield")
-    )
+    div_yld = _vv("div_yield") if valuation else ((dps_use / cur_price * 100) if dps_use and cur_price else _fv("div_yield"))
 
     # 会社予想（financials_forecast）ベースで PER・配当利回りを上書き
     # forecast_rows: [0]fiscal_year_end [1]revenue [2]op [3]ord [4]net_income [5]div_per_share
@@ -7854,24 +7840,21 @@ def _build_stock_page(code: str) -> str:
     if _fc_near is None and forecast_rows:
         _fc_near = forecast_rows[-1]
 
-    fc_eps = _vv("eps_company_forecast")
-    fc_dps = _vv("dps_company_forecast")
-    if fc_eps is None and _fc_near is not None:
+    fc_eps = _vv("eps_company_forecast") if valuation else None
+    fc_dps = _vv("dps_company_forecast") if valuation else None
+    if not valuation and _fc_near is not None:
         if _fc_near[4] is not None and shares:
             try:
                 fc_eps = round(float(_fc_near[4]) / float(shares), 1)
             except Exception:
                 pass
-        if fc_dps is None and _fc_near[5] is not None:
+        if _fc_near[5] is not None:
             try:
                 fc_dps = float(_fc_near[5])
             except Exception:
                 pass
 
-    per_fwd = _prefer_verified(
-        _vv("per_forecast"),
-        round(cur_price / fc_eps, 1) if cur_price and fc_eps and fc_eps > 0 else None,
-    )
+    per_fwd = _vv("per_forecast") if valuation else (round(cur_price / fc_eps, 1) if cur_price and fc_eps and fc_eps > 0 else None)
 
     # 配当利回りは今期予想を最優先: kabutan会社予想(fc_dps) → Yahoo予想(dividend_rate) → 実績
     _yahoo_fwd_dps = _fv("dividend_rate")
@@ -7880,7 +7863,7 @@ def _build_stock_page(code: str) -> str:
         dps_use = fc_dps
         div_yld = round(fc_dps / cur_price * 100, 2)
         _div_is_forecast = True
-    elif _yahoo_fwd_dps and cur_price:
+    elif not valuation and _yahoo_fwd_dps and cur_price:
         dps_use = _yahoo_fwd_dps
         div_yld = round(_yahoo_fwd_dps / cur_price * 100, 2)
         _div_is_forecast = True
