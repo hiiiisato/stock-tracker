@@ -52,6 +52,12 @@ class DatabaseAvailabilityTest(unittest.TestCase):
         self.assertEqual(response.text, "DB_QUOTA_EXHAUSTED")
         self.assertNotIn("secret cluster", response.text)
 
+    def test_render_liveness_does_not_depend_on_database_readiness(self):
+        with patch("app.get_conn", side_effect=RuntimeError("db down")):
+            response = app.test_client().get("/health/live")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text, "OK")
+
     def test_quota_failure_is_not_automatically_retried(self):
         source = RETRY_WORKFLOW.read_text()
         self.assertIn("usage quota (being )?exhausted", source)

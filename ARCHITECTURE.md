@@ -210,7 +210,8 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 - `config.py` — DB接続・bulk_upsert・APIキー・理論株価の係数テーブル。**設定値は必ずここに置く**
   - `with db() as cur:` — 例外時も必ずrollback+closeする接続。**app.py（常駐プロセス）の新規コードはこちらを使う**。`get_conn()`は自前でclose管理する既存コード・バッチ用
 - `batch_dates.py` — GitHub Actionsの遅延・UTCホスト差を吸収するJST時刻、直近日曜、イブニング対象営業日の共通ルール
-- `render.yaml` — Render.com のWebサービス定義（定期処理は持たない）
+- `render.yaml` — Render.com のWebサービス定義（定期処理は持たない）。デプロイ用livenessは
+  DB非依存の `/health/live`、DBを含むreadinessは `/health` と分離する
 - `infra/cloudflare-scheduler/` — 本番の一次スケジューラ。JST実行表を1本のCloudflare Cronに集約し、GitHub Actionsを起動
 
 ### データ取得
@@ -535,7 +536,7 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 - **Yahooのadjcloseは配当・分配金込み**。価格源にはquoteを使い、公式台帳から分割・併合等だけを調整する。J-QuantsのAdjCにはさらに係数を掛けない。
 - **無料枠より古い分割で基準確認ができない系列**は、取得できる公式当時値の期間＋全権利実施後の直近価格から再構築する。確認できない古い区間は原本に保持し、正常なチャートへ混ぜない。新方式の公開ビューでは未確認行を除外する。
 - **価格公開後の指標・キャッシュ**: 指標にsource_price_versionを保持し、価格と異なる版はprice_stats_currentで除外。キャッシュは価格と派生値の保存完了ごとにDBの公開状態世代を進め、5秒以内に失効する。ブラウザー復帰時もチャートを再取得する。
-- **TiDB Starterの月間RU上限**: 無料枠を使い切ると新規DB接続が全面拒否される。Webは内部情報を含む500ではなくメンテナンス503を返し、`/health` は `DB_QUOTA_EXHAUSTED` を返す。日次の価格追随で全件財務JOINを繰り返さず、自動リトライは利用枠エラーを再実行しない。完全再生成は00:30の正規化バッチまたは明示修復に限定する。
+- **TiDB Starterの月間RU上限**: 無料枠を使い切ると新規DB接続が全面拒否される。Webは内部情報を含む500ではなくメンテナンス503を返し、`/health` は `DB_QUOTA_EXHAUSTED` を返す。Renderのデプロイ判定はDB非依存の `/health/live` を使い、障害中も修正版を配信可能にする。日次の価格追随で全件財務JOINを繰り返さず、自動リトライは利用枠エラーを再実行しない。完全再生成は00:30の正規化バッチまたは明示修復に限定する。
 - **financialsに未来日付の期が入っている**（会社予想）。実績として使う時は `period_end <= CURDATE()` で除外
 - **財務の部分行を通常UPSERTしない**。Yahooは同一年度の一部項目だけを返すため、NULLまで上書きするとTDnet/EDINET値が消える。
   取得元原本を保存し、`financials_store` のセル単位統合を使う。EDINETも連結/単体の概念取り違えがあるため、整合性未検証の値で既存値を上書きしない

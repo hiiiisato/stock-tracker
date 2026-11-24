@@ -10015,6 +10015,12 @@ def internal_ifis_proxy():
         return f"proxy_error: {e}", 502, {"Content-Type": "text/plain; charset=utf-8"}
 
 
+@app.route("/health/live")
+def health_live():
+    """Renderのプロセス生存確認。DBのreadinessは /health で別に判定する。"""
+    return "OK"
+
+
 @app.route("/health")
 def health():
     try:
