@@ -38,6 +38,13 @@ jobs:
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           echo "リトライ対象: $RUN_NAME (run_id=$RUN_ID)"
+          if [ "$CONCLUSION" = "failure" ]; then
+            gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > failed-run.log || true
+            if grep -qiE "usage quota (being )?exhausted|DatabaseQuotaExceeded" failed-run.log; then
+              echo "::error title=TiDB利用枠上限::月間RU上限のため自動再試行を停止します。利用枠の増額または月次リセットが必要です。"
+              exit 0
+            fi
+          fi
           if [ "$CONCLUSION" = "cancelled" ]; then
             gh run rerun "$RUN_ID" --repo "$GITHUB_REPOSITORY"
           else

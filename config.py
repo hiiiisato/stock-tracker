@@ -72,8 +72,26 @@ DB_CONFIG = dict(
 )
 
 
+class DatabaseQuotaExceeded(RuntimeError):
+    """TiDB Cloud Starterの月間利用枠が尽き、新規接続を拒否された。"""
+
+
+def is_database_quota_error(error: BaseException) -> bool:
+    message = str(error).lower()
+    return "usage quota being exhausted" in message or (
+        "usage quota" in message and "restricted" in message
+    )
+
+
 def get_conn():
-    return pymysql.connect(**DB_CONFIG)
+    try:
+        return pymysql.connect(**DB_CONFIG)
+    except pymysql.err.OperationalError as error:
+        if is_database_quota_error(error):
+            raise DatabaseQuotaExceeded(
+                "TiDB Cloudの月間利用枠を使い切ったため、DB接続が停止しています"
+            ) from error
+        raise
 
 
 _batch_connection = ContextVar("price_batch_connection", default=None)
@@ -99,7 +117,7 @@ def db():
     """`with db() as cur:` — 例外時も必ず rollback + close する安全な接続。
     正常終了時は自動で commit。常駐プロセス(app.py)の接続リーク防止に使う。"""
     shared = _batch_connection.get()
-    conn = shared if shared is not None else pymysql.connect(**DB_CONFIG)
+    conn = shared if shared is not None else get_conn()
     try:
         cur = conn.cursor()
         yield cur

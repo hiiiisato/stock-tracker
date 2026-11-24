@@ -22,7 +22,8 @@ class ValuationPublicationContractTest(unittest.TestCase):
         for name in ("daily_run.py", "price_pipeline.py"):
             source = ROOT.joinpath(name).read_text()
             with self.subTest(name=name):
-                self.assertIn("rebuild_valuation_metrics()", source)
+                self.assertIn("refresh_valuation_prices()", source)
+                self.assertNotIn("rebuild_valuation_metrics()", source)
 
 
 if __name__ == "__main__":

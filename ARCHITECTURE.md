@@ -189,7 +189,9 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
    - 全銘柄公開は銘柄ロックを保った16並列。workerごとにDB接続を1本だけ再利用する。公式照合値・無約定日・不一致状態は全銘柄分を先に一括読込し、銘柄ごとの重複DB照会と同一原本の二重保存を避ける
 5. 【月曜のみ】配当 (`dividends`)・財務 (`financials`)・ファンダ (`fundamentals`)・TDnet短信の広域取込 (`financials_tdnet` 過去30日)
 6. テーマスコア (`theme_score`)
-7. PER/PBR等の最新値再計算 (`fundamentals.recompute_price_metrics`)
+7. PER/PBR等の最新値再計算 (`fundamentals.recompute_price_metrics`) → 現在価値指標の価格版追随
+   (`valuation_metrics.refresh_valuation_prices`)。通常日は全件財務JOINをせず1回の集合UPDATE、
+   action digest変更・未作成銘柄だけ `rebuild_valuation_metrics` で完全再生成する
 8. テクニカル指標 (`compute_price_stats`) → `price_stats`
 9. **理論株価** (`compute_theoretical`) — price_stats と stock_fundamentals に依存するため必ずその後
 10. 週次スナップショット追記 (`compute_stats_history`) → `price_stats_history`（PIT計算原本）→ `screening_snapshots`（現在画面・バックテスト共通の完成版）
@@ -243,7 +245,7 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 - `dividends.py` — Yahooの権利落ち配当イベント原本。正式DPSの取得元にはせず、TDnet通知の株数基準照合に使う。
 - `per_share_metrics.py` — EDINET年次EPS/BPSを不変の公表版として取り込み、逆算株式数と公式権利suffixが一意に整合する場合だけ同一digestへ投影。入力不足・複数候補はNULLと理由を保存する。
 - `dividend_metrics.py` — TDnet短信XBRLの配当コンテキスを年額に潰さず保存。各コンポーネントを正規化後に年額へ合計する。
-- `valuation_metrics.py` — 公開価格と同じdigestへ正規化済みのEPS/BPS/予想DPSだけでPER/PBR/配当利回り/時価総額を作る。入力基準日は監査情報で、digestが同じなら日付差で値を落とさない。出力には現在の価格版・digest・基準日を転記する。復旧は読取先を旧 `stock_fundamentals` へ戻せるだけで可能で、原本表のロールバックは不要。
+- `valuation_metrics.py` — 公開価格と同じdigestへ正規化済みのEPS/BPS/予想DPSだけでPER/PBR/配当利回り/時価総額を作る。入力基準日は監査情報で、digestが同じなら日付差で値を落とさない。出力には現在の価格版・digest・基準日を転記する。通常の日次価格更新は既存の検証済み入力を集合UPDATEで価格版へ追随させ、digest変更時だけ完全再生成する。復旧は読取先を旧 `stock_fundamentals` へ戻せるだけで可能で、原本表のロールバックは不要。
 - `financials_store.py` — 財務実績の取得元保存とcanonical統合。`financials` は互換読取モデルとして維持し、
   TDnetは非NULL値だけ更新、YahooはNULLだけ補完、EDINETは同一年度の既存項目と整合する行のNULLだけ補完する。
   取得元の部分レスポンスで高優先値を消さない。初回DDLはバッチ実行時の `ensure_source_tables`。
@@ -533,6 +535,7 @@ misc_batch は1日1回の巡回枠（EDINET 100件/日・会社概要 150件/日
 - **Yahooのadjcloseは配当・分配金込み**。価格源にはquoteを使い、公式台帳から分割・併合等だけを調整する。J-QuantsのAdjCにはさらに係数を掛けない。
 - **無料枠より古い分割で基準確認ができない系列**は、取得できる公式当時値の期間＋全権利実施後の直近価格から再構築する。確認できない古い区間は原本に保持し、正常なチャートへ混ぜない。新方式の公開ビューでは未確認行を除外する。
 - **価格公開後の指標・キャッシュ**: 指標にsource_price_versionを保持し、価格と異なる版はprice_stats_currentで除外。キャッシュは価格と派生値の保存完了ごとにDBの公開状態世代を進め、5秒以内に失効する。ブラウザー復帰時もチャートを再取得する。
+- **TiDB Starterの月間RU上限**: 無料枠を使い切ると新規DB接続が全面拒否される。Webは内部情報を含む500ではなくメンテナンス503を返し、`/health` は `DB_QUOTA_EXHAUSTED` を返す。日次の価格追随で全件財務JOINを繰り返さず、自動リトライは利用枠エラーを再実行しない。完全再生成は00:30の正規化バッチまたは明示修復に限定する。
 - **financialsに未来日付の期が入っている**（会社予想）。実績として使う時は `period_end <= CURDATE()` で除外
 - **財務の部分行を通常UPSERTしない**。Yahooは同一年度の一部項目だけを返すため、NULLまで上書きするとTDnet/EDINET値が消える。
   取得元原本を保存し、`financials_store` のセル単位統合を使う。EDINETも連結/単体の概念取り違えがあるため、整合性未検証の値で既存値を上書きしない

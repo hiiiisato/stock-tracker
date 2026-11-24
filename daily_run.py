@@ -584,8 +584,8 @@ def run(
 
         print("\n[公開価値指標] 正規化済みEPS/BPS/DPSを当日終値へ再連動...")
         try:
-            from valuation_metrics import rebuild_valuation_metrics
-            n = rebuild_valuation_metrics()
+            from valuation_metrics import refresh_valuation_prices
+            n = refresh_valuation_prices()
             _log("valuation_metrics", "done", n)
         except Exception as e:
             print(f"  エラー: {e}")

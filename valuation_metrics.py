@@ -226,6 +226,67 @@ def rebuild_valuation_metrics(codes: Iterable[str] | None = None, *, basis_date:
         return len(rows)
 
 
+def refresh_valuation_prices(codes: Iterable[str] | None = None) -> int:
+    """株価版だけが進んだ通常日を、全財務JOINなしの一括UPDATEで追随させる。
+
+    権利digestが変わった銘柄と未作成銘柄だけは、正規化入力から完全再生成する。
+    """
+    requested = sorted({str(c).strip().upper() for c in (codes or []) if str(c).strip()})
+    condition, params = _where_codes(requested, "s.")
+    now = datetime.now()
+    with db() as cur:
+        ensure_schema(cur)
+        cur.execute(
+            """UPDATE valuation_metrics_current v
+               JOIN price_adjustment_state s ON s.code=v.code
+               JOIN price_history p ON p.code=s.code AND p.date=s.price_date
+                 AND p.price_version=s.published_version
+               SET v.price_date=s.price_date,
+                   v.target_basis_date=s.target_basis_date,
+                   v.price_version=s.published_version,
+                   v.action_digest=s.action_digest,
+                   v.price=p.close,
+                   v.per_latest_annual=CASE
+                     WHEN v.eps_latest_annual>0 THEN p.close/v.eps_latest_annual ELSE NULL END,
+                   v.per_ttm=CASE
+                     WHEN v.eps_ttm>0 THEN p.close/v.eps_ttm ELSE NULL END,
+                   v.per_forecast=CASE
+                     WHEN v.eps_company_forecast>0 THEN p.close/v.eps_company_forecast ELSE NULL END,
+                   v.pbr=CASE WHEN v.bps_latest>0 THEN p.close/v.bps_latest ELSE NULL END,
+                   v.div_yield=CASE WHEN v.dps_company_forecast IS NOT NULL AND p.close>0
+                     THEN v.dps_company_forecast/p.close*100 ELSE NULL END,
+                   v.market_cap=CASE WHEN v.shares_basis_status='verified_implied_shares'
+                     THEN p.close*v.shares_outstanding ELSE NULL END,
+                   v.calculated_at=%s
+               WHERE s.status IN ('published','audit_due')
+                 AND s.action_digest=v.action_digest
+                 AND s.action_digest IS NOT NULL
+                 AND s.target_basis_date IS NOT NULL
+                 AND (v.price_version<>s.published_version
+                      OR v.price_date<>s.price_date
+                      OR v.target_basis_date<>s.target_basis_date)"""
+            + condition,
+            [now, *params],
+        )
+        refreshed = max(cur.rowcount, 0)
+        cur.execute(
+            """SELECT s.code
+               FROM price_adjustment_state s
+               LEFT JOIN valuation_metrics_current v ON v.code=s.code
+               WHERE s.status IN ('published','audit_due')
+                 AND s.action_digest IS NOT NULL
+                 AND s.target_basis_date IS NOT NULL
+                 AND (v.code IS NULL OR v.action_digest<>s.action_digest)"""
+            + condition,
+            params,
+        )
+        rebuild_codes = [row[0] for row in cur.fetchall()]
+        if refreshed:
+            bump_generation(cur)
+    rebuilt = rebuild_valuation_metrics(rebuild_codes) if rebuild_codes else 0
+    return refreshed + rebuilt
+
+
 def main() -> None:
     import sys
     print(f"[バリュエーション] {rebuild_valuation_metrics(sys.argv[1:] or None):,}銘柄")

@@ -23,16 +23,43 @@ import hashlib
 import hmac
 import os
 from urllib.parse import quote as _url_quote
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta, datetime, timezone
 
 import requests as _requests
 from bs4 import BeautifulSoup as _BS
 from flask import Flask, abort, redirect, request, jsonify, make_response, g, has_request_context
 
-from config import QUARTER_MOMENTUM_THRESHOLD_PCT, get_conn, db
+from config import DatabaseQuotaExceeded, QUARTER_MOMENTUM_THRESHOLD_PCT, get_conn, db
 from quarter_analysis import assess_quarter
 
 app = Flask(__name__)
+
+
+def _quota_retry_after_seconds(now: datetime | None = None) -> int:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    if current.month == 12:
+        reset = datetime(current.year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        reset = datetime(current.year, current.month + 1, 1, tzinfo=timezone.utc)
+    return max(60, int((reset - current).total_seconds()))
+
+
+@app.errorhandler(DatabaseQuotaExceeded)
+def _database_quota_response(_error):
+    retry_after = str(_quota_retry_after_seconds())
+    return """<!doctype html><html lang="ja"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>メンテナンス中 | 株式分析</title>
+<style>
+body{margin:0;background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif}
+main{max-width:560px;margin:18vh auto;padding:28px}.card{background:#161b22;border:1px solid #30363d;border-radius:14px;padding:28px}
+h1{margin:0 0 12px;color:#f0f6fc;font-size:24px}p{margin:8px 0;line-height:1.8}.sub{color:#8b949e;font-size:13px}
+</style><main><div class="card"><h1>現在メンテナンス中です</h1>
+<p>データベースの月間利用上限に達したため、一時的に表示を停止しています。</p>
+<p class="sub">データが消えたわけではありません。利用枠の復旧後に自動で再開します。</p>
+</div></main></html>""", 503, {"Retry-After": retry_after}
 
 # ─── 簡易インメモリキャッシュ（TTL 付き） ───────────────────────────────────
 _cache: dict[str, dict] = {}
@@ -9996,8 +10023,11 @@ def health():
         cur.execute("SELECT 1")
         cur.close(); conn.close()
         return "OK"
-    except Exception as e:
-        return f"NG: {e}", 503
+    except DatabaseQuotaExceeded:
+        return "DB_QUOTA_EXHAUSTED", 503, {"Retry-After": str(_quota_retry_after_seconds())}
+    except Exception:
+        app.logger.exception("health check failed")
+        return "DB_UNAVAILABLE", 503
 
 
 @app.route("/")
